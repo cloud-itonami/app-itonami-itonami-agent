@@ -1,8 +1,19 @@
 # itonami-agent
 
-A Hermes-compatible agent written in kotoba (`.cljk` on kbb), with peer-to-peer
-execution of agent turns. The agent core needs only the kbb engine; no JVM or
-npm packages. Cron jobs written in Hy additionally need Python with Hy installed.
+A Hermes-compatible agent being migrated to Kotoba/Amu selfhost native kexe.
+The required runtime is selfhost only. The legacy `.cljk`/kbb implementation
+remains in the repository as migration inventory; it is not an approved
+runtime, build, CI gate or fallback. See [AWAI-60](https://linear.app/kotobalabs/issue/AWAI-60).
+
+The current `bin/itonami-agent` runs a few routes as native guests but sends
+unported routes to `bin/itonami-agent-kbb`. Those routes are not yet qualified
+for the required runtime. In particular, the native `turn` guest does not
+load and enforce an Itonami profile by itself; the profile-aware host and
+first live turns are tracked in [AWAI-131](https://linear.app/kotobalabs/issue/AWAI-131).
+The compatibility descriptions below document the legacy surface and do not
+establish selfhost qualification.
+
+## Legacy CLI examples (unqualified)
 
 ```
 bin/itonami-agent -p hiraku-soudan -z "質問"            # one turn, like `hermes -p … -z`
@@ -11,17 +22,12 @@ bin/itonami-agent peer serve --port 7420                # run turns for trusted 
 bin/itonami-agent peer run -p hiraku-soudan -z "質問"   # run this turn on a peer
 ```
 
-## Running where `env -S` is missing (guest VMs, busybox)
+## Legacy `env -S` behavior (migration inventory)
 
-The launcher's shebang is `#!/usr/bin/env -S kbb --backend sci`, which needs
+The legacy launcher's shebang is `#!/usr/bin/env -S kbb --backend sci`, which needs
 an `env` that understands `-S` (GNU coreutils, BSD). Busybox `env` does not
 (measured 2026-10-19 in an Alpine aarch64 initramfs: `env: Usage: ...` and
-nothing else). On such hosts invoke the same launcher through kbb directly --
-it is equivalent, the launcher adds `src/` itself:
-
-```
-kbb --backend sci bin/itonami-agent -p <profile> -z "…"
-```
+nothing else). This is a historical observation, not a selfhost workaround.
 
 Two more guest notes from the same run: profiles resolve under `ITONAMI_DIR`
 (default `~/.itonami`) so set it when `HOME` is not where the profiles live;
@@ -697,7 +703,10 @@ OPENROUTER_API_KEY=... bin/itonami-system-one jev
 amu's `runtime/browser-host.mjs`. `jev` spends OpenRouter credit (about a tenth
 of a cent per run). Receipts land in `target/system-one/`.
 
-## Tests
+## Legacy reference tests (not a selfhost gate)
+
+Use these only as a dated, one-off developer reference oracle under the
+workspace rule. Record the command, tool version, input and output.
 
 ```
 kbb --backend sci --classpath src:test run-tests.cljk

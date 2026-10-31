@@ -1,10 +1,18 @@
 # itonami-agent
 
-- kbb only (`kbb --backend sci`). No new .sh, no JVM, no npm deps (root AGENTS.md).
-- Do not add an `nbb.edn` with empty `:deps` — the kbb deps door then fails with
-  "The uberjar task needs a classpath". The launcher adds `src/` itself.
+- **Selfhost only**: the required itonami-agent execution path is Kotoba/Amu
+  selfhost native kexe. Do not use Node, kbb, nbb or JVM for runtime, CI,
+  build, packaging, gates or fallback. An unported route remains blocked.
+- `bin/itonami-agent` still sends unported routes to `bin/itonami-agent-kbb`.
+  Treat that branch and the legacy `.cljk` launcher as migration inventory,
+  not as a qualified selfhost path. AWAI-60 tracks its removal; AWAI-131
+  tracks the profile-aware native host and first live turns.
+- A one-off developer reference oracle is allowed only under the workspace
+  rule: record the command, versions, inputs and outputs; never make it a
+  required build, CI, runtime or fallback path.
 - Hermes compatibility is the contract: change a file format only together with
-  the Hermes code that reads it, and keep `run-tests.cljk` green.
+  the Hermes code that reads it. Qualify native behavior with Amu selfhost
+  checks and negative controls; legacy `run-tests.cljk` is not a native gate.
 
 ## Two CLIs — 分離の正本（hermes agent CLI / itonami agent CLI）
 
@@ -13,12 +21,15 @@ store・状態・推論 rail を混ぜない:
 
 | | hermes agent CLI | itonami-agent CLI |
 |---|---|---|
-| 実体 | Hermes Agent（Python, upstream） | 本 repo（kbb / .cljk） |
+| 実体 | Hermes Agent（Python, upstream） | 本 repo（Kotoba/Amu selfhost native kexe が必須。旧 `.cljk`/kbb 経路は移行中） |
 | profile store | `~/.hermes/profiles/<name>/` | `~/.itonami/profiles/<name>/`（`ITONAMI_DIR`） |
 | 状態 / DB | `~/.hermes/` 配下（sessions・executions.db 等） | `~/.itonami/` 配下（runs・receipts 等） |
 | 推論 | config.yaml `model:` — openrouter 等 | itonami.edn `:inference` — murakumo（mishima 等） |
 | murakumo / mishima | **使わない** | **専用** |
 | 移動 | `profile export`（itonami store → Hermes） | `profile import`（Hermes → itonami store） |
+
+この表は profile 形式と store の契約を示す。`profile import/export` の現行
+CLI route は selfhost 資格未取得であり、移行完了まで起動手順に使わない。
 
 - **Hermes agent profile に murakumo / mishima を使わない** — config.yaml の
   `model:` でも、cron job の `model` / `provider` pin でも（job の pin が
