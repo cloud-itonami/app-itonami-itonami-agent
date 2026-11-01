@@ -39,3 +39,16 @@ The workflow invokes:
 python3 bin/check-cron-store-linux-native.py \
   --output "$RUNNER_TEMP/itonami-cron-store-linux-native"
 ```
+
+## Digest-pinned repeat and launcher integration (2026-11-02)
+
+The compiler digest/size pin was added in Itonami commit `937e12707953edd020748ceeb3305d9596ea9b53`; exact-head workflow [41352109988](https://github.com/cloud-itonami/itonami-agent/actions/runs/41352109988) passed and reproduced the same F1=F2=F3 digest, candidate source SHA-256, payload SHA-256, and direct create positive/refusal outcomes.
+
+After those standalone checks passed, commit `cce1c7368ae6958cc66fe2a024c6ea298a87ea80` connected the Linux candidate CLI. Exact-head workflow [41352518478](https://github.com/cloud-itonami/itonami-agent/actions/runs/41352518478) passed on Amu native x86_64 Linux. It repeated all direct guest cases and added launcher create positive, invalid-schedule refusal, and empty-prompt refusal. Both refusals exited 2 without modifying `jobs.json` or leaving a temp file. The positive launcher invocation produced one job with a 12-character lowercase hex ID, preserved the root extension, and scheduled exactly five minutes after the host timestamp.
+
+- Candidate launcher SHA-256: `f6748fcb3dc9372475d10168b292010f1cf36d5718c5c10bf79695dcee2ca4be`
+- Candidate package manifest SHA-256: `b0be7863ff71f1c94793090b238117b65b50f6de7efd7e6aeb9771f232589071`
+- KX64 payload SHA-256: `391dde3056eda5247218e5230448d80f8f432a112692c4bc0dc167a9897abafe`
+- Amu candidate compiler: `4e4cbb4a66c47ba8277045489e2dd75c28e781a4ffa8a37ed7d3733b5387fc96`, 10,306,048 bytes, F1=F2=F3
+
+This qualifies only the bounded Linux x86_64 PR candidate on immutable Amu PR #1769 source `01a2e550f96ac7029b5796cada2e9a00c8e36136`. Amu's broader `selfhost-native` workflow `41349582793` is still independently running. The PR is not merged, the package is not installed/published, Darwin remains unqualified, and no live route change is claimed.
