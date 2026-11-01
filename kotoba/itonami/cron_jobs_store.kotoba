@@ -13,18 +13,9 @@
 
 (defn- digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
 
-(defn- parse-epoch-digits [s :string i :i64 acc :i64] :i64
-  (if (>= i (string-length s)) acc
-    (let [c (string-code-point-at s i)]
-      (if (not (digit? c)) -1
-        (let [d (- c 48)]
-          (if (or (> acc 922337203685477580)
-                  (and (= acc 922337203685477580) (> d 7))) -1
-            (recur s (inc i) (+ (* acc 10) d))))))))
-
 (defn- now-epoch-ms [] :i64
   (let [wire (typed-cap-call :clock/now :string :string "wall")
-        millis (if (= (string-length wire) 0) -1 (parse-epoch-digits wire 0 0))]
+        millis (if (= (string-length wire) 0) -1 (schedule/parse-i64-digits wire 0 0))]
     millis))
 
 (defn- now-iso-utc [] :string
@@ -171,7 +162,7 @@
 
 (defn resume-job [cron-dir :string id :string offset-text :string] [:result :string :string]
   (let [wire (typed-cap-call :clock/now :string :string "wall")
-        now-ms (if (= (string-length wire) 0) -1 (parse-epoch-digits wire 0 0))
+        now-ms (if (= (string-length wire) 0) -1 (schedule/parse-i64-digits wire 0 0))
         offset (offset-minutes offset-text)
         updated-at (if (< now-ms 0) "" (schedule/epoch-ms->iso-utc now-ms))]
     (if (or (< now-ms 0) (< offset -9999) (= (string-length updated-at) 0))
@@ -201,7 +192,7 @@
   [:result :string :string]
   (cond
     (string=? kind "interval")
-      (let [minutes (parse-epoch-digits value 0 0)
+      (let [minutes (schedule/parse-i64-digits value 0 0)
             max-minutes (quot (- 9223372036854775807 now-ms) 60000)]
         (if (or (< minutes 1) (> minutes max-minutes))
           (result-err-of [:result :string :string] "cron-json/invalid-schedule")
@@ -212,7 +203,7 @@
                   (string-concat (jobs/json-quote
                     (string-concat "every " (string-concat (string-from-i64 minutes) "m"))) "}")))))))
     (string=? kind "once-after")
-      (let [minutes (parse-epoch-digits value 0 0)
+      (let [minutes (schedule/parse-i64-digits value 0 0)
             max-minutes (quot (- 9223372036854775807 now-ms) 60000)
             run-ms (if (or (< minutes 1) (> minutes max-minutes)) -1
                      (+ now-ms (* minutes 60000)))
@@ -226,7 +217,7 @@
                   (string-concat (jobs/json-quote
                     (string-concat "once in " (string-concat (string-from-i64 minutes) "m"))) "}")))))))
     (string=? kind "once-at")
-      (let [run-ms (parse-epoch-digits value 0 0)
+      (let [run-ms (schedule/parse-i64-digits value 0 0)
             run-at (schedule/epoch-ms->iso-utc run-ms)]
         (if (= (string-length run-at) 0)
           (result-err-of [:result :string :string] "cron-json/invalid-schedule")
@@ -258,11 +249,11 @@
         cron-offset (if (string=? kind "cron") offset 0)
         next-ms (cond
           (string=? kind "interval")
-            (schedule/next-interval-ms now-ms (parse-epoch-digits value 0 0))
+            (schedule/next-interval-ms now-ms (schedule/parse-i64-digits value 0 0))
           (string=? kind "once-after")
-            (schedule/next-interval-ms now-ms (parse-epoch-digits value 0 0))
+            (schedule/next-interval-ms now-ms (schedule/parse-i64-digits value 0 0))
           (string=? kind "once-at")
-            (schedule/next-once-ms (parse-epoch-digits value 0 0) now-ms)
+            (schedule/next-once-ms (schedule/parse-i64-digits value 0 0) now-ms)
           (string=? kind "cron") (schedule/next-cron-ms value now-ms cron-offset)
           :else -1)
         next-run-at (if (< next-ms 0) "" (schedule/epoch-ms->iso-utc next-ms))

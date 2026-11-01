@@ -688,8 +688,8 @@
         cron-offset (if (string=? kind "cron") offset 0)
         next-ms (cond
           (or (string=? kind "interval") (string=? kind "once-after"))
-            (schedule/next-interval-ms now-ms (parse-epoch-digits value 0 0))
-          (string=? kind "once-at") (schedule/next-once-ms (parse-epoch-digits value 0 0) now-ms)
+            (schedule/next-interval-ms now-ms (schedule/parse-i64-digits value 0 0))
+          (string=? kind "once-at") (schedule/next-once-ms (schedule/parse-i64-digits value 0 0) now-ms)
           (string=? kind "cron") (schedule/next-cron-ms value now-ms cron-offset)
           :else -1)
         next-run-at (if (< next-ms 0) "" (schedule/epoch-ms->iso-utc next-ms))

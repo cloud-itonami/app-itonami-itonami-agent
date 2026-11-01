@@ -24,6 +24,7 @@
 ;; declared result types); README "Schedule" has the gate.
 (ns itonami.schedule
   (:export [cron-problem duration-minutes parse-schedule-form iso-time-epoch-ms
+            parse-i64-digits
             next-cron-ms next-interval-ms next-once-ms due?
             days-from-civil civil-year civil-month civil-day weekday
             epoch-ms->iso-utc test-civil test-parse test-cron test-other test-iso-utc]))
@@ -119,6 +120,15 @@
 (defn has-bit? [mask :i64 v :i64] :bool (if (< v 0) false (if (> v 62) false (= (bit-and (u64-shift-right mask v) 1) 1))))
 
 (defn digit? [c :i64] :bool (if (< c 48) false (if (> c 57) false true)))
+
+(defn parse-i64-digits [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s)) acc
+    (let [c (string-code-point-at s i)
+          d (- c 48)]
+      (if (not (digit? c)) -1
+        (if (or (> acc 922337203685477580)
+                (and (= acc 922337203685477580) (> d 7))) -1
+          (recur s (inc i) (+ (* acc 10) d)))))))
 
 ;; s is 1..9 decimal digits: its value, else -1. Stops at the first non-digit.
 (defn digits-from [s :string i :i64 acc :i64] :i64
