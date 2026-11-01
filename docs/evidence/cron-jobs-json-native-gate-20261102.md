@@ -58,3 +58,32 @@ unqualified. The reader uses the strict JCS profile: valid RFC 8259 documents
 with escaped object keys or duplicate keys are refused.
 Compatibility with Hermes-generated `jobs.json` files remains to be qualified
 before using this adapter for writes.
+
+## 2026-11-02 Linux x86_64 launcher candidate
+
+- Added Kotoba CLI entrypoint `agent-cli-cron-jobs-store` and `itonami-agent
+  cron jobs remove <absolute-app-data-dir> <job-id>` for Linux x86_64. The
+  launcher grants clock, CLI args, and FS35 scoped to the supplied directory;
+  unsupported hosts or missing artifacts fail closed.
+- Itonami exact-head run `41340435332`, source commit
+  `e021f1e6e6f0c2d14e8eb0f79e7e81172c48aaae`, passed the native fixed-point
+  compiler derivation (F1=F2=F3 SHA-256
+  `5bae07e401b812dba440c8125ba43c7a74393ddafaec49f6922d094f316477c9`),
+  locked Kotoba CLI compile, direct positive/refusal runtime, and launcher
+  positive/refusal runtime.
+- Compiled KX64 project SHA-256:
+  `824bf766bd4eb08a7d2cf58be31da24e877b0f7466c3b820e611b433cd7f69e5`.
+  Executable payload SHA-256:
+  `89ec32cd179d99718b96bdc9ceebfe76585abc275a530847deeed280b935a565`.
+  Runner SHA-256:
+  `27349b7edfea5833f41263cdbf6195e5f26848bfb491e406c2d826987194d3b2`.
+- Positive launcher result was `:result 0`; it removed the requested job,
+  retained unknown JSON extensions, wrote a host-UTC timestamp within 10
+  seconds, and left no temp file. Malformed-JSON refusal returned exit 1 and
+  `:result 1`, preserved the source bytes, and left no temp file.
+- Full build receipt:
+  `workspaces/codex/awai-60-amu-cap-clock/itonami-launcher-passed/build-receipt.json`.
+- Qualification boundary: the Amu compiler source is from unmerged experimental
+  PR #1768 commit `06b3d1021e6d2d41a1c2c0d22004cb758ca9d631`. This qualifies
+  the candidate route on Linux x86_64 only; artifact packaging, Darwin clock
+  runtime, public Amu compiler/root adoption, and live behavior remain open.
