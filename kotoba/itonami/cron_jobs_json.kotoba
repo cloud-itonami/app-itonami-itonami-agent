@@ -5,7 +5,9 @@
 (ns itonami.cron-jobs-json
   (:require [jcs.reader :as jcs])
   (:export [jobs-array-start replace-jobs-array
-            test-replace-preserves-extensions test-replace-refuses-invalid]))
+            remove-job-json
+            test-replace-preserves-extensions test-replace-refuses-invalid
+            test-remove-preserves-job-extensions test-remove-refuses-missing]))
 
 (defn- skip-ws [b :vector-i64 i :i64] :i64
   (if (>= i (vector-count b)) i
@@ -56,6 +58,72 @@
               text (string-from-utf8 (bytes-from-vector-i64 p3))]
           (result-ok-of [:result :string :string] text))))))
 
+(defn- job-id-matches? [b :vector-i64 job :i64 id :string] :bool
+  (let [id-at (jcs/json-member b job "id")]
+    (and (>= id-at 0)
+         (= (jcs/json-kind b id-at) 3)
+         (string=? (jcs/json-string b id-at) id))))
+
+(defn- scan-jobs [b :vector-i64 array-at :i64 id :string i :i64
+                  kept-bytes :i64 kept-count :i64 removed-count :i64]
+  [:record :itonami.cron-jobs-json/Scan
+   [[:ok :i64] [:kept-bytes :i64] [:kept-count :i64] [:removed-count :i64]]]
+  (let [count (jcs/json-count b array-at)]
+    (if (>= i count)
+      (record-new [:ref :itonami.cron-jobs-json/Scan]
+                  (if (> removed-count 0) 1 0) kept-bytes kept-count removed-count)
+      (let [job (jcs/json-element b array-at i)
+            end (jcs/json-end b job)]
+        (if (not (= (jcs/json-kind b job) 1))
+          (record-new [:ref :itonami.cron-jobs-json/Scan] -1 0 0 0)
+          (if (job-id-matches? b job id)
+            (recur b array-at id (+ i 1) kept-bytes kept-count (+ removed-count 1))
+            (recur b array-at id (+ i 1) (+ kept-bytes (- end job))
+                   (+ kept-count 1) removed-count)))))))
+
+(defn- build-jobs-array [b :vector-i64 array-at :i64 id :string i :i64
+                         kept-count :i64 out :vector-i64 at :i64] :vector-i64
+  (let [count (jcs/json-count b array-at)]
+    (if (>= i count)
+      (vector-assoc! out at 93)
+      (let [job (jcs/json-element b array-at i)
+            end (jcs/json-end b job)]
+        (if (job-id-matches? b job id)
+          (recur b array-at id (+ i 1) kept-count out at)
+          (let [comma (if (> kept-count 0)
+                        (vector-assoc! out at 44) out)
+                begin (if (> kept-count 0) (+ at 1) at)
+                copied (copy-range b job end comma begin)]
+            (recur b array-at id (+ i 1) (+ kept-count 1)
+                   copied (+ begin (- end job)))))))))
+
+(defn remove-job-json [json :string id :string] [:result :string :string]
+  ;; Remove every job with the requested id, matching the legacy remove-job
+  ;; behavior. Existing job objects are copied as raw bytes, so their unknown
+  ;; nested values and extension fields survive without decoding/re-encoding.
+  (let [b (vector-i64-from-bytes (string-to-utf8 json))
+        array-at (jobs-array-index b)
+        scan (if (< array-at 0)
+               (record-new [:ref :itonami.cron-jobs-json/Scan] -1 0 0 0)
+               (scan-jobs b array-at id 0 0 0 0))]
+    (if (< array-at 0)
+      (result-err-of [:result :string :string] "cron-json/invalid-jobs-document")
+      (if (< (record-get [:ref :itonami.cron-jobs-json/Scan] scan :ok) 0)
+        (result-err-of [:result :string :string] "cron-json/job-entry-must-be-object")
+        (if (= (record-get [:ref :itonami.cron-jobs-json/Scan] scan :removed-count) 0)
+          (result-err-of [:result :string :string] "cron-json/job-not-found")
+          (let [kept-count (record-get [:ref :itonami.cron-jobs-json/Scan] scan :kept-count)
+                out-size (+ 2 (+ (record-get [:ref :itonami.cron-jobs-json/Scan] scan :kept-bytes) (if (> kept-count 0) (- kept-count 1) 0)))
+                out (vector-alloc out-size)
+                opened (vector-assoc! out 0 91)
+                array (build-jobs-array b array-at id 0 0 opened 1)
+                replacement (string-from-utf8 (bytes-from-vector-i64 array))
+                doc-result (replace-jobs-array json replacement)]
+            (if (result-ok?-of [:result :string :string] doc-result)
+              (result-ok-of [:result :string :string]
+                            (result-value-of [:result :string :string] doc-result ""))
+              (result-err-of [:result :string :string] "cron-json/replacement-failed"))))))))
+
 (defn test-replace-preserves-extensions [] :bool
   (let [source "{\"extension\":1.25e+7,\"jobs\":[{\"future\":-0.0001}],\"tail\":{\"x\":true}}"
         result (replace-jobs-array source "[]")
@@ -69,3 +137,15 @@
         bad-replacement (replace-jobs-array "{\"jobs\":[]}" "[1e]")]
     (and (not (result-ok?-of [:result :string :string] bad-document))
          (not (result-ok?-of [:result :string :string] bad-replacement)))))
+
+(defn test-remove-preserves-job-extensions [] :bool
+  (let [source "{\"jobs\":[{\"id\":\"drop\",\"future\":-0.0001},{\"id\":\"keep\",\"future\":1.25e+7}]}"
+        result (remove-job-json source "drop")
+        output (result-value-of [:result :string :string] result "")]
+    (and (result-ok?-of [:result :string :string] result)
+         (string=? output "{\"jobs\":[{\"id\":\"keep\",\"future\":1.25e+7}]}")
+         (>= (jobs-array-start output) 0))))
+
+(defn test-remove-refuses-missing [] :bool
+  (not (result-ok?-of [:result :string :string]
+                      (remove-job-json "{\"jobs\":[{\"id\":\"existing\"}]}" "missing"))))

@@ -30,9 +30,14 @@ Receipt:
 
 ## Qualification boundary
 
-This does not implement cron jobs CRUD, locking, durable filesystem writes, or
-launcher dispatch. The reader uses the strict JCS profile: valid RFC 8259
-documents with escaped object keys or duplicate keys are refused. Compatibility
-with Hermes-generated `jobs.json` files and preservation of unknown fields
-inside individual job objects remain to be qualified before using this adapter
-for writes.
+The follow-up gate also removes all jobs matching an ID while preserving the
+remaining job objects byte-for-byte. The native positive case retains a nested
+`-0.0001` extension value and a remaining `1.25e+7` value; a missing ID is
+refused. Latest receipt:
+`/Users/junkawasaki/github/workspaces/codex/awai-60-cron-jobs-json-native-gate-20261102-r4/build-receipt.txt`.
+
+This still does not implement create/update CRUD, locking, durable filesystem
+writes, or launcher dispatch. The reader uses the strict JCS profile: valid RFC
+8259 documents with escaped object keys or duplicate keys are refused.
+Compatibility with Hermes-generated `jobs.json` files remains to be qualified
+before using this adapter for writes.

@@ -4,4 +4,6 @@
 
 (defn main [] :i64
   (if (and (jobs/test-replace-preserves-extensions)
-           (jobs/test-replace-refuses-invalid)) 0 1))
+           (jobs/test-replace-refuses-invalid)
+           (jobs/test-remove-preserves-job-extensions)
+           (jobs/test-remove-refuses-missing)) 0 1))

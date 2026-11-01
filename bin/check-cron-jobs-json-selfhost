@@ -92,7 +92,7 @@ SOURCE_REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)
   printf 'compile_result: %s\n' "$COMPILE_RESULT"
   printf 'codesign_verification: PASS\n'
   printf 'native_positive_refusal_gate: PASS\n'
-  printf 'scope: lossless top-level jobs-array replacement only; no jobs CRUD or launcher route qualification\n'
+  printf 'scope: lossless top-level jobs-array replacement and job removal; no jobs create/update or launcher route qualification\n'
 } > "$OUT_DIR/build-receipt.txt"
 
 cat "$OUT_DIR/build-receipt.txt"
