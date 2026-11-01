@@ -690,6 +690,18 @@ def main():
             or (launcher_update_unknown / "d/.jobs.json.tmp").exists()):
         raise RuntimeError("launcher unknown-update refusal modified the document or left a temp")
 
+    launcher_update_invalid_schedule = out / "launcher-update-invalid-schedule-scope"
+    (launcher_update_invalid_schedule / "d").mkdir(parents=True)
+    (launcher_update_invalid_schedule / "d/jobs.json").write_text(update_document, encoding="ascii")
+    execute_launcher("launcher-update-invalid-schedule-refusal", package_launcher,
+                     launcher_update_invalid_schedule, "update", "update-me",
+                     '{"schedule":"not-a-schedule"}', 2, out, calls,
+                     env_overrides={"TZ": "UTC"})
+    if ((launcher_update_invalid_schedule / "d/jobs.json").read_text(encoding="ascii")
+            != update_document
+            or (launcher_update_invalid_schedule / "d/.jobs.json.tmp").exists()):
+        raise RuntimeError("launcher invalid-schedule update refusal modified the document or left a temp")
+
     launcher_create_prompt_refusal = out / "launcher-create-prompt-refusal-scope"
     (launcher_create_prompt_refusal / "d").mkdir(parents=True)
     (launcher_create_prompt_refusal / "d/jobs.json").write_text(create_refusal_document, encoding="ascii")
@@ -795,6 +807,7 @@ def main():
         "update_missing_target_refusal": "PASS",
         "update_launcher_runtime": "PASS",
         "update_launcher_unknown_field_refusal": "PASS",
+        "update_launcher_invalid_schedule_refusal": "PASS",
         "candidate_package": {
             "manifest": "package/candidate-package.json",
             "manifest_sha256": sha(manifest_path.read_bytes()),
