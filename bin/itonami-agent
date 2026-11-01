@@ -31,6 +31,45 @@ blocked() {
   exit 78
 }
 
+run_cron_schedule_cli() {
+  schedule_cli=$1
+  shift
+  output_dir=$(mktemp -d "${TMPDIR:-/tmp}/itonami-cron-schedule.XXXXXX") || {
+    printf '%s\n' "itonami-agent: cannot create cron schedule result buffer" >&2
+    exit 78
+  }
+  if "$schedule_cli" "$@" > "$output_dir/stdout" 2> "$output_dir/stderr"; then
+    host_status=0
+  else
+    host_status=$?
+  fi
+  if [ "$host_status" -ne 0 ]; then
+    cat "$output_dir/stdout"
+    cat "$output_dir/stderr" >&2
+    rm -rf "$output_dir"
+    exit "$host_status"
+  fi
+  guest_status=$(tail -n 1 "$output_dir/stdout")
+  case "$guest_status" in
+    0)
+      cat "$output_dir/stderr" >&2
+      sed '$d' "$output_dir/stdout"
+      rm -rf "$output_dir"
+      exit 0
+      ;;
+    1|2)
+      cat "$output_dir/stderr" >&2
+      rm -rf "$output_dir"
+      exit "$guest_status"
+      ;;
+    *)
+      printf '%s\n' "itonami-agent: cron schedule returned an invalid native result" >&2
+      rm -rf "$output_dir"
+      exit 78
+      ;;
+  esac
+}
+
 usage() {
   cat <<'EOF'
 Usage: itonami-agent <route> [arguments]
@@ -108,7 +147,7 @@ case "$1" in
         if [ ! -x "$schedule_cli" ]; then
           blocked "cron schedule (native artifact missing)"
         fi
-        exec "$schedule_cli" "$@"
+        run_cron_schedule_cli "$schedule_cli" "$@"
         ;;
       next-run)
         shift 2
@@ -116,7 +155,7 @@ case "$1" in
         if [ ! -x "$schedule_cli" ]; then
           blocked "cron next-run (native artifact missing)"
         fi
-        exec "$schedule_cli" --next-run "$@"
+        run_cron_schedule_cli "$schedule_cli" --next-run "$@"
         ;;
       jobs)
         if [ "$3" = list ] && { [ "$#" -eq 4 ] || [ "$#" -eq 5 ]; }; then
