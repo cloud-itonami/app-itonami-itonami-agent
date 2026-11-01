@@ -1,0 +1,41 @@
+name: itonami cron store Linux native
+
+on:
+  pull_request:
+    paths:
+      - "bin/check-cron-store-linux-native.py"
+      - "kotoba/itonami/cron_jobs_json.kotoba"
+      - "kotoba/itonami/cron_jobs_store.kotoba"
+      - "kotoba/itonami/schedule.kotoba"
+      - "test/native/cron_jobs_store_clock_gate.kotoba"
+      - ".github/workflows/cron-store-linux-native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x86_64-native-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Fetch the requested Itonami source without a runtime action
+        env:
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/$REPOSITORY.git"
+          if [ -n "$PR_NUMBER" ]; then
+            SOURCE_REF="refs/pull/$PR_NUMBER/head"
+          else
+            SOURCE_REF="$GITHUB_SHA"
+          fi
+          git -C "$GITHUB_WORKSPACE" -c protocol.version=2 fetch --depth=1 origin "$SOURCE_REF"
+          git -C "$GITHUB_WORKSPACE" checkout --detach FETCH_HEAD
+      - name: Run the pinned Kotoba artifact on Amu native Linux runtime
+        run: |
+          python3 bin/check-cron-store-linux-native.py \
+            --output "$RUNNER_TEMP/itonami-cron-store-linux-native"
