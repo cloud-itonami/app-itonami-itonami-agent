@@ -15,9 +15,9 @@ loading, cron persistence, capability wiring, or a live turn.
   first run's generated KSL2 lock SHA-256
   `f8e8755a30f83b639f3daf0312ed3b22a6c0326456ba6b3f62d66fde42b9c458`.
 - Amu PR #1764 candidate commit:
-  `b16fe2b49237d6418d27864a09e36d17ba289c5d`.
+  `144f41d6f745648cd3bc5dbb27c6583879ede4a9`.
 - Amu host CLI SHA-256
-  `03edb244e1eefde4193bb5a18e1a7eddd9716e1d2c46d27c5f03dfaa1e42b499`;
+  `c90705a54282a0aedd49ca235b97c7f20d17b2d6d01c20d1852050092d1fcd73`;
   its sibling compiler and packager are pinned and checked by that CLI.
 - Host: macOS `26.4`, Apple Silicon.
 - The test entry and KSL2 lock were generated under the new output directory;
@@ -37,8 +37,9 @@ bin/check-cron-schedule-selfhost \
 
 The candidate compiled the locked two-module project, signed the generated
 native Mach-O, and the generated program returned mask `15`: `test-civil`,
-`test-parse`, `test-cron`, and `test-other` all returned true. The program's
-SHA-256 is
+`test-parse`, `test-cron`, and `test-other` all returned true. Then
+`amu run ENTRY --source-lock FILE.ksl` rebuilt and ran the same project and
+also returned `15`. The program's SHA-256 is
 `9bbe158e6f98bed697785c789d3ba72935f99c1ab8376432b630b3dfa4c41e1a`.
 
 As a negative control, the script changes the staged schedule source without
@@ -48,12 +49,11 @@ and creates no output artifact.
 ## Qualification limits and open route gap
 
 This depends on the unmerged Amu PR #1764 candidate, so it is not yet evidence
-from the merged required route. The signed program was directly executed on
-the host. `amu run schedule-tests.macho` currently refuses it with
-`EABI expected one exported main [] :i64 in a single canonical Kotoba source`
-because `run` recompiles the embedded single-file source and cannot replay the
-multi-module source lock. Keep this as a KOTOBA-13 integration blocker; do not
-claim the `amu run` project-artifact path is qualified.
+from the merged required route. Both direct execution and the source-locked
+`amu run ENTRY` form passed. `amu run schedule-tests.macho` still refuses the
+compiled multi-module artifact because that artifact embeds only its entry
+source and `run PROGRAM` replays a single file. Use the source-locked run form;
+artifact replay remains a separate KOTOBA-13 limitation.
 
 No Node/NBB/JVM/KBB reference test was run in this measurement. Prior one-time
 oracle evidence remains separately recorded in
