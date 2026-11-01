@@ -113,7 +113,7 @@ case "$1" in
         exec "$schedule_cli" --next-run "$@"
         ;;
       jobs)
-        if [ "$2" = remove ] && [ "$#" -eq 5 ]; then
+        if [ "$3" = remove ] && [ "$#" -eq 5 ]; then
           run_cron_jobs_remove_linux "$4" "$5"
         fi
         blocked "$@"
