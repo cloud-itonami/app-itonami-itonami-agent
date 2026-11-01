@@ -480,6 +480,34 @@ def main():
     if expired.get("enabled") is not True or expired.get("state") != "completed" or expired.get("next_run_at") is not None:
         raise RuntimeError(f"expired one-shot resume mismatch: {expired!r}")
 
+    interval_scope = out / "resume-interval-scope"
+    (interval_scope / "d").mkdir(parents=True)
+    (interval_scope / "d/jobs.json").write_text(
+        '{"jobs":[{"id":"interval","enabled":false,"schedule":{"kind":"interval",'
+        '"minutes":5},"next_run_at":null}]}', encoding="ascii")
+    execute("runtime-resume-interval", runner, payload, interval_scope,
+            "resume", "interval", "+0000", 0, out, calls)
+    interval_result = json.loads((interval_scope / "d/jobs.json").read_text(encoding="ascii"))
+    interval_job = interval_result["jobs"][0]
+    interval_next = dt.datetime.fromisoformat(interval_job["next_run_at"].replace("Z", "+00:00"))
+    interval_updated = dt.datetime.fromisoformat(interval_result["updated_at"].replace("Z", "+00:00"))
+    if (interval_job.get("enabled") is not True or interval_job.get("state") != "scheduled"
+            or (interval_next - interval_updated).total_seconds() != 5 * 60):
+        raise RuntimeError(f"interval resume did not schedule exactly five minutes after now: {interval_result!r}")
+
+    future_once_scope = out / "resume-future-once-scope"
+    (future_once_scope / "d").mkdir(parents=True)
+    (future_once_scope / "d/jobs.json").write_text(
+        '{"jobs":[{"id":"future-once","enabled":false,"schedule":{"kind":"once",'
+        '"run_at":"2099-01-01T09:00:00+09:00"},"next_run_at":null}]}', encoding="ascii")
+    execute("runtime-resume-future-once", runner, payload, future_once_scope,
+            "resume", "future-once", "+0000", 0, out, calls)
+    future_once = json.loads((future_once_scope / "d/jobs.json").read_text(encoding="ascii"))["jobs"][0]
+    future_run_at = dt.datetime.fromisoformat(future_once["schedule"]["run_at"].replace("Z", "+00:00"))
+    future_next_at = dt.datetime.fromisoformat(future_once["next_run_at"].replace("Z", "+00:00"))
+    if future_once.get("state") != "scheduled" or future_next_at != future_run_at:
+        raise RuntimeError(f"future one-shot resume did not preserve its instant: {future_once!r}")
+
     invalid_resume_scope = out / "resume-invalid-scope"
     (invalid_resume_scope / "d").mkdir(parents=True)
     invalid_resume_document = '{"jobs":[{"id":"bad","schedule":{"kind":"cron","expr":"* * *"}}]}'
@@ -564,7 +592,9 @@ def main():
         "pause_launcher_runtime": "PASS",
         "pause_missing_id_refusal_launcher": "PASS",
         "resume_cron_runtime": "PASS",
+        "resume_interval_runtime": "PASS",
         "resume_expired_once_runtime": "PASS",
+        "resume_future_once_runtime": "PASS",
         "resume_invalid_schedule_refusal_runtime": "PASS",
         "resume_cron_launcher_runtime": "PASS",
         "resume_invalid_schedule_refusal_launcher": "PASS",
