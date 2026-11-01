@@ -9,7 +9,6 @@
 #   session-search-cli 62564 0 3,34,35,37,38
 #   turn-cli            18544 0 3,34,35,37,38,11
 #   turn-loop-cli       61004 0 3,34,35,37,38,11
-#   cron-schedule-cli   44408 0 37,38,39 (aarch64-macos; diagnostic build)
 #
 # Env: KEXE_LOADER (the loader binary), KEXE_GUESTS (dir with the .raw
 # guests), ITONAMI_ARCH (aarch64|x86_64, default from uname).
@@ -37,7 +36,6 @@ usage() {
 Usage: itonami-agent <route> [arguments]
 
 Selfhost routes:
-  cron schedule <schedule>
   cron notepad <base> <verb> [key] [value]
   kanban <base> <verb> [arguments]
   session-search <base> <query> [limit] [after] [before] [detail] [sort] [sid] [pbase]
@@ -63,14 +61,6 @@ esac
 case "$1" in
   cron)
     case "$2" in
-      schedule)
-        shift 2
-        if [ "$ARCH" != aarch64 ]; then
-          printf '%s\n' "itonami-agent: cron schedule guest artifact is available only for aarch64" >&2
-          exit 78
-        fi
-        run_guest cron-schedule-cli.raw 44408 37,38,39 "$@"
-        ;;
       notepad)
         shift 2
         # argv: <base> <verb> [key] [value]  (guest order: verb base key value)
