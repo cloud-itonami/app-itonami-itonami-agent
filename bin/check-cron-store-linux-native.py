@@ -410,7 +410,7 @@ def main():
     pause_refusal_document = '{"jobs":[{"id":"present","enabled":true}],"extension":7}'
     (pause_refusal / "d/jobs.json").write_text(pause_refusal_document, encoding="ascii")
     execute("runtime-pause-missing-refusal", runner, payload, pause_refusal,
-            "pause", "missing", "", 1, out, calls, allow_stderr=True)
+            "pause", "missing", "", 2, out, calls, allow_stderr=True)
     if (pause_refusal / "d/jobs.json").read_text(encoding="ascii") != pause_refusal_document:
         raise RuntimeError("pause missing-id refusal modified jobs.json")
     if (pause_refusal / "d/.jobs.json.tmp").exists():
@@ -434,7 +434,7 @@ def main():
     (launcher_pause_refusal / "d").mkdir(parents=True)
     (launcher_pause_refusal / "d/jobs.json").write_text(pause_refusal_document, encoding="ascii")
     execute_launcher("launcher-pause-missing-refusal", package_launcher,
-                     launcher_pause_refusal, "pause", "missing", "", 1, out, calls)
+                     launcher_pause_refusal, "pause", "missing", "", 2, out, calls)
     if (launcher_pause_refusal / "d/jobs.json").read_text(encoding="ascii") != pause_refusal_document:
         raise RuntimeError("launcher pause refusal modified jobs.json")
 
