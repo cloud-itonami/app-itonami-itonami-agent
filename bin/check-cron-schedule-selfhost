@@ -13,6 +13,7 @@ fi
 CLI=$1
 OUT_DIR=$2
 EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
+EXPECTED_CRON_CLI_SHA256=5c3afa0c3674de24799aacb0793203bbdda4ce5e5d8c6ac42d50b69841ea7ecb
 EXPECTED_SCHEDULE_SHA256=0d69ed31b6601dacdf9c65e3d98c2d44328925ac6cddefa46125db2679fb7cbe
 AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
 
@@ -42,14 +43,21 @@ if [ "$CLI_SHA256" != "$EXPECTED_CLI_SHA256" ]; then
   exit 2
 fi
 SCHEDULE="$REPO_ROOT/kotoba/itonami/schedule.kotoba"
+CRON_CLI="$REPO_ROOT/kotoba/agent_cli/cron_schedule_cli.kotoba"
 SCHEDULE_SHA256=$(shasum -a 256 "$SCHEDULE" | cut -d ' ' -f 1)
 if [ "$SCHEDULE_SHA256" != "$EXPECTED_SCHEDULE_SHA256" ]; then
   printf '%s\n' "unexpected schedule source digest: $SCHEDULE_SHA256" >&2
   exit 2
 fi
+CRON_CLI_SHA256=$(shasum -a 256 "$CRON_CLI" | cut -d ' ' -f 1)
+if [ "$CRON_CLI_SHA256" != "$EXPECTED_CRON_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected schedule CLI source digest: $CRON_CLI_SHA256" >&2
+  exit 2
+fi
 
 mkdir -p "$OUT_DIR"
 cp "$SCHEDULE" "$OUT_DIR/itonami-schedule.kotoba"
+cp "$CRON_CLI" "$OUT_DIR/cron-schedule-cli.kotoba"
 cat > "$OUT_DIR/schedule-gate.kotoba" <<'EOF'
 (ns schedule-gate (:require [itonami.schedule :as schedule]) (:export [main]))
 (defn main [] :i64
@@ -109,6 +117,36 @@ if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
   exit 1
 fi
 
+CRON_CLI_PATH="$OUT_DIR/cron-schedule-cli.kotoba"
+CRON_CLI_FILE_SHA=$(shasum -a 256 "$CRON_CLI_PATH" | cut -d ' ' -f 1)
+CRON_SCHEDULE_PATH="$OUT_DIR/itonami-schedule.kotoba"
+CRON_SCHEDULE_SHA=$(shasum -a 256 "$CRON_SCHEDULE_PATH" | cut -d ' ' -f 1)
+CRON_CLI_LOCK="$OUT_DIR/cron-schedule-cli.ksl"
+printf 'KSL2\nentry %s\nmodule agent-cli-cron-schedule %s\nmodule itonami.schedule %s\nfile %s %s\nfile %s %s\n' \
+  "$CRON_CLI_PATH" "$CRON_CLI_PATH" "$CRON_SCHEDULE_PATH" \
+  "$CRON_CLI_FILE_SHA" "$CRON_CLI_PATH" "$CRON_SCHEDULE_SHA" "$CRON_SCHEDULE_PATH" \
+  > "$CRON_CLI_LOCK"
+CRON_CLI_LOCK_SHA=$(shasum -a 256 "$CRON_CLI_LOCK" | cut -d ' ' -f 1)
+CRON_CLI_PROGRAM="$OUT_DIR/cron-schedule-cli.macho"
+"$CLI" compile "$CRON_CLI_PATH" --source-lock "$CRON_CLI_LOCK" -o "$CRON_CLI_PROGRAM"
+codesign --verify --strict "$CRON_CLI_PROGRAM"
+DIRECT_CLI_RESULT=$("$CRON_CLI_PROGRAM" 'every 5m')
+EXPECTED_AMU_CLI_RESULT=$(printf 'interval 5\n0')
+if [ "$DIRECT_CLI_RESULT" != "$EXPECTED_AMU_CLI_RESULT" ]; then
+  printf 'schedule CLI direct result mismatch: got %s\n' "$DIRECT_CLI_RESULT" >&2
+  exit 1
+fi
+LOCKED_CLI_RESULT=$("$CLI" run "$CRON_CLI_PATH" --source-lock "$CRON_CLI_LOCK" -- 'every 5m')
+if [ "$LOCKED_CLI_RESULT" != "$EXPECTED_AMU_CLI_RESULT" ]; then
+  printf 'schedule CLI locked-run result mismatch: got %s\n' "$LOCKED_CLI_RESULT" >&2
+  exit 1
+fi
+ARTIFACT_CLI_RESULT=$("$CLI" run "$CRON_CLI_PROGRAM" -- 'every 5m')
+if [ "$ARTIFACT_CLI_RESULT" != "$EXPECTED_AMU_CLI_RESULT" ]; then
+  printf 'schedule CLI artifact-run result mismatch: got %s\n' "$ARTIFACT_CLI_RESULT" >&2
+  exit 1
+fi
+
 {
   printf 'format: itonami.cron-schedule-selfhost-gate.v1\n'
   printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
@@ -120,6 +158,12 @@ fi
   printf 'runtime_result: %s\n' "$RESULT"
   printf 'amu_run_result: %s\n' "$RUN_RESULT"
   printf 'amu_run_artifact_result: %s\n' "$ARTIFACT_RESULT"
+  printf 'schedule_cli_source_sha256: %s\n' "$CRON_CLI_FILE_SHA"
+  printf 'schedule_cli_lock_sha256: %s\n' "$CRON_CLI_LOCK_SHA"
+  printf 'schedule_cli_program_sha256: %s\n' "$(shasum -a 256 "$CRON_CLI_PROGRAM" | cut -d ' ' -f 1)"
+  printf 'schedule_cli_direct_result: %s\n' "$DIRECT_CLI_RESULT"
+  printf 'schedule_cli_locked_run_result: %s\n' "$LOCKED_CLI_RESULT"
+  printf 'schedule_cli_artifact_run_result: %s\n' "$ARTIFACT_CLI_RESULT"
   printf 'changed_source_refusal: PASS\n'
   printf 'qualification: bounded multi-module native selfhost schedule gate; not product-launcher qualification\n'
 } > "$OUT_DIR/build-receipt.txt"

@@ -4,7 +4,7 @@
   ISO-time parsing remains a named refusal until its date semantics are
   ported. The normalized output is an intermediate contract for cron create."
   (:require [itonami.schedule :as schedule])
-  (:export [cron-schedule-cli])
+  (:export [cron-schedule-cli main])
   (:capabilities #{:cli/args :io/write :io/write-error}))
 
 (defn- wire-arg [i :i64] :string
@@ -36,3 +36,6 @@
               (= kind "once-at") (say-line (string-concat "once-at " value))
               (= kind "cron") (say-line (string-concat "cron " value))
               :else (fail input))))))
+
+(defn main [] :i64
+  (cron-schedule-cli))

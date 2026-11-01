@@ -70,3 +70,34 @@ the unmerged candidate and does not qualify the Itonami product launcher.
 No Node/NBB/JVM/KBB reference test was run in this measurement. Prior one-time
 oracle evidence remains separately recorded in
 `cron-schedule-iso-oracle-20261101.md`.
+
+## 2026-11-01 Public project CLI entrypoint and native execution
+
+The first public project compile attempt for `agent-cli-cron-schedule` refused
+with `E5 symbol is not exported`: the module exported only
+`cron-schedule-cli`, while Amu's public project compiler extracts `main`.
+Added a `main` export that delegates to the existing CLI function. The exact
+Kotoba source SHA-256 is
+`5c3afa0c3674de24799aacb0793203bbdda4ce5e5d8c6ac42d50b69841ea7ecb`.
+
+With Amu PR #1764 candidate `d673111b66f43a8569e545c772a70e51737e1707`,
+the pinned gate compiled a signed native CLI program from the two-module KSL2
+project and verified three execution paths for input `every 5m`:
+
+- Direct native program execution: `interval 5`, then exit value `0`.
+- `amu run ENTRY --source-lock FILE.ksl`: same output.
+- `amu run PROGRAM`: same output after locked-source rebuild and artifact
+  comparison.
+
+Schedule CLI KSL2 SHA-256 is
+`10db8beed705af9641980abf5537dff1ce88c2b1c227e6468f6f95e146cc4242`; the
+program SHA-256 is
+`cf876779226fd944819257f8adf15b8e2061c4b94ab3999efb0206666208436f`.
+The full gate also returned schedule mask `15` and passed changed-source
+refusal. Reproduction uses `bin/check-cron-schedule-selfhost` with the CLI
+digest and pinned source revisions in the script.
+
+This removes the public `main`-symbol compile failure and verifies native
+schedule CLI behavior. `bin/itonami-agent` still has no dispatch for this
+schedule CLI, and product launcher/profile/persistence qualification remains
+open. The Amu candidate is still an unmerged PR.
