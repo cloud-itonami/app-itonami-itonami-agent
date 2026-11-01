@@ -12,9 +12,9 @@ fi
 
 CLI=$1
 OUT_DIR=$2
-EXPECTED_CLI_SHA256=c90705a54282a0aedd49ca235b97c7f20d17b2d6d01c20d1852050092d1fcd73
+EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
 EXPECTED_SCHEDULE_SHA256=0d69ed31b6601dacdf9c65e3d98c2d44328925ac6cddefa46125db2679fb7cbe
-AMU_COMMIT=144f41d6f745648cd3bc5dbb27c6583879ede4a9
+AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
 
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
 GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
@@ -86,6 +86,11 @@ if [ "$RUN_RESULT" != 15 ]; then
   printf 'amu run schedule test mask mismatch: expected 15, got %s\n' "$RUN_RESULT" >&2
   exit 1
 fi
+ARTIFACT_RESULT=$("$CLI" run "$OUT_DIR/schedule-tests.macho")
+if [ "$ARTIFACT_RESULT" != 15 ]; then
+  printf 'amu run project artifact mask mismatch: expected 15, got %s\n' "$ARTIFACT_RESULT" >&2
+  exit 1
+fi
 
 cp "$SCHEDULE_PATH" "$OUT_DIR/schedule-before-refusal.kotoba"
 printf '\n' >> "$SCHEDULE_PATH"
@@ -114,6 +119,7 @@ fi
   printf 'program_sha256: %s\n' "$(shasum -a 256 "$OUT_DIR/schedule-tests.macho" | cut -d ' ' -f 1)"
   printf 'runtime_result: %s\n' "$RESULT"
   printf 'amu_run_result: %s\n' "$RUN_RESULT"
+  printf 'amu_run_artifact_result: %s\n' "$ARTIFACT_RESULT"
   printf 'changed_source_refusal: PASS\n'
   printf 'qualification: bounded multi-module native selfhost schedule gate; not product-launcher qualification\n'
 } > "$OUT_DIR/build-receipt.txt"
