@@ -603,12 +603,12 @@
 
 (defn test-update-schedule-preserves-extensions [] :bool
   (let [source "{\"jobs\":[{\"id\":\"change\",\"schedule\":{\"kind\":\"interval\",\"minutes\":5},\"schedule_display\":\"every 5m\",\"next_run_at\":null,\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":true}"
-        result (update-schedule-json source "change" "{\"kind\":\"interval\",\"minutes\":10}"
+        result (update-schedule-json source "change" "{\"kind\":\"interval\",\"minutes\":10,\"display\":\"every 10m\"}"
                                      "every 10m" "2026-11-02T03:14:05.006Z"
                                      "2026-11-02T03:04:05.006Z")
         output (result-value-of [:result :string :string] result "")]
     (and (result-ok?-of [:result :string :string] result)
-         (string=? output "{\"jobs\":[{\"id\":\"change\",\"schedule\":{\"kind\":\"interval\",\"minutes\":10},\"schedule_display\":\"every 10m\",\"next_run_at\":\"2026-11-02T03:14:05.006Z\",\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":true,\"updated_at\":\"2026-11-02T03:04:05.006Z\"}"))))
+         (string=? output "{\"jobs\":[{\"id\":\"change\",\"schedule\":{\"kind\":\"interval\",\"minutes\":10,\"display\":\"every 10m\"},\"schedule_display\":\"every 10m\",\"next_run_at\":\"2026-11-02T03:14:05.006Z\",\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":true,\"updated_at\":\"2026-11-02T03:04:05.006Z\"}"))))
 
 (defn test-update-schedule-refuses-missing [] :bool
   (not (result-ok?-of [:result :string :string]

@@ -584,7 +584,7 @@ def main():
     updated_job = updated_doc["jobs"][0]
     updated_at = dt.datetime.fromisoformat(updated_doc["updated_at"].replace("Z", "+00:00"))
     updated_next = dt.datetime.fromisoformat(updated_job["next_run_at"].replace("Z", "+00:00"))
-    if (updated_job.get("schedule") != {"kind": "interval", "minutes": 10}
+    if (updated_job.get("schedule") != {"kind": "interval", "minutes": 10, "display": "every 10m"}
             or updated_job.get("schedule_display") != "every 10m"
             or updated_job.get("future") != 1.25e7
             or updated_doc.get("extension") != {"keep": True}
@@ -657,7 +657,7 @@ def main():
     launcher_updated_at = dt.datetime.fromisoformat(launcher_updated["updated_at"].replace("Z", "+00:00"))
     launcher_updated_next = dt.datetime.fromisoformat(
         launcher_updated["jobs"][0]["next_run_at"].replace("Z", "+00:00"))
-    if (launcher_updated["jobs"][0].get("schedule") != {"kind": "interval", "minutes": 10}
+    if (launcher_updated["jobs"][0].get("schedule") != {"kind": "interval", "minutes": 10, "display": "every 10m"}
             or (launcher_updated_next - launcher_updated_at).total_seconds() != 10 * 60
             or launcher_updated.get("extension") != {"keep": True}):
         raise RuntimeError(f"launcher update-schedule mismatch: {launcher_updated!r}")
