@@ -83,10 +83,11 @@ before using this adapter for writes.
   `:result 1`, preserved the source bytes, and left no temp file.
 - Full build receipt:
   `workspaces/codex/awai-60-amu-cap-clock/itonami-launcher-passed/build-receipt.json`.
-- Qualification boundary: the Amu compiler source is from unmerged experimental
-  PR #1768 commit `06b3d1021e6d2d41a1c2c0d22004cb758ca9d631`. This qualifies
-  the candidate route on Linux x86_64 only; Darwin clock runtime, public Amu
-  compiler/root adoption, and live behavior remain open.
+- Qualification boundary at the time of this preceding remove-only run: it used
+  Amu PR #1768 commit `06b3d1021e6d2d41a1c2c0d22004cb758ca9d631`, whose
+  experimental compiler excluded stdout/stderr. That pin was later superseded
+  by the exact wire candidate documented below. Darwin clock runtime, public
+  Amu compiler/root adoption, and live behavior remain open.
 
 ### 2026-11-02 colocated package candidate
 
@@ -107,3 +108,11 @@ before using this adapter for writes.
   `workspaces/codex/awai-60-amu-cap-clock/itonami-package-passed/`.
 - This is package-candidate qualification. It was not installed or published;
   Amu PR #1768 remains unmerged, and Darwin/live qualification stays open.
+
+### 2026-11-02 exact Amu wire candidate and Kotoba list route
+
+- Exact-head Itonami run `41342885801` at Itonami source `ba7e52feea5ca9f1c2c030da53d2a593ef928b96` pinned Amu source `a7dc736cc4f8f3102c6c49dde0931528f68a83d6`, whose experimental project compiler admits stdout/stderr wires 37/39.
+- Amu F1=F2=F3 fixed-point compiler SHA-256: `d8e3078224a512e9ec7dd6693ff6091647ad770d1954fd8c638dee2566e61982` (10,306,048 bytes). The runner source remains SHA-256 `c9f1fe1b5c1748450fb11b233cbdc9d9234880a60dc480c0387b173f60d905be`.
+- The locked Kotoba artifact compiled and ran directly: removal positive and malformed-JSON refusal passed. The packaged launcher also passed positive/refusal and missing-artifact refusal (exit 78). The new `list` route passed direct and launcher active-only projection, read-only source preservation, and invalid-job refusal. The positive removal preserved unknown JSON values, wrote a host-UTC timestamp within 10 seconds, and left no temp file.
+- KX64 project SHA-256: `4ab9bc0f3e3ea77eda432254724500687604d505fe506764bba98c62e1c28747`; payload SHA-256: `5591320e943d0a875fed3c94dabb10c4ab216801a2c013dc9a79977ab516be66`; candidate package manifest SHA-256: `f733cefe080d181bcd2a1540cf51c1a181e30e2b068dc7f559005b850e938a04`.
+- Receipt and package artifacts are retained in workflow run `41342885801` (`itonami-cron-store-linux-native`). This candidate was staged and exercised in CI only; it was not installed or published. Amu PR #1768 is still unmerged; Darwin clock runtime, public compiler adoption, complete CLI, and live behavior remain unqualified.

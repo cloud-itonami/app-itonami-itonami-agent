@@ -27,8 +27,8 @@ AMU_CANDIDATE_SOURCE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
 # This Amu PR source adds the explicit stdout/stderr wires to the experimental
 # compiler. Capture its first F1=F2=F3 digest in the candidate receipt, then pin
 # the resulting value here after the standalone runtime gate passes.
-AMU_CANDIDATE_COMPILER_SHA256 = ""
-AMU_CANDIDATE_COMPILER_BYTES = 0
+AMU_CANDIDATE_COMPILER_SHA256 = "d8e3078224a512e9ec7dd6693ff6091647ad770d1954fd8c638dee2566e61982"
+AMU_CANDIDATE_COMPILER_BYTES = 10306048
 AMU_CANDIDATE_RUNNER_SHA256 = "27349b7edfea5833f41263cdbf6195e5f26848bfb491e406c2d826987194d3b2"
 KOTOBA_COMMIT = "63e30efc6402320fca6f9c70abd93f113e05d99c"
 KOTOBA_JCS_PATH = "lib/org.ietf.jcs/kotoba/jcs/reader.kotoba"
