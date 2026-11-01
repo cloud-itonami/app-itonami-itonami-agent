@@ -1,0 +1,71 @@
+;; itonami.cron-jobs-json — lossless jobs-array replacement for Hermes' JSON
+;; store. The JCS reader owns strict structural validation; this adapter
+;; replaces only the top-level `jobs` value and preserves every other byte,
+;; including extension fields with number forms outside JCS canonical output.
+(ns itonami.cron-jobs-json
+  (:require [jcs.reader :as jcs])
+  (:export [jobs-array-start replace-jobs-array
+            test-replace-preserves-extensions test-replace-refuses-invalid]))
+
+(defn- skip-ws [b :vector-i64 i :i64] :i64
+  (if (>= i (vector-count b)) i
+    (let [c (vector-at b i)]
+      (if (or (= c 32) (or (= c 9) (or (= c 10) (= c 13))))
+        (recur b (+ i 1)) i))))
+
+(defn- copy-range [src :vector-i64 src-start :i64 src-end :i64
+                   dst :vector-i64 dst-start :i64] :vector-i64
+  (if (>= src-start src-end) dst
+    (let [ignored (vector-assoc! dst dst-start (vector-at src src-start))]
+      (copy-range src (+ src-start 1) src-end dst (+ dst-start 1)))))
+
+(defn- jobs-array-index [b :vector-i64] :i64
+  (if (not (jcs/json-valid? b)) -1
+    (let [root (skip-ws b 0)]
+      (if (not (= (jcs/json-kind b root) 1)) -2
+        (let [jobs (jcs/json-member b root "jobs")]
+          (if (< jobs 0) -3
+            (if (not (= (jcs/json-kind b jobs) 2)) -4
+              jobs)))))))
+
+(defn jobs-array-start [json :string] :i64
+  ;; Negative values identify malformed JSON, a non-object root, a missing
+  ;; jobs member, and a non-array jobs value respectively.
+  (jobs-array-index (vector-i64-from-bytes (string-to-utf8 json))))
+
+(defn replace-jobs-array [json :string replacement :string]
+  [:result :string :string]
+  ;; The replacement must be exactly one valid JSON array. JCS validates the
+  ;; entire replacement, including nested values, before any output is made.
+  (let [src (vector-i64-from-bytes (string-to-utf8 json))
+        rep (vector-i64-from-bytes (string-to-utf8 replacement))
+        at (jobs-array-index src)
+        rep-start (skip-ws rep 0)]
+    (if (< at 0)
+      (result-err-of [:result :string :string] "cron-json/invalid-jobs-document")
+      (if (not (and (jcs/json-valid? rep) (= (jcs/json-kind rep rep-start) 2)))
+        (result-err-of [:result :string :string] "cron-json/replacement-must-be-array")
+        (let [end (jcs/json-end src at)
+              rep-size (vector-count rep)
+              src-size (vector-count src)
+              out-size (+ (+ at rep-size) (- src-size end))
+              out (vector-alloc out-size)
+              p1 (copy-range src 0 at out 0)
+              p2 (copy-range rep 0 rep-size out at)
+              p3 (copy-range src end src-size out (+ at rep-size))
+              text (string-from-utf8 (bytes-from-vector-i64 p3))]
+          (result-ok-of [:result :string :string] text))))))
+
+(defn test-replace-preserves-extensions [] :bool
+  (let [source "{\"extension\":1.25e+7,\"jobs\":[{\"future\":-0.0001}],\"tail\":{\"x\":true}}"
+        result (replace-jobs-array source "[]")
+        output (result-value-of [:result :string :string] result "")]
+    (and (result-ok?-of [:result :string :string] result)
+         (string=? output "{\"extension\":1.25e+7,\"jobs\":[],\"tail\":{\"x\":true}}")
+         (>= (jobs-array-start output) 0))))
+
+(defn test-replace-refuses-invalid [] :bool
+  (let [bad-document (replace-jobs-array "{\"jobs\":[}" "[]")
+        bad-replacement (replace-jobs-array "{\"jobs\":[]}" "[1e]")]
+    (and (not (result-ok?-of [:result :string :string] bad-document))
+         (not (result-ok?-of [:result :string :string] bad-replacement)))))

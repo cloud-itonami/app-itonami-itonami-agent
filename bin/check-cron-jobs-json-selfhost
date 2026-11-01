@@ -1,0 +1,98 @@
+#!/bin/sh
+# Build and run the cron jobs JSON adapter with a pinned Amu-native CLI and
+# the canonical Kotoba JCS reader source. Artifacts stay in a new workspace.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: KOTOBA_REPO=<kotoba-checkout> $0 <amu-native-cli> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+AMU_CLI=$1
+OUT_DIR=$2
+EXPECTED_AMU_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
+AMU_CLI_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
+KOTOBA_COMMIT=63e30efc6402320fca6f9c70abd93f113e05d99c
+KOTOBA_JCS_PATH=lib/org.ietf.jcs/kotoba/jcs/reader.kotoba
+EXPECTED_JCS_SHA256=f8af2953904bd0a96e7b5c3b9e34151bcae3754e5358669adb8ac289acc0872f
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf 'refusing output outside %s/workspaces\n' "$GITHUB_ROOT" >&2; exit 2 ;;
+esac
+case "$AMU_CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+case "${KOTOBA_REPO:-}" in
+  /*) ;;
+  *) printf '%s\n' "KOTOBA_REPO must name an absolute Kotoba checkout" >&2; exit 2 ;;
+esac
+if [ ! -x "$AMU_CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $AMU_CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+git -C "$KOTOBA_REPO" cat-file -e "$KOTOBA_COMMIT:$KOTOBA_JCS_PATH"
+
+AMU_CLI_SHA256=$(shasum -a 256 "$AMU_CLI" | cut -d ' ' -f 1)
+if [ "$AMU_CLI_SHA256" != "$EXPECTED_AMU_CLI_SHA256" ]; then
+  printf 'unexpected Amu CLI digest: %s\n' "$AMU_CLI_SHA256" >&2
+  exit 2
+fi
+
+mkdir -p "$OUT_DIR/src/gate" "$OUT_DIR/src/itonami" "$OUT_DIR/src/jcs"
+cp "$REPO_ROOT/kotoba/itonami/cron_jobs_json.kotoba" "$OUT_DIR/src/itonami/cron_jobs_json.kotoba"
+cp "$REPO_ROOT/test/native/cron_jobs_json_gate.kotoba" "$OUT_DIR/src/gate/cron_jobs_json_gate.kotoba"
+git -C "$KOTOBA_REPO" show "$KOTOBA_COMMIT:$KOTOBA_JCS_PATH" > "$OUT_DIR/src/jcs/reader.kotoba"
+
+GATE="$OUT_DIR/src/gate/cron_jobs_json_gate.kotoba"
+SOURCE="$OUT_DIR/src/itonami/cron_jobs_json.kotoba"
+JCS="$OUT_DIR/src/jcs/reader.kotoba"
+GATE_SHA256=$(shasum -a 256 "$GATE" | cut -d ' ' -f 1)
+SOURCE_SHA256=$(shasum -a 256 "$SOURCE" | cut -d ' ' -f 1)
+JCS_SHA256=$(shasum -a 256 "$JCS" | cut -d ' ' -f 1)
+if [ "$JCS_SHA256" != "$EXPECTED_JCS_SHA256" ]; then
+  printf 'unexpected pinned JCS source digest: %s\n' "$JCS_SHA256" >&2
+  exit 2
+fi
+
+printf 'KSL2\nentry %s\nmodule itonami.cron-jobs-json %s\nmodule itonami.cron-jobs-json-gate %s\nmodule jcs.reader %s\nfile %s %s\nfile %s %s\nfile %s %s\n' \
+  "$GATE" "$SOURCE" "$GATE" "$JCS" \
+  "$GATE_SHA256" "$GATE" "$SOURCE_SHA256" "$SOURCE" "$JCS_SHA256" "$JCS" \
+  > "$OUT_DIR/source.ksl"
+LOCK_SHA256=$(shasum -a 256 "$OUT_DIR/source.ksl" | cut -d ' ' -f 1)
+PROGRAM="$OUT_DIR/cron-jobs-json-gate"
+COMPILE_RESULT=$("$AMU_CLI" compile "$GATE" --source-lock "$OUT_DIR/source.ksl" -o "$PROGRAM")
+codesign --verify --strict "$PROGRAM"
+"$PROGRAM"
+
+PROGRAM_SHA256=$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)
+PROGRAM_BYTES=$(wc -c < "$PROGRAM" | tr -d ' ')
+SOURCE_REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)
+{
+  printf 'format: itonami.cron-jobs-json-native-gate.v1\n'
+  printf 'itonami_source_revision: %s\n' "$SOURCE_REVISION"
+  printf 'kotoba_source_commit: %s\n' "$KOTOBA_COMMIT"
+  printf 'kotoba_jcs_source_sha256: %s\n' "$JCS_SHA256"
+  printf 'amu_cli_commit: %s\n' "$AMU_CLI_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$AMU_CLI_SHA256"
+  printf 'adapter_source_sha256: %s\n' "$SOURCE_SHA256"
+  printf 'test_gate_source_sha256: %s\n' "$GATE_SHA256"
+  printf 'ksl2_sha256: %s\n' "$LOCK_SHA256"
+  printf 'program_sha256: %s\n' "$PROGRAM_SHA256"
+  printf 'program_bytes: %s\n' "$PROGRAM_BYTES"
+  printf 'compile_result: %s\n' "$COMPILE_RESULT"
+  printf 'codesign_verification: PASS\n'
+  printf 'native_positive_refusal_gate: PASS\n'
+  printf 'scope: lossless top-level jobs-array replacement only; no jobs CRUD or launcher route qualification\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"

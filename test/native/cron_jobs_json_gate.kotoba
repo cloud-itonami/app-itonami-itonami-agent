@@ -1,0 +1,7 @@
+(ns itonami.cron-jobs-json-gate
+  (:require [itonami.cron-jobs-json :as jobs])
+  (:export [main]))
+
+(defn main [] :i64
+  (if (and (jobs/test-replace-preserves-extensions)
+           (jobs/test-replace-refuses-invalid)) 0 1))
