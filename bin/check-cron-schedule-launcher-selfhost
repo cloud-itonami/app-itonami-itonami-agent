@@ -53,17 +53,21 @@ EOF
 chmod 755 "$OUT_DIR/bin/itonami-agent" "$OUT_DIR/bin/cron-schedule-cli" \
   "$OUT_DIR/missing/bin/itonami-agent" "$OUT_DIR/missing/bin/itonami-agent-kbb"
 
-EXPECTED=$(printf 'interval 5\n0')
+EXPECTED='interval 5'
 ACTUAL=$("$OUT_DIR/bin/itonami-agent" cron schedule 'every 5m')
 if [ "$ACTUAL" != "$EXPECTED" ]; then
   printf 'launcher schedule result mismatch: got %s\n' "$ACTUAL" >&2
   exit 1
 fi
 
-REFUSAL=$("$OUT_DIR/bin/itonami-agent" cron schedule 'not-a-schedule' \
-  2> "$OUT_DIR/refusal.stderr")
-if [ "$REFUSAL" != 2 ]; then
-  printf 'launcher refusal marker mismatch: expected 2, got %s\n' "$REFUSAL" >&2
+set +e
+"$OUT_DIR/bin/itonami-agent" cron schedule 'not-a-schedule' \
+  > "$OUT_DIR/refusal.stdout" \
+  2> "$OUT_DIR/refusal.stderr"
+REFUSAL_STATUS=$?
+set -e
+if [ "$REFUSAL_STATUS" -ne 2 ] || [ -s "$OUT_DIR/refusal.stdout" ]; then
+  printf 'launcher refusal mismatch: expected exit 2 and empty stdout, got %s\n' "$REFUSAL_STATUS" >&2
   exit 1
 fi
 if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/refusal.stderr"; then
@@ -72,17 +76,21 @@ if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/r
   exit 1
 fi
 
-NEXT_RUN_EXPECTED=$(printf '300000\n0')
+NEXT_RUN_EXPECTED='300000'
 NEXT_RUN_ACTUAL=$("$OUT_DIR/bin/itonami-agent" cron next-run 'every 5m' 0 0)
 if [ "$NEXT_RUN_ACTUAL" != "$NEXT_RUN_EXPECTED" ]; then
   printf 'launcher next-run result mismatch: got %s\n' "$NEXT_RUN_ACTUAL" >&2
   exit 1
 fi
 
-NEXT_RUN_REFUSAL=$("$OUT_DIR/bin/itonami-agent" cron next-run 'not-a-schedule' 0 0 \
-  2> "$OUT_DIR/next-run-refusal.stderr")
-if [ "$NEXT_RUN_REFUSAL" != 2 ]; then
-  printf 'launcher next-run refusal marker mismatch: expected 2, got %s\n' "$NEXT_RUN_REFUSAL" >&2
+set +e
+"$OUT_DIR/bin/itonami-agent" cron next-run 'not-a-schedule' 0 0 \
+  > "$OUT_DIR/next-run-refusal.stdout" \
+  2> "$OUT_DIR/next-run-refusal.stderr"
+NEXT_RUN_REFUSAL_STATUS=$?
+set -e
+if [ "$NEXT_RUN_REFUSAL_STATUS" -ne 2 ] || [ -s "$OUT_DIR/next-run-refusal.stdout" ]; then
+  printf 'launcher next-run refusal mismatch: expected exit 2 and empty stdout, got %s\n' "$NEXT_RUN_REFUSAL_STATUS" >&2
   exit 1
 fi
 if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/next-run-refusal.stderr"; then
@@ -116,6 +124,7 @@ fi
   printf 'source_revision: %s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
   printf 'artifact_sha256: %s\n' "$ARTIFACT_SHA256"
   printf 'positive_route: PASS\n'
+  printf 'command_stdout_exit_semantics: PASS\n'
   printf 'invalid_schedule_refusal: PASS\n'
   printf 'positive_next_run_route: PASS\n'
   printf 'invalid_next_run_refusal: PASS\n'
