@@ -36,6 +36,7 @@ usage() {
 Usage: itonami-agent <route> [arguments]
 
 Selfhost routes:
+  cron schedule <expression>
   cron notepad <base> <verb> [key] [value]
   kanban <base> <verb> [arguments]
   session-search <base> <query> [limit] [after] [before] [detail] [sort] [sid] [pbase]
@@ -61,6 +62,14 @@ esac
 case "$1" in
   cron)
     case "$2" in
+      schedule)
+        shift 2
+        schedule_cli="$HERE/cron-schedule-cli"
+        if [ ! -x "$schedule_cli" ]; then
+          blocked "cron schedule (native artifact missing)"
+        fi
+        exec "$schedule_cli" "$@"
+        ;;
       notepad)
         shift 2
         # argv: <base> <verb> [key] [value]  (guest order: verb base key value)

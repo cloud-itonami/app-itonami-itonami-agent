@@ -1,0 +1,102 @@
+#!/bin/sh
+# Verify the packaged launcher dispatches only to the standalone native
+# schedule artifact and fails closed when that artifact is missing.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <cron-schedule-cli.macho> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+ARTIFACT=$1
+OUT_DIR=$2
+EXPECTED_ARTIFACT_SHA256=fcc52ef56f5e53ce73cca6d5109dba80b99ca0177cf65be00390dd0a7083b5e7
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$ARTIFACT" in
+  /*) ;;
+  *) printf '%s\n' "native artifact path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$ARTIFACT" ]; then
+  printf '%s\n' "native schedule artifact is missing or not executable: $ARTIFACT" >&2
+  exit 2
+fi
+ARTIFACT_SHA256=$(shasum -a 256 "$ARTIFACT" | cut -d ' ' -f 1)
+if [ "$ARTIFACT_SHA256" != "$EXPECTED_ARTIFACT_SHA256" ]; then
+  printf '%s\n' "unexpected native schedule artifact digest: $ARTIFACT_SHA256" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+mkdir -p "$OUT_DIR/bin" "$OUT_DIR/missing/bin"
+cp "$REPO_ROOT/bin/itonami-agent" "$OUT_DIR/bin/itonami-agent"
+cp "$ARTIFACT" "$OUT_DIR/bin/cron-schedule-cli"
+cp "$REPO_ROOT/bin/itonami-agent" "$OUT_DIR/missing/bin/itonami-agent"
+cat > "$OUT_DIR/missing/bin/itonami-agent-kbb" <<EOF
+#!/bin/sh
+touch "$OUT_DIR/kbb-was-run"
+exit 99
+EOF
+chmod 755 "$OUT_DIR/bin/itonami-agent" "$OUT_DIR/bin/cron-schedule-cli" \
+  "$OUT_DIR/missing/bin/itonami-agent" "$OUT_DIR/missing/bin/itonami-agent-kbb"
+
+EXPECTED=$(printf 'interval 5\n0')
+ACTUAL=$("$OUT_DIR/bin/itonami-agent" cron schedule 'every 5m')
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  printf 'launcher schedule result mismatch: got %s\n' "$ACTUAL" >&2
+  exit 1
+fi
+
+REFUSAL=$("$OUT_DIR/bin/itonami-agent" cron schedule 'not-a-schedule' \
+  2> "$OUT_DIR/refusal.stderr")
+if [ "$REFUSAL" != 2 ]; then
+  printf 'launcher refusal marker mismatch: expected 2, got %s\n' "$REFUSAL" >&2
+  exit 1
+fi
+if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "launcher refusal did not emit its named diagnostic" >&2
+  exit 1
+fi
+
+set +e
+"$OUT_DIR/missing/bin/itonami-agent" cron schedule 'every 5m' \
+  > "$OUT_DIR/missing.stdout" 2> "$OUT_DIR/missing.stderr"
+MISSING_STATUS=$?
+set -e
+if [ "$MISSING_STATUS" -ne 78 ]; then
+  printf 'missing-artifact status mismatch: expected 78, got %s\n' "$MISSING_STATUS" >&2
+  cat "$OUT_DIR/missing.stderr" >&2
+  exit 1
+fi
+if ! rg -q "route 'cron schedule \(native artifact missing\)' is blocked" "$OUT_DIR/missing.stderr"; then
+  cat "$OUT_DIR/missing.stderr" >&2
+  printf '%s\n' "missing-artifact refusal did not identify the blocked route" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/kbb-was-run" ]; then
+  printf '%s\n' "missing native artifact invoked the legacy kbb launcher" >&2
+  exit 1
+fi
+
+{
+  printf 'format: itonami.cron-schedule-launcher-gate.v1\n'
+  printf 'source_revision: %s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  printf 'artifact_sha256: %s\n' "$ARTIFACT_SHA256"
+  printf 'positive_route: PASS\n'
+  printf 'invalid_schedule_refusal: PASS\n'
+  printf 'missing_artifact_status: %s\n' "$MISSING_STATUS"
+  printf 'missing_artifact_fallback_invocation: REFUSED\n'
+  printf 'qualification: launcher schedule subroute only; no cron persistence/runtime qualification\n'
+} > "$OUT_DIR/launcher-receipt.txt"
+
+cat "$OUT_DIR/launcher-receipt.txt"
