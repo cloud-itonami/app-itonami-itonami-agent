@@ -8,6 +8,7 @@
             [itonami.schedule :as schedule])
   (:export [jobs-array-start replace-jobs-array set-updated-at-json
             remove-job-json list-jobs-json pause-job-json resume-job-json
+            json-quote create-job-object append-job-json
             test-replace-preserves-extensions test-replace-refuses-invalid
             test-remove-preserves-job-extensions test-remove-refuses-missing
             test-list-projects-hermes-fields test-list-refuses-non-object-job
@@ -314,6 +315,57 @@
 (defn- json-string-value [s :string] :string
   (string-concat "\"" (string-concat (json-string-body s 0 (string-byte-length s) "") "\"")))
 
+(defn json-quote [s :string] :string
+  (json-string-value s))
+
+(defn create-job-object [id :string name :string prompt :string schedule-json :string
+                         display :string created-at :string next-run-at :string
+                         once :bool] :string
+  (let [next-json (if (= (string-length next-run-at) 0) "null" (json-string-value next-run-at))
+        repeat-times (if once "1" "null")
+        a (string-concat "{\"id\":" (json-string-value id))
+        b (string-concat a (string-concat ",\"name\":" (json-string-value name)))
+        c (string-concat b (string-concat ",\"prompt\":" (json-string-value prompt)))
+        d (string-concat c ",\"skills\":[],\"skill\":null,\"model\":null,\"provider\":null,\"base_url\":null,\"script\":null,\"no_agent\":false,\"context_from\":null,\"schedule\":")
+        e (string-concat d schedule-json)
+        f (string-concat e (string-concat ",\"schedule_display\":" (json-string-value display)))
+        g (string-concat f (string-concat ",\"repeat\":{\"times\":" repeat-times))
+        h (string-concat g ",\"completed\":0},\"enabled\":true,\"state\":\"scheduled\",\"paused_at\":null,\"paused_reason\":null,\"created_at\":")
+        i (string-concat h (json-string-value created-at))
+        j (string-concat i (string-concat ",\"next_run_at\":" next-json))]
+    (string-concat j ",\"last_run_at\":null,\"last_status\":null,\"last_error\":null,\"last_delivery_error\":null,\"failure_streak\":0,\"deliver\":\"local\",\"origin\":null,\"enabled_toolsets\":null,\"workdir\":null,\"monitor_script\":null,\"monitor_url\":null}")))
+
+(defn- job-id-present? [b :vector-i64 array-at :i64 id :string i :i64] :bool
+  (if (>= i (jcs/json-count b array-at)) false
+    (let [job (jcs/json-element b array-at i)]
+      (or (job-id-matches? b job id)
+          (job-id-present? b array-at id (inc i))))))
+
+(defn append-job-json [json :string job-json :string updated-at :string]
+  [:result :string :string]
+  (let [b (vector-i64-from-bytes (string-to-utf8 json))
+        job-bytes (vector-i64-from-bytes (string-to-utf8 job-json))
+        array-at (jobs-array-index b)
+        job-at (skip-ws job-bytes 0)
+        id-at (if (and (jcs/json-valid? job-bytes) (= (jcs/json-kind job-bytes job-at) 1))
+                (jcs/json-member job-bytes job-at "id") -1)
+        id (if (and (>= id-at 0) (= (jcs/json-kind job-bytes id-at) 3))
+             (jcs/json-string job-bytes id-at) "")]
+    (if (< array-at 0)
+      (result-err-of [:result :string :string] "cron-json/invalid-jobs-document")
+      (if (not (all-job-objects? b array-at 0))
+        (result-err-of [:result :string :string] "cron-json/job-entry-must-be-object")
+        (if (or (< id-at 0) (= (string-length id) 0))
+          (result-err-of [:result :string :string] "cron-json/new-job-must-have-id")
+          (if (job-id-present? b array-at id 0)
+            (result-err-of [:result :string :string] "cron-json/job-id-already-exists")
+            (let [end (jcs/json-end b array-at)
+                  insert-at (dec end)
+                  prefix (if (> (jcs/json-count b array-at) 0) "," "")
+                  changed (splice-json-range b insert-at insert-at
+                            (string-concat prefix job-json))]
+              (set-updated-at-json changed updated-at))))))))
+
 (defn- set-object-member-raw [object-json :string key :string raw :string] :string
   (let [b (vector-i64-from-bytes (string-to-utf8 object-json))
         root (skip-ws b 0)]
@@ -489,6 +541,7 @@
         (resume-job-json
           "{\"jobs\":[{\"id\":\"bad\",\"schedule\":{\"kind\":\"cron\",\"expr\":\"* * *\"}}]}"
           "bad" "2026-11-02T03:04:05.000Z" 1793588645000 0))))
+
 
 (defn test-list-projects-hermes-fields [] :bool
   (let [source "{\"jobs\":[{\"id\":\"live\",\"name\":\"A\",\"prompt\":\"p\",\"enabled\":true,\"private\":7},{\"id\":\"paused\",\"enabled\":false,\"state\":\"paused\"}],\"extension\":1.25e+7}"
