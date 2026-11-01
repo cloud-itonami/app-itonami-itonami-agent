@@ -49,3 +49,30 @@ grants and CLI output were not runtime-checked. The launcher has no dispatch
 for this command yet, and no generated guest artifact was installed. Natural
 language and relative/ISO one-shot schedule forms remain unsupported by this
 slice. No test suite or legacy oracle was run.
+
+## Expanded Kotoba schedule parser — 2026-11-01
+
+The parser was extended in commit `122be6f` to classify interval durations,
+relative-duration `once-after`, weekday/natural-time forms, and direct
+five-field cron. The diagnostic builder now pins that immutable source commit.
+
+Reproduction:
+
+```sh
+bin/build-cron-schedule-cli-diagnostic \
+  /Users/junkawasaki/github/kotoba-lang/amu/seed/bootstrap/aarch64-macos/amu-full-root.macho \
+  /Users/junkawasaki/github/workspaces/codex/awai-60-cron-parse-expanded-4
+```
+
+The command returned exit 0. Source SHA-256 values are CLI
+`f55fb591ce6985f65ce5ae94f519c18b910b3913b12c73c318b04df5643534d3` and
+schedule `cb303f56cf634834fa423358b21ec203937420c6a565d3353d6ef99ddc301013`.
+The KSL2 lock SHA-256 is
+`f815493bf5a8c09234a46056d77858a77910de35bfd1f5f8c77ef1732e60b961`.
+Amu compiled a 38,655-byte kseed (SHA-256
+`3d166995de019b24826a93177a4b129034ccab25bfec3abd0acf0a1cc260fc21`); native
+extraction returned offset `36784`, length `38613`, arity `0`, with raw SHA-256
+`90708b26c56e34d3a8e1fb6464ef43f3ff68000ff655623c3d650378cf5c3885`.
+The pinned Amu root remains diagnostic-candidate. No guest execution,
+launcher dispatch, CLI output check, cron persistence, or product runtime
+qualification occurred. No test suite or legacy oracle was run.
