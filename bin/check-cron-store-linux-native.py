@@ -18,17 +18,17 @@ import time
 from pathlib import Path
 
 
-AMU_COMMIT = "a7dc736cc4f8f3102c6c49dde0931528f68a83d6"
+AMU_COMMIT = "01a2e550f96ac7029b5796cada2e9a00c8e36136"
 AMU_BINARY_PATH = "bin/amu-linux-x86_64"
 AMU_BINARY_SHA256 = "2cbd90970f9766481ae46fd30ae515548e7b3163a9272f7a0497c988258dd654"
 AMU_RUNNER_SOURCE = "seed/x86_64-kx64-runner.kotoba"
 AMU_RUNNER_SHA256 = "c9f1fe1b5c1748450fb11b233cbdc9d9234880a60dc480c0387b173f60d905be"
 AMU_CANDIDATE_SOURCE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
-# This Amu PR source adds the explicit stdout/stderr wires to the experimental
-# compiler. Capture its first F1=F2=F3 digest in the candidate receipt, then pin
-# the resulting value here after the standalone runtime gate passes.
-AMU_CANDIDATE_COMPILER_SHA256 = "d8e3078224a512e9ec7dd6693ff6091647ad770d1954fd8c638dee2566e61982"
-AMU_CANDIDATE_COMPILER_BYTES = 10306048
+# Amu PR #1769 adds experimental project-profile admission for entropy wire 23.
+# This first runtime pass derives F1=F2=F3 from the pinned source and records the
+# compiler digest. Pin that observed digest and rerun the exact-head gate next.
+AMU_CANDIDATE_COMPILER_SHA256 = ""
+AMU_CANDIDATE_COMPILER_BYTES = 0
 AMU_CANDIDATE_RUNNER_SHA256 = "27349b7edfea5833f41263cdbf6195e5f26848bfb491e406c2d826987194d3b2"
 KOTOBA_COMMIT = "63e30efc6402320fca6f9c70abd93f113e05d99c"
 KOTOBA_JCS_PATH = "lib/org.ietf.jcs/kotoba/jcs/reader.kotoba"
@@ -152,16 +152,17 @@ def locked_project(out, kotoba_repo):
 
 
 def execute(name, runner, payload, scope, action, value, option, expected_result, out, calls,
-            allow_stderr=False):
+            allow_stderr=False, extra1="", extra2=""):
+    capabilities = "7,23,35,37,38,39" if action == "create" else "7,35,37,38,39"
     env = {
         "PATH": "/nonexistent",
-        "KEXE_ALLOW": "7,35,37,38,39",
+        "KEXE_ALLOW": capabilities,
         "KEXE_CAP_RESOURCES_35": str(scope),
         "KEXE_STACK_BYTES": "8388608",
         "KEXE_STRUCTURED_REPORT": "1",
     }
-    argv = [runner, payload, "0", "0", "x86_64", "7,35,37,38,39", "--",
-            action, str(scope / "d"), value, option]
+    argv = [runner, payload, "0", "0", "x86_64", capabilities, "--",
+            action, str(scope / "d"), value, option, extra1, extra2]
     stdout = run(name, argv, out, env, calls, allow_stderr=allow_stderr)
     if not re.search(rb":result " + str(expected_result).encode() + rb"\b", stdout):
         state = {}
@@ -175,7 +176,7 @@ def execute(name, runner, payload, scope, action, value, option, expected_result
 
 
 def execute_launcher(name, launcher, scope, action, value, option, expected_exit, out, calls,
-                    env_overrides=None):
+                    env_overrides=None, extra1="", extra2=""):
     env = dict(os.environ)
     env.pop("ITONAMI_CRON_JOBS_RUNNER", None)
     env.pop("ITONAMI_CRON_JOBS_PAYLOAD", None)
@@ -186,6 +187,10 @@ def execute_launcher(name, launcher, scope, action, value, option, expected_exit
         argv.append(value)
     if option != "":
         argv.append(option)
+    if extra1 != "":
+        argv.append(extra1)
+    if extra2 != "":
+        argv.append(extra2)
     started = time.monotonic()
     result = subprocess.run(list(map(str, argv)), cwd=ROOT, env=env,
                             capture_output=True, timeout=120)
@@ -284,7 +289,7 @@ def main():
         "project_payload_sha256": sha(payload_bytes),
         "runner_elf_sha256": sha(runner.read_bytes()),
         "launcher_sha256": sha(package_launcher.read_bytes()),
-        "capabilities": ["cli/args", "clock/now", "fs/app-data", "io/write", "io/write-error"],
+        "capabilities": ["cli/args", "clock/now", "entropy/draw", "fs/app-data", "io/write", "io/write-error"],
         "adoption": "not-public; Amu experimental source candidate",
     }
     manifest_path = package / "candidate-package.json"
@@ -517,6 +522,54 @@ def main():
     if (invalid_resume_scope / "d/jobs.json").read_text(encoding="ascii") != invalid_resume_document:
         raise RuntimeError("invalid resume refusal modified jobs.json")
 
+    create_scope = out / "create-scope"
+    (create_scope / "d").mkdir(parents=True)
+    create_document = '{"jobs":[],"extension":{"keep":1.25e+7}}'
+    (create_scope / "d/jobs.json").write_text(create_document, encoding="ascii")
+    create_stdout = execute("runtime-create-positive", runner, payload, create_scope,
+                            "create", "every 5m", "native prompt", 0, out, calls,
+                            extra1="Native prompt job", extra2="+0000")
+    created_document = json.loads((create_scope / "d/jobs.json").read_text(encoding="ascii"))
+    if len(created_document.get("jobs", [])) != 1:
+        raise RuntimeError(f"create did not append exactly one cron job: {created_document!r}")
+    created_job = created_document["jobs"][0]
+    if (not re.fullmatch(r"[0-9a-f]{12}", created_job.get("id", ""))
+            or created_job.get("name") != "Native prompt job"
+            or created_job.get("prompt") != "native prompt"
+            or created_job.get("schedule", {}).get("kind") != "interval"
+            or created_job.get("schedule", {}).get("minutes") != 5
+            or created_job.get("enabled") is not True
+            or created_document.get("extension") != {"keep": 1.25e7}):
+        raise RuntimeError(f"created job fields or extension preservation mismatch: {created_document!r}")
+    create_updated = dt.datetime.fromisoformat(created_document["updated_at"].replace("Z", "+00:00"))
+    create_next = dt.datetime.fromisoformat(created_job["next_run_at"].replace("Z", "+00:00"))
+    if (abs(create_updated.timestamp() - time.time()) > 10
+            or (create_next - create_updated).total_seconds() != 5 * 60):
+        raise RuntimeError(f"create clock or next-run mismatch: {created_document!r}")
+    if (create_scope / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("create positive store left a temporary file")
+
+    create_refusal = out / "create-refusal-scope"
+    (create_refusal / "d").mkdir(parents=True)
+    create_refusal_document = '{"jobs":[],"extension":true}'
+    (create_refusal / "d/jobs.json").write_text(create_refusal_document, encoding="ascii")
+    execute("runtime-create-invalid-schedule-refusal", runner, payload, create_refusal,
+            "create", "not-a-schedule", "native prompt", 2, out, calls,
+            allow_stderr=True, extra1="", extra2="+0000")
+    if (create_refusal / "d/jobs.json").read_text(encoding="ascii") != create_refusal_document:
+        raise RuntimeError("invalid create refusal modified jobs.json")
+    if (create_refusal / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("create refusal left a temporary file")
+
+    create_prompt_refusal = out / "create-prompt-refusal-scope"
+    (create_prompt_refusal / "d").mkdir(parents=True)
+    (create_prompt_refusal / "d/jobs.json").write_text(create_refusal_document, encoding="ascii")
+    execute("runtime-create-empty-prompt-refusal", runner, payload, create_prompt_refusal,
+            "create", "every 5m", "", 2, out, calls,
+            allow_stderr=True, extra1="", extra2="+0000")
+    if (create_prompt_refusal / "d/jobs.json").read_text(encoding="ascii") != create_refusal_document:
+        raise RuntimeError("empty-prompt create refusal modified jobs.json")
+
     launcher_resume = out / "launcher-resume-scope"
     (launcher_resume / "d").mkdir(parents=True)
     (launcher_resume / "d/jobs.json").write_text(resume_document, encoding="ascii")
@@ -598,6 +651,9 @@ def main():
         "resume_invalid_schedule_refusal_runtime": "PASS",
         "resume_cron_launcher_runtime": "PASS",
         "resume_invalid_schedule_refusal_launcher": "PASS",
+        "create_runtime": "PASS",
+        "create_invalid_schedule_refusal": "PASS",
+        "create_empty_prompt_refusal": "PASS",
         "candidate_package": {
             "manifest": "package/candidate-package.json",
             "manifest_sha256": sha(manifest_path.read_bytes()),
@@ -612,7 +668,7 @@ def main():
                           "launcher_positive": sha(launcher_positive_stdout),
                           "pause": sha(pause_stdout), "launcher_pause": sha(launcher_pause_stdout),
                           "resume": sha(resume_stdout), "launcher_resume": sha(launcher_resume_stdout)},
-        "scope": "standalone Linux x86_64 native cron jobs list/pause/resume/remove CLI with scoped FS35, positive/refusal controls, and packaged launcher; macOS runtime qualification remains open",
+        "scope": "standalone Linux x86_64 native cron jobs create/list/pause/resume/remove CLI with scoped FS35, route-specific entropy, positive/refusal controls, and packaged launcher; macOS runtime qualification remains open",
     }
     receipt_path = out / "build-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
