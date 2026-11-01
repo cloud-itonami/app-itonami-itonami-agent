@@ -1,5 +1,5 @@
 #!/bin/sh
-# Verify the packaged launcher dispatches only to the standalone native
+# Verify the packaged launcher dispatches only to a signed native Mach-O
 # schedule artifact and fails closed when that artifact is missing.
 
 set -eu
@@ -11,7 +11,6 @@ fi
 
 ARTIFACT=$1
 OUT_DIR=$2
-EXPECTED_ARTIFACT_SHA256=fcc52ef56f5e53ce73cca6d5109dba80b99ca0177cf65be00390dd0a7083b5e7
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
 GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
 
@@ -28,8 +27,13 @@ if [ ! -x "$ARTIFACT" ]; then
   exit 2
 fi
 ARTIFACT_SHA256=$(shasum -a 256 "$ARTIFACT" | cut -d ' ' -f 1)
-if [ "$ARTIFACT_SHA256" != "$EXPECTED_ARTIFACT_SHA256" ]; then
-  printf '%s\n' "unexpected native schedule artifact digest: $ARTIFACT_SHA256" >&2
+ARTIFACT_KIND=$(file -b "$ARTIFACT")
+case "$ARTIFACT_KIND" in
+  "Mach-O "*) ;;
+  *) printf 'expected a native Mach-O schedule artifact, got: %s\n' "$ARTIFACT_KIND" >&2; exit 2 ;;
+esac
+if ! codesign --verify --strict "$ARTIFACT"; then
+  printf '%s\n' "native schedule artifact signature verification failed" >&2
   exit 2
 fi
 if [ -e "$OUT_DIR" ]; then

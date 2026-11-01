@@ -1,0 +1,75 @@
+#!/bin/sh
+# Stage the Kotoba schedule CLI beside the Itonami launcher in a fresh
+# workspace package tree. This package contains the schedule route only.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-native-cli> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+AMU_CLI=$1
+OUT_DIR=$2
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$AMU_CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+mkdir -p "$OUT_DIR"
+BUILD_DIR="$OUT_DIR/build"
+PACKAGE_BIN="$OUT_DIR/package/bin"
+"$REPO_ROOT/bin/build-cron-schedule-cli-selfhost" "$AMU_CLI" "$BUILD_DIR"
+mkdir -p "$PACKAGE_BIN"
+cp "$REPO_ROOT/bin/itonami-agent" "$PACKAGE_BIN/itonami-agent"
+cp "$BUILD_DIR/cron-schedule-cli" "$PACKAGE_BIN/cron-schedule-cli"
+chmod 755 "$PACKAGE_BIN/itonami-agent" "$PACKAGE_BIN/cron-schedule-cli"
+
+EXPECTED=$(printf 'interval 5\n0')
+POSITIVE=$("$PACKAGE_BIN/itonami-agent" cron schedule 'every 5m')
+if [ "$POSITIVE" != "$EXPECTED" ]; then
+  printf 'staged package positive result mismatch: got %s\n' "$POSITIVE" >&2
+  exit 1
+fi
+
+REFUSAL=$("$PACKAGE_BIN/itonami-agent" cron schedule 'not-a-schedule' \
+  2> "$OUT_DIR/package-refusal.stderr")
+if [ "$REFUSAL" != 2 ]; then
+  printf 'staged package refusal marker mismatch: expected 2, got %s\n' "$REFUSAL" >&2
+  exit 1
+fi
+if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/package-refusal.stderr"; then
+  cat "$OUT_DIR/package-refusal.stderr" >&2
+  printf '%s\n' "staged package refusal did not emit its named diagnostic" >&2
+  exit 1
+fi
+
+"$REPO_ROOT/bin/check-cron-schedule-launcher-selfhost" \
+  "$PACKAGE_BIN/cron-schedule-cli" "$OUT_DIR/launcher-gate"
+
+{
+  printf 'format: itonami.cron-schedule-package.selfhost.v1\n'
+  printf 'source_revision: %s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  printf 'package_script_sha256: %s\n' "$(shasum -a 256 "$REPO_ROOT/bin/package-cron-schedule-cli-selfhost" | cut -d ' ' -f 1)"
+  printf 'launcher_gate_sha256: %s\n' "$(shasum -a 256 "$REPO_ROOT/bin/check-cron-schedule-launcher-selfhost" | cut -d ' ' -f 1)"
+  printf 'amu_cli_sha256: %s\n' "$(shasum -a 256 "$AMU_CLI" | cut -d ' ' -f 1)"
+  printf 'launcher_sha256: %s\n' "$(shasum -a 256 "$PACKAGE_BIN/itonami-agent" | cut -d ' ' -f 1)"
+  printf 'schedule_cli_sha256: %s\n' "$(shasum -a 256 "$PACKAGE_BIN/cron-schedule-cli" | cut -d ' ' -f 1)"
+  printf 'positive_route: PASS\n'
+  printf 'invalid_schedule_refusal: PASS\n'
+  printf 'missing_artifact_refusal_and_no_kbb_fallback: PASS\n'
+  printf 'qualification: schedule-only package candidate; not full Itonami product packaging\n'
+} > "$OUT_DIR/package-receipt.txt"
+
+cat "$OUT_DIR/package-receipt.txt"
