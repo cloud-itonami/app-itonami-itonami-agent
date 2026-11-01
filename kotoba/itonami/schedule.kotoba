@@ -312,6 +312,11 @@
     (let [c (string-code-point-at s i)]
       (if (or (= c 44) (time-space? c)) i (recur s (inc i))))))
 
+(defn day-list-contains? [acc :string value :string] :bool
+  (if (= acc "") false
+    (>= (string-index-of (string-concat "," (string-concat acc ","))
+                         (string-concat "," (string-concat value ","))) 0)))
+
 (defn day-list [s :string i :i64 acc :string star :bool seen :bool] :string
   (let [start (skip-day-separators s i)]
     (if (>= start (string-length s))
@@ -323,6 +328,7 @@
               (= value "") ""
               (= value "*") (day-list s end acc true true)
               star (day-list s end acc star true)
+              (day-list-contains? acc value) (day-list s end acc star true)
               :else (day-list s end (if (= acc "") value (string-concat acc (string-concat "," value))) star true))))))
 
 (defn strip-trailing-at [s :string] :string
