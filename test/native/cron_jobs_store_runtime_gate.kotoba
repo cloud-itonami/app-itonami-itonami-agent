@@ -1,0 +1,15 @@
+(ns itonami.cron-jobs-store-runtime-gate
+  (:require [itonami.cron-jobs-store :as store])
+  (:export [main])
+  (:capabilities [:cli/args :fs/app-data]))
+
+(defn main [] :i64
+  (let [dir (typed-cap-call :cli/args :string :string "0")
+        mode (typed-cap-call :cli/args :string :string "1")
+        result (store/remove-job-at dir "remove-me" "2026-11-02T03:04:05.006Z")]
+    (if (= mode "refuse")
+      (if (result-ok?-of [:result :string :string] result) 1 0)
+      (if (and (result-ok?-of [:result :string :string] result)
+               (= (result-value-of [:result :string :string] result "")
+                  "{\"jobs\":[{\"id\":\"stay\",\"future\":1.25e+7}],\"unknown\":{\"n\":-0.0001},\"updated_at\":\"2026-11-02T03:04:05.006Z\"}"))
+        0 1))))

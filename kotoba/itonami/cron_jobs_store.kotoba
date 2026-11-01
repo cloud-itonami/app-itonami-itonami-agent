@@ -4,7 +4,7 @@
   (:require [hata.store-io :as fs]
             [itonami.cron-jobs-json :as jobs]
             [itonami.schedule :as schedule])
-  (:export [remove-job remove-job-json test-remove-job-json])
+  (:export [remove-job remove-job-at remove-job-json test-remove-job-json])
   (:capabilities [:clock/now :fs/app-data]))
 
 (defn- digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
@@ -49,33 +49,38 @@
         (if (not (fs/rename tmp path)) false
           (fs/sync dir))))))
 
+(defn remove-job-at [cron-dir :string id :string updated-at :string]
+  [:result :string :string]
+  (let [path (child-path cron-dir "jobs.json")
+        lock-path (child-path cron-dir ".itonami-jobs.lock")]
+    (if (or (= (string-length updated-at) 0)
+            (= (string-length path) 0) (= (string-length lock-path) 0))
+      (result-err-of [:result :string :string] "cron-store/invalid-input")
+      (if (not (fs/lock lock-path))
+        (result-err-of [:result :string :string] "cron-store/busy-or-lock-denied")
+        (let [exists (fs/exists? path)
+              before (if exists (fs/read path) "{\"jobs\":[]}")
+              changed (remove-job-json before id updated-at)
+              committed (if (result-ok?-of [:result :string :string] changed)
+                          (write-atomic cron-dir path
+                            (result-value-of [:result :string :string] changed ""))
+                          false)
+              unlocked (fs/unlock lock-path)]
+          (if (not unlocked)
+            (result-err-of [:result :string :string] "cron-store/unlock-failed")
+            (if (not (result-ok?-of [:result :string :string] changed))
+              (result-err-of [:result :string :string] (json-result-error changed))
+              (if (not committed)
+                (result-err-of [:result :string :string] "cron-store/durable-write-failed")
+                (result-ok-of [:result :string :string]
+                  (result-value-of [:result :string :string] changed ""))))))))))
+
 (defn remove-job [cron-dir :string id :string]
   [:result :string :string]
-  (let [updated-at (now-iso-utc)
-        path (child-path cron-dir "jobs.json")
-        lock-path (child-path cron-dir ".itonami-jobs.lock")]
+  (let [updated-at (now-iso-utc)]
     (if (= (string-length updated-at) 0)
       (result-err-of [:result :string :string] "cron-store/clock-unavailable")
-      (if (or (= (string-length path) 0) (= (string-length lock-path) 0))
-        (result-err-of [:result :string :string] "cron-store/invalid-directory")
-        (if (not (fs/lock lock-path))
-          (result-err-of [:result :string :string] "cron-store/busy-or-lock-denied")
-          (let [exists (fs/exists? path)
-                before (if exists (fs/read path) "{\"jobs\":[]}")
-                changed (remove-job-json before id updated-at)
-                committed (if (result-ok?-of [:result :string :string] changed)
-                            (write-atomic cron-dir path
-                              (result-value-of [:result :string :string] changed ""))
-                            false)
-                unlocked (fs/unlock lock-path)]
-            (if (not unlocked)
-              (result-err-of [:result :string :string] "cron-store/unlock-failed")
-              (if (not (result-ok?-of [:result :string :string] changed))
-                (result-err-of [:result :string :string] (json-result-error changed))
-                (if (not committed)
-                  (result-err-of [:result :string :string] "cron-store/durable-write-failed")
-                  (result-ok-of [:result :string :string]
-                    (result-value-of [:result :string :string] changed "")))))))))))
+      (remove-job-at cron-dir id updated-at))))
 
 (defn test-remove-job-json [] :bool
   (let [source "{\"jobs\":[{\"id\":\"a\",\"future\":1.25e+7}],\"updated_at\":\"2026-11-01T00:00:00Z\"}"
