@@ -1,0 +1,116 @@
+#!/bin/sh
+# Compile and execute the pure cron safety preamble with the pinned Amu
+# multi-module project CLI. This does not execute the scheduler or a turn.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
+EXPECTED_SOURCE_SHA256=3b415c6bed30af0c8a89a6165dc4319fe68dc13b91c603ff8e97c76907192922
+AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+CLI_SHA256=$(shasum -a 256 "$CLI" | cut -d ' ' -f 1)
+if [ "$CLI_SHA256" != "$EXPECTED_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected Amu CLI digest: $CLI_SHA256" >&2
+  exit 2
+fi
+SOURCE="$REPO_ROOT/kotoba/itonami/cron_hint.kotoba"
+SOURCE_SHA256=$(shasum -a 256 "$SOURCE" | cut -d ' ' -f 1)
+if [ "$SOURCE_SHA256" != "$EXPECTED_SOURCE_SHA256" ]; then
+  printf '%s\n' "unexpected cron-hint source digest: $SOURCE_SHA256" >&2
+  exit 2
+fi
+
+mkdir -p "$OUT_DIR/src"
+cp "$SOURCE" "$OUT_DIR/src/cron_hint.kotoba"
+cat > "$OUT_DIR/src/cron_hint_gate.kotoba" <<'EOF'
+(ns cron-hint-gate
+  (:require [itonami.cron-hint :as hint])
+  (:export [main]))
+(defn main [] :i64 (if (hint/test-cron-hint) 1 0))
+EOF
+
+SOURCE_PATH="$OUT_DIR/src/cron_hint.kotoba"
+GATE_PATH="$OUT_DIR/src/cron_hint_gate.kotoba"
+SOURCE_FILE_SHA=$(shasum -a 256 "$SOURCE_PATH" | cut -d ' ' -f 1)
+GATE_FILE_SHA=$(shasum -a 256 "$GATE_PATH" | cut -d ' ' -f 1)
+LOCK="$OUT_DIR/cron-hint.ksl"
+printf 'KSL2\nentry %s\nmodule cron-hint-gate %s\nmodule itonami.cron-hint %s\nfile %s %s\nfile %s %s\n' \
+  "$GATE_PATH" "$GATE_PATH" "$SOURCE_PATH" \
+  "$SOURCE_FILE_SHA" "$SOURCE_PATH" "$GATE_FILE_SHA" "$GATE_PATH" > "$LOCK"
+LOCK_SHA=$(shasum -a 256 "$LOCK" | cut -d ' ' -f 1)
+PROGRAM="$OUT_DIR/cron-hint-tests.macho"
+
+"$CLI" compile "$GATE_PATH" --source-lock "$LOCK" -o "$PROGRAM"
+codesign --verify --strict "$PROGRAM"
+DIRECT_RESULT=$("$PROGRAM")
+LOCKED_RESULT=$("$CLI" run "$GATE_PATH" --source-lock "$LOCK")
+ARTIFACT_RESULT=$("$CLI" run "$PROGRAM")
+for result in "$DIRECT_RESULT" "$LOCKED_RESULT" "$ARTIFACT_RESULT"; do
+  if [ "$result" != 1 ]; then
+    printf 'cron-hint result mismatch: expected 1, got %s\n' "$result" >&2
+    exit 1
+  fi
+done
+
+cp "$SOURCE_PATH" "$OUT_DIR/cron-hint-before-refusal.kotoba"
+printf '\n' >> "$SOURCE_PATH"
+if "$CLI" compile "$GATE_PATH" --source-lock "$LOCK" \
+  -o "$OUT_DIR/should-not-exist.macho" > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! rg -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+{
+  printf 'format: itonami.cron-hint-selfhost-gate.v1\n'
+  printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$CLI_SHA256"
+  printf 'cron_hint_source_sha256: %s\n' "$SOURCE_SHA256"
+  printf 'gate_source_sha256: %s\n' "$GATE_FILE_SHA"
+  printf 'source_lock_sha256: %s\n' "$LOCK_SHA"
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)"
+  printf 'direct_result: %s\n' "$DIRECT_RESULT"
+  printf 'locked_run_result: %s\n' "$LOCKED_RESULT"
+  printf 'artifact_run_result: %s\n' "$ARTIFACT_RESULT"
+  printf 'local_and_routed_lane_cases: PASS\n'
+  printf 'safety-control-markers: PASS\n'
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: bounded pure preamble gate; not scheduler, profile or turn qualification\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"

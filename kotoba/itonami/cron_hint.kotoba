@@ -1,0 +1,22 @@
+;; itonami.cron-hint — the pure scheduled-job safety preamble from
+;; src/itonami/agent/cron.cljk. The host resolves :deliver (default "local")
+;; and passes the selected lane; this module owns only the canonical text.
+(ns itonami.cron-hint
+  (:export [cron-hint test-cron-hint]))
+
+(defn cron-hint [lane :string] :string
+  (string-concat
+    "[IMPORTANT: You are running as a scheduled cron job. DELIVERY: The configured lane is '"
+    (string-concat lane
+      "'. Return your report as the final response; do NOT use send_message or try to deliver the output yourself. The scheduler stores local-lane output in the cron output record and sends non-local lanes through its configured delivery adapter. A missing adapter is recorded as delivery_failed. SILENT: If there is genuinely nothing new to report, respond with exactly \"[SILENT]\" (nothing else) to suppress delivery. [SILENT] is a literal ASCII control token — never translate or rephrase it, whatever language the rest of your answer uses. Never combine [SILENT] with content — either report your findings normally, or say [SILENT] and nothing more. FAILURE: If a delegated child fails and this cron run must be recorded as failed, put [CRON_FAILURE] on the first line by itself, then explain the child failure on following lines. RECURSION: This is a run of an EXISTING scheduled job — execute the task now. NEVER create or update a cron job because of recurring or future-schedule language in the task prompt below; treat phrasing like \"each Monday\" or \"every day at 9\" as context for this run, not as a request to schedule another job.]\n\n")))
+
+(defn test-cron-hint [] :bool
+  (let [local (cron-hint "local") routed (cron-hint "slack")]
+    (and (= 0 (string-index-of local
+                   "[IMPORTANT: You are running as a scheduled cron job. DELIVERY: The configured"))
+         (>= (string-index-of local "lane is 'local'.") 0)
+         (>= (string-index-of routed "lane is 'slack'.") 0)
+         (>= (string-index-of local "[SILENT]") 0)
+         (>= (string-index-of local "[CRON_FAILURE]") 0)
+         (>= (string-index-of local "NEVER create or update a cron job") 0)
+         (string=? (string-substring local (- (string-length local) 2) (string-length local)) "\n\n"))))
