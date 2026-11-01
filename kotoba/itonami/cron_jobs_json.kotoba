@@ -701,7 +701,8 @@
     (if (= (string-length schedule-json) 0) o
       (update-schedule-object o schedule-json display next-run-at))))
 
-(defn- update-job-array [b :vector-i64 array-at :i64 target :string patch-at :i64
+(defn- update-job-array [b :vector-i64 array-at :i64 target :string
+                         patch-b :vector-i64 patch-at :i64
                          schedule-json :string display :string next-run-at :string
                          i :i64 out :string count :i64 found :i64]
   [:record :itonami.cron-jobs-json/UpdateScan [[:array :string] [:found :i64]]]
@@ -714,10 +715,11 @@
                           (= (jcs/json-kind b name-at) 3)
                           (= (jcs/json-string b name-at) target))
           match (and (= found 0) (or id-match name-match))
-          value (if match (update-job-object (raw-value b job) b patch-at schedule-json display next-run-at)
+          value (if match (update-job-object (raw-value b job) patch-b patch-at
+                               schedule-json display next-run-at)
                   (raw-value b job))
           next-out (string-concat out (string-concat (if (> count 0) "," "") value))]
-      (recur b array-at target patch-at schedule-json display next-run-at (inc i)
+      (recur b array-at target patch-b patch-at schedule-json display next-run-at (inc i)
              next-out (inc count) (if match 1 found)))))
 
 (defn update-job-json [json :string id-or-name :string patch-json :string
@@ -761,8 +763,8 @@
                    (or (not (result-ok?-of [:result :string :string] made))
                        (and (string=? kind "cron") (or (< offset -840) (> offset 840))))))
         (result-err-of [:result :string :string] "cron-json/invalid-update")
-        (let [scan (update-job-array b array-at id-or-name patch-at schedule-json display
-                                     next-run-at 0 "[" 0 0)
+        (let [scan (update-job-array b array-at id-or-name patch patch-at
+                                     schedule-json display next-run-at 0 "[" 0 0)
               found (record-get [:ref :itonami.cron-jobs-json/UpdateScan] scan :found)]
           (if (= found 0)
             (result-err-of [:result :string :string] "cron-json/job-not-found")
