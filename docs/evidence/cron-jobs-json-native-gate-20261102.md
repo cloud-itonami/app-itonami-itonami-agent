@@ -85,5 +85,25 @@ before using this adapter for writes.
   `workspaces/codex/awai-60-amu-cap-clock/itonami-launcher-passed/build-receipt.json`.
 - Qualification boundary: the Amu compiler source is from unmerged experimental
   PR #1768 commit `06b3d1021e6d2d41a1c2c0d22004cb758ca9d631`. This qualifies
-  the candidate route on Linux x86_64 only; artifact packaging, Darwin clock
-  runtime, public Amu compiler/root adoption, and live behavior remain open.
+  the candidate route on Linux x86_64 only; Darwin clock runtime, public Amu
+  compiler/root adoption, and live behavior remain open.
+
+### 2026-11-02 colocated package candidate
+
+- Exact-head run `41340733907` at Itonami source
+  `e7f15c692d3f8a778d350badf9a9db7303fc7419` staged and executed a candidate
+  package containing the launcher, Amu KX64 runner, Kotoba payload, and
+  provenance manifest. The launcher used the adjacent default paths without
+  environment overrides.
+- Package manifest SHA-256:
+  `547270fb9ec27190fe206b79deb3f71590c75eefa84006ab90fc0e99bc60cb43`.
+  Launcher SHA-256:
+  `6eb0fefa70c2a5696798bd037078bff4d8a6f00767192ddf1b11fd64bc8df81f`.
+  Payload and runner digests match the preceding gate record.
+- Colocated positive/refusal passed, and the package with missing runtime
+  artifacts failed closed with exit 78. Malformed source JSON remained
+  unchanged and no temp file remained. The receipt includes all three checks.
+- Package files and receipt:
+  `workspaces/codex/awai-60-amu-cap-clock/itonami-package-passed/`.
+- This is package-candidate qualification. It was not installed or published;
+  Amu PR #1768 remains unmerged, and Darwin/live qualification stays open.
