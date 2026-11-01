@@ -44,6 +44,14 @@ clock capability for timestamps. Latest receipt:
 `/Users/junkawasaki/github/workspaces/codex/awai-60-cron-jobs-json-native-gate-20261102-r18/build-receipt.txt`
 (exact-head source revision `786839521d4d02983ffb865d986accfd7a50734b`).
 
+Direct runtime rerun on 2026-11-02: strict codesign verification passed and
+`cron-jobs-json-gate` exited 0. The executed artifact SHA-256 was
+`ceedd706e1f52c5e5443fa7bfc3cae8b75992d0704e5c84d8eecb38aab7fb44e`.
+Its entrypoint covers the JSON replace/remove/update-at positive predicates,
+malformed JSON / malformed replacement / missing-ID refusal predicates, and
+UTC timestamp positive/refusal predicates. The exact command result is recorded
+in the adjacent r18 build receipt.
+
 The store's filesystem calls are compiled but not executed by this gate. Full
 create/update CRUD, a filesystem runtime gate, and launcher dispatch remain
 unqualified. The reader uses the strict JCS profile: valid RFC 8259 documents
