@@ -190,6 +190,9 @@
     (if (> i b) m
       (recur (+ i step) (bit-or m (bit-of (if dow (- i (* 7 (quot i 7))) i)))))))
 
+(defn field-value? [v :i64 lo :i64 hi :i64] :bool
+  (and (>= v lo) (<= v hi)))
+
 ;; one comma-separated part: rng or rng/step
 (defn part-mask [part :string lo :i64 hi :i64 dow :bool] :i64
   (let [sl (string-index-of part "/")
@@ -201,9 +204,13 @@
           (> dash 0)
             (let [a (number-of (string-substring rng 0 dash))
                   b (number-of (string-substring rng (inc dash) (string-length rng)))]
-              (if (or (< a 0) (< b 0)) -1 (add-range 0 a b step dow)))
+              (if (and (field-value? a lo hi)
+                       (field-value? b lo hi)
+                       (<= a b))
+                (add-range 0 a b step dow) -1))
           :else (let [v (number-of rng)]
-                  (if (< v 0) -1 (add-range 0 v (if (< sl 0) v hi) step dow))))))
+                  (if (field-value? v lo hi)
+                    (add-range 0 v (if (< sl 0) v hi) step dow) -1)))))
 
 (defn field-parts [s :string lo :i64 hi :i64 dow :bool acc :i64] :i64
   (let [c (string-index-of s ",")
