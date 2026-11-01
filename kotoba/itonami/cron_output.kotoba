@@ -1,0 +1,39 @@
+;; Pure output-record formatting from src/itonami/agent/cron.cljk.
+;; The host supplies display-ready run time/schedule and the blankness facts
+;; computed at its string boundary. This module performs no file or clock I/O.
+(ns itonami.cron-output
+  (:export [cron-output-doc-form]))
+
+(defn- flag? [flags :i64 bit :i64] :bool
+  (not (= 0 (bit-and flags bit))))
+
+(defn cron-output-doc-form [name :string job-id :string run-time :string
+                            schedule :string status-line :string
+                            flags :i64 prompt :string response :string] :string
+  (string-concat
+    "# Cron Job: "
+    (string-concat name
+      (string-concat
+        (if (flag? flags 4) " (FAILED)" "")
+        (string-concat
+          "\n\n**Job ID:** "
+          (string-concat job-id
+            (string-concat
+              "\n**Run Time:** "
+              (string-concat run-time
+                (string-concat
+                  "\n**Schedule:** "
+                  (string-concat schedule
+                    (string-concat
+                      "\n"
+                      (string-concat
+                        (if (flag? flags 1)
+                          (string-concat status-line "\n") "")
+                        (string-concat
+                          "**Engine:** itonami-agent\n\n## Prompt\n\n"
+                          (string-concat prompt
+                            (string-concat
+                              "\n\n## Response\n\n"
+                              (string-concat
+                                (if (flag? flags 2) response "(No response generated)")
+                                "\n"))))))))))))))))
