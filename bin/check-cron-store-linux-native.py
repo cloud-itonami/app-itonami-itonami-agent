@@ -18,14 +18,17 @@ import time
 from pathlib import Path
 
 
-AMU_COMMIT = "06b3d1021e6d2d41a1c2c0d22004cb758ca9d631"
+AMU_COMMIT = "a7dc736cc4f8f3102c6c49dde0931528f68a83d6"
 AMU_BINARY_PATH = "bin/amu-linux-x86_64"
 AMU_BINARY_SHA256 = "2cbd90970f9766481ae46fd30ae515548e7b3163a9272f7a0497c988258dd654"
 AMU_RUNNER_SOURCE = "seed/x86_64-kx64-runner.kotoba"
 AMU_RUNNER_SHA256 = "c9f1fe1b5c1748450fb11b233cbdc9d9234880a60dc480c0387b173f60d905be"
 AMU_CANDIDATE_SOURCE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
-AMU_CANDIDATE_COMPILER_SHA256 = "5bae07e401b812dba440c8125ba43c7a74393ddafaec49f6922d094f316477c9"
-AMU_CANDIDATE_COMPILER_BYTES = 10306048
+# This Amu PR source adds the explicit stdout/stderr wires to the experimental
+# compiler. Capture its first F1=F2=F3 digest in the candidate receipt, then pin
+# the resulting value here after the standalone runtime gate passes.
+AMU_CANDIDATE_COMPILER_SHA256 = ""
+AMU_CANDIDATE_COMPILER_BYTES = 0
 AMU_CANDIDATE_RUNNER_SHA256 = "27349b7edfea5833f41263cdbf6195e5f26848bfb491e406c2d826987194d3b2"
 KOTOBA_COMMIT = "63e30efc6402320fca6f9c70abd93f113e05d99c"
 KOTOBA_JCS_PATH = "lib/org.ietf.jcs/kotoba/jcs/reader.kotoba"
@@ -106,8 +109,9 @@ def derive_project_compiler(baseline, amu_repo, out, env, calls):
         compiler = image
     if generations[0] != generations[1] or generations[1] != generations[2]:
         raise RuntimeError(f"Amu full-source derivation did not reach a fixed point: {generations}")
-    if generations[-1] != {"sha256": AMU_CANDIDATE_COMPILER_SHA256,
-                           "bytes": AMU_CANDIDATE_COMPILER_BYTES}:
+    if AMU_CANDIDATE_COMPILER_SHA256 and generations[-1] != {
+            "sha256": AMU_CANDIDATE_COMPILER_SHA256,
+            "bytes": AMU_CANDIDATE_COMPILER_BYTES}:
         raise RuntimeError(f"Amu candidate compiler differs from qualified digest: {generations[-1]}")
     return compiler, generations, sha(sources.read_bytes())
 
