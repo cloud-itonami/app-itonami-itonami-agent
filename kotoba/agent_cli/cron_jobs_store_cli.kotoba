@@ -1,0 +1,16 @@
+(ns agent-cli-cron-jobs-store
+  "Remove a cron job from an Itonami app-data directory with the Kotoba clock
+  and scoped Hata store adapter. The native launcher supplies the directory and
+  job ID as argv 0 and argv 1."
+  (:require [itonami.cron-jobs-store :as store])
+  (:export [main])
+  (:capabilities #{:cli/args :clock/now :fs/app-data}))
+
+(defn- arg [index :i64] :string
+  (typed-cap-call :cli/args :string :string (string-from-i64 index)))
+
+(defn main [] :i64
+  (let [directory (arg 0)
+        job-id (arg 1)
+        result (store/remove-job directory job-id)]
+    (if (result-ok?-of [:result :string :string] result) 0 1)))

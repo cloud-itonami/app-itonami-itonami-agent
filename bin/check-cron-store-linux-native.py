@@ -113,15 +113,15 @@ def derive_project_compiler(baseline, amu_repo, out, env, calls):
 
 def locked_project(out, kotoba_repo):
     sources = out / "src"
-    for directory in ("gate", "hata", "itonami", "jcs"):
+    for directory in ("agent_cli", "hata", "itonami", "jcs"):
         (sources / directory).mkdir(parents=True, exist_ok=True)
-    gate = sources / "gate/cron_jobs_store_clock_gate.kotoba"
+    cli = sources / "agent_cli/cron_jobs_store_cli.kotoba"
     store_io = sources / "hata/store_io.kotoba"
     jobs = sources / "itonami/cron_jobs_json.kotoba"
     store = sources / "itonami/cron_jobs_store.kotoba"
     schedule = sources / "itonami/schedule.kotoba"
     jcs = sources / "jcs/reader.kotoba"
-    shutil.copy2(ROOT / "test/native/cron_jobs_store_clock_gate.kotoba", gate)
+    shutil.copy2(ROOT / "kotoba/agent_cli/cron_jobs_store_cli.kotoba", cli)
     shutil.copy2(ROOT / "kotoba/itonami/cron_jobs_json.kotoba", jobs)
     shutil.copy2(ROOT / "kotoba/itonami/cron_jobs_store.kotoba", store)
     shutil.copy2(ROOT / "kotoba/itonami/schedule.kotoba", schedule)
@@ -132,21 +132,21 @@ def locked_project(out, kotoba_repo):
         ("hata.store-io", store_io),
         ("itonami.cron-jobs-json", jobs),
         ("itonami.cron-jobs-store", store),
-        ("itonami.cron-jobs-store-clock-gate", gate),
+        ("agent-cli-cron-jobs-store", cli),
         ("itonami.schedule", schedule),
         ("jcs.reader", jcs),
     ]
     modules.sort(key=lambda row: row[0])
-    files = sorted([gate, store_io, jobs, store, schedule, jcs], key=lambda p: str(p))
-    lock_lines = ["KSL2", f"entry {gate}"]
+    files = sorted([cli, store_io, jobs, store, schedule, jcs], key=lambda p: str(p))
+    lock_lines = ["KSL2", f"entry {cli}"]
     lock_lines.extend(f"module {name} {path}" for name, path in modules)
     lock_lines.extend(f"file {sha(path.read_bytes())} {path}" for path in files)
     lock = out / "cron-store.ksl"
     lock.write_text("\n".join(lock_lines) + "\n", encoding="ascii")
-    return gate, lock, {str(path): sha(path.read_bytes()) for path in files}
+    return cli, lock, {str(path): sha(path.read_bytes()) for path in files}
 
 
-def execute(name, runner, payload, scope, mode, out, calls):
+def execute(name, runner, payload, scope, job_id, expected_result, out, calls):
     env = {
         "PATH": "/nonexistent",
         "KEXE_ALLOW": "7,35,38",
@@ -154,9 +154,9 @@ def execute(name, runner, payload, scope, mode, out, calls):
         "KEXE_STACK_BYTES": "8388608",
         "KEXE_STRUCTURED_REPORT": "1",
     }
-    argv = [runner, payload, "0", "0", "x86_64", "7,35,38", "--", str(scope / "d"), mode]
+    argv = [runner, payload, "0", "0", "x86_64", "7,35,38", "--", str(scope / "d"), job_id]
     stdout = run(name, argv, out, env, calls)
-    if not re.search(rb":result 0\b", stdout):
+    if not re.search(rb":result " + str(expected_result).encode() + rb"\b", stdout):
         state = {}
         for path in sorted(scope.rglob("*")):
             if path.is_file():
@@ -165,6 +165,29 @@ def execute(name, runner, payload, scope, mode, out, calls):
                            f"stdout={stdout!r}; stderr={(out / (name + '.stderr')).read_bytes()!r}; "
                            f"scope={state!r}")
     return stdout
+
+
+def execute_launcher(name, runner, payload, scope, expected_exit, out, calls):
+    env = dict(os.environ, ITONAMI_CRON_JOBS_RUNNER=str(runner),
+               ITONAMI_CRON_JOBS_PAYLOAD=str(payload))
+    argv = [ROOT / "bin/itonami-agent", "cron", "jobs", "remove",
+            scope / "d", "remove-me"]
+    started = time.monotonic()
+    result = subprocess.run(list(map(str, argv)), cwd=ROOT, env=env,
+                            capture_output=True, timeout=120)
+    calls.append({"name": name, "exit": result.returncode,
+                  "seconds": round(time.monotonic() - started, 3),
+                  "stdout_sha256": sha(result.stdout), "stderr_sha256": sha(result.stderr)})
+    write(out / f"{name}.stdout", result.stdout)
+    write(out / f"{name}.stderr", result.stderr)
+    if result.returncode != expected_exit:
+        raise RuntimeError(f"{name} launcher exit {result.returncode}, expected {expected_exit}: "
+                           f"stdout={result.stdout!r}; stderr={result.stderr!r}")
+    if expected_exit == 0 and not re.search(rb":status :ok :result 0\b", result.stdout):
+        raise RuntimeError(f"{name} launcher did not report native success: {result.stdout!r}")
+    if expected_exit == 1 and not re.search(rb":status :ok :result 1\b", result.stdout):
+        raise RuntimeError(f"{name} launcher did not report native refusal: {result.stdout!r}")
+    return result.stdout
 
 
 def main():
@@ -201,10 +224,10 @@ def main():
         amu_binary, amu_repo, out, compile_env, calls)
     runner_source = out / "x86_64-kx64-runner.kotoba"
     write(runner_source, runner_source_bytes)
-    gate, lock, source_digests = locked_project(out, kotoba_repo)
+    cli, lock, source_digests = locked_project(out, kotoba_repo)
 
     artifact = out / "cron-store.kx64"
-    run("compile-project", [candidate_compiler, "compile", gate, "--target", "x86_64-linux",
+    run("compile-project", [candidate_compiler, "compile", cli, "--target", "x86_64-linux",
         "--output", artifact, "--format", "kx64-v1", "--source-lock", lock,
         "--source-lock-sha256", sha(lock.read_bytes())], out, compile_env, calls)
     head, separator, payload_bytes = artifact.read_bytes().partition(b"\n\n")
@@ -227,7 +250,7 @@ def main():
         '{"jobs":[{"id":"remove-me","keep":1},{"id":"stay","future":1.25e+7}],'
         '"unknown":{"n":-0.0001},"updated_at":"old"}', encoding="ascii")
     positive_stdout = execute("runtime-clock-fs-positive", runner, payload, positive,
-                              "positive", out, calls)
+                              "remove-me", 0, out, calls)
     persisted = (positive / "d/jobs.json").read_text(encoding="ascii")
     prefix = ('{"jobs":[{"id":"stay","future":1.25e+7}],'
               '"unknown":{"n":-0.0001},"updated_at":"')
@@ -245,11 +268,38 @@ def main():
     malformed = '{"jobs":'
     (refusal / "d/jobs.json").write_text(malformed, encoding="ascii")
     refusal_stdout = execute("runtime-clock-fs-refusal", runner, payload, refusal,
-                             "refuse", out, calls)
+                             "remove-me", 1, out, calls)
     if (refusal / "d/jobs.json").read_text(encoding="ascii") != malformed:
         raise RuntimeError("refusal modified malformed source JSON")
     if (refusal / "d/.jobs.json.tmp").exists():
         raise RuntimeError("refusal left a temporary file")
+
+    launcher_positive = out / "launcher-positive-scope"
+    (launcher_positive / "d").mkdir(parents=True)
+    (launcher_positive / "d/jobs.json").write_text(
+        '{"jobs":[{"id":"remove-me","keep":1},{"id":"stay","future":1.25e+7}],'
+        '"unknown":{"n":-0.0001},"updated_at":"old"}', encoding="ascii")
+    launcher_positive_stdout = execute_launcher("launcher-clock-fs-positive", runner, payload,
+                                                launcher_positive, 0, out, calls)
+    launcher_persisted = (launcher_positive / "d/jobs.json").read_text(encoding="ascii")
+    if not launcher_persisted.startswith(prefix) or not launcher_persisted.endswith('"}'):
+        raise RuntimeError(f"launcher positive store output mismatch: {launcher_persisted!r}")
+    launcher_timestamp = launcher_persisted[len(prefix):-2]
+    parsed = dt.datetime.fromisoformat(launcher_timestamp.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or abs(parsed.timestamp() - time.time()) > 10:
+        raise RuntimeError(f"launcher timestamp is outside 10 seconds of host UTC: {launcher_timestamp}")
+    if (launcher_positive / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("launcher positive store left a temporary file")
+
+    launcher_refusal = out / "launcher-refusal-scope"
+    (launcher_refusal / "d").mkdir(parents=True)
+    (launcher_refusal / "d/jobs.json").write_text(malformed, encoding="ascii")
+    execute_launcher("launcher-clock-fs-refusal", runner, payload, launcher_refusal,
+                     1, out, calls)
+    if (launcher_refusal / "d/jobs.json").read_text(encoding="ascii") != malformed:
+        raise RuntimeError("launcher refusal modified malformed source JSON")
+    if (launcher_refusal / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("launcher refusal left a temporary file")
 
     source_revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).decode().strip()
     receipt = {
@@ -273,11 +323,14 @@ def main():
         "wall_timestamp": timestamp,
         "positive_runtime": "PASS",
         "refusal_runtime": "PASS",
+        "launcher_positive_runtime": "PASS",
+        "launcher_refusal_runtime": "PASS",
         "codesign": "not-applicable: Linux static ELF",
         "host_oracle_clock_check": "PASS within 10 seconds",
         "processes": calls,
-        "stdout_sha256": {"positive": sha(positive_stdout), "refusal": sha(refusal_stdout)},
-        "scope": "standalone Linux native clock plus scoped FS35 cron-store route; launcher and macOS clock qualification remain open",
+        "stdout_sha256": {"positive": sha(positive_stdout), "refusal": sha(refusal_stdout),
+                          "launcher_positive": sha(launcher_positive_stdout)},
+        "scope": "standalone Linux x86_64 native cron jobs remove CLI with clock plus scoped FS35; launcher and macOS clock qualification remain open",
     }
     receipt_path = out / "build-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")

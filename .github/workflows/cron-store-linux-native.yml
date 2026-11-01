@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "bin/check-cron-store-linux-native.py"
+      - "bin/itonami-agent"
+      - "kotoba/agent_cli/cron_jobs_store_cli.kotoba"
       - "kotoba/itonami/cron_jobs_json.kotoba"
       - "kotoba/itonami/cron_jobs_store.kotoba"
       - "kotoba/itonami/schedule.kotoba"
