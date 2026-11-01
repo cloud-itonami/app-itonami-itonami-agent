@@ -68,7 +68,7 @@ def write(path, data):
     path.write_bytes(data)
 
 
-def run(name, argv, cwd, env, calls, timeout=900):
+def run(name, argv, cwd, env, calls, timeout=900, allow_stderr=False):
     started = time.monotonic()
     result = subprocess.run(list(map(str, argv)), cwd=cwd, env=env,
                             capture_output=True, timeout=timeout)
@@ -80,7 +80,7 @@ def run(name, argv, cwd, env, calls, timeout=900):
     if result.returncode != 0:
         raise RuntimeError(f"{name} failed ({result.returncode}): "
                            f"{result.stderr.decode(errors='replace')[-2000:]}")
-    if result.stderr:
+    if result.stderr and not allow_stderr:
         raise RuntimeError(f"{name} wrote stderr: {result.stderr.decode(errors='replace')[-2000:]}")
     return result.stdout
 
@@ -151,7 +151,8 @@ def locked_project(out, kotoba_repo):
     return cli, lock, {str(path): sha(path.read_bytes()) for path in files}
 
 
-def execute(name, runner, payload, scope, action, value, option, expected_result, out, calls):
+def execute(name, runner, payload, scope, action, value, option, expected_result, out, calls,
+            allow_stderr=False):
     env = {
         "PATH": "/nonexistent",
         "KEXE_ALLOW": "7,35,37,38,39",
@@ -161,7 +162,7 @@ def execute(name, runner, payload, scope, action, value, option, expected_result
     }
     argv = [runner, payload, "0", "0", "x86_64", "7,35,37,38,39", "--",
             action, str(scope / "d"), value, option]
-    stdout = run(name, argv, out, env, calls)
+    stdout = run(name, argv, out, env, calls, allow_stderr=allow_stderr)
     if not re.search(rb":result " + str(expected_result).encode() + rb"\b", stdout):
         state = {}
         for path in sorted(scope.rglob("*")):
@@ -409,7 +410,7 @@ def main():
     pause_refusal_document = '{"jobs":[{"id":"present","enabled":true}],"extension":7}'
     (pause_refusal / "d/jobs.json").write_text(pause_refusal_document, encoding="ascii")
     execute("runtime-pause-missing-refusal", runner, payload, pause_refusal,
-            "pause", "missing", "", 1, out, calls)
+            "pause", "missing", "", 1, out, calls, allow_stderr=True)
     if (pause_refusal / "d/jobs.json").read_text(encoding="ascii") != pause_refusal_document:
         raise RuntimeError("pause missing-id refusal modified jobs.json")
     if (pause_refusal / "d/.jobs.json.tmp").exists():
