@@ -150,12 +150,12 @@ def locked_project(out, kotoba_repo):
 def execute(name, runner, payload, scope, action, value, option, expected_result, out, calls):
     env = {
         "PATH": "/nonexistent",
-        "KEXE_ALLOW": "3,4,7,35,38",
+        "KEXE_ALLOW": "7,35,37,38,39",
         "KEXE_CAP_RESOURCES_35": str(scope),
         "KEXE_STACK_BYTES": "8388608",
         "KEXE_STRUCTURED_REPORT": "1",
     }
-    argv = [runner, payload, "0", "0", "x86_64", "3,4,7,35,38", "--",
+    argv = [runner, payload, "0", "0", "x86_64", "7,35,37,38,39", "--",
             action, str(scope / "d"), value, option]
     stdout = run(name, argv, out, env, calls)
     if not re.search(rb":result " + str(expected_result).encode() + rb"\b", stdout):
