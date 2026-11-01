@@ -147,6 +147,32 @@ if [ "$ARTIFACT_CLI_RESULT" != "$EXPECTED_AMU_CLI_RESULT" ]; then
   exit 1
 fi
 
+# Invalid schedule handling is a guest result plus an explicit diagnostic.
+# The standalone host runner itself exits zero after returning the guest's
+# i64 result, so assert the marker and diagnostic rather than conflating it
+# with the host process status.
+REFUSAL_RESULT=$("$CRON_CLI_PROGRAM" 'not-a-schedule' 2> "$OUT_DIR/schedule-cli-refusal.stderr")
+if [ "$REFUSAL_RESULT" != 2 ]; then
+  printf 'schedule CLI refusal marker mismatch: expected 2, got %s\n' "$REFUSAL_RESULT" >&2
+  exit 1
+fi
+if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/schedule-cli-refusal.stderr"; then
+  cat "$OUT_DIR/schedule-cli-refusal.stderr" >&2
+  printf '%s\n' "schedule CLI refusal did not emit its named diagnostic" >&2
+  exit 1
+fi
+AMU_REFUSAL_RESULT=$("$CLI" run "$CRON_CLI_PROGRAM" -- 'not-a-schedule' \
+  2> "$OUT_DIR/amu-run-schedule-cli-refusal.stderr")
+if [ "$AMU_REFUSAL_RESULT" != 2 ]; then
+  printf 'amu run schedule CLI refusal marker mismatch: expected 2, got %s\n' "$AMU_REFUSAL_RESULT" >&2
+  exit 1
+fi
+if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/amu-run-schedule-cli-refusal.stderr"; then
+  cat "$OUT_DIR/amu-run-schedule-cli-refusal.stderr" >&2
+  printf '%s\n' "amu run schedule CLI refusal did not emit its named diagnostic" >&2
+  exit 1
+fi
+
 {
   printf 'format: itonami.cron-schedule-selfhost-gate.v1\n'
   printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
@@ -164,6 +190,10 @@ fi
   printf 'schedule_cli_direct_result: %s\n' "$DIRECT_CLI_RESULT"
   printf 'schedule_cli_locked_run_result: %s\n' "$LOCKED_CLI_RESULT"
   printf 'schedule_cli_artifact_run_result: %s\n' "$ARTIFACT_CLI_RESULT"
+  printf 'schedule_cli_direct_refusal_result: %s\n' "$REFUSAL_RESULT"
+  printf 'schedule_cli_direct_refusal_diagnostic: PASS\n'
+  printf 'schedule_cli_amu_run_refusal_result: %s\n' "$AMU_REFUSAL_RESULT"
+  printf 'schedule_cli_amu_run_refusal_diagnostic: PASS\n'
   printf 'changed_source_refusal: PASS\n'
   printf 'qualification: bounded multi-module native selfhost schedule gate; not product-launcher qualification\n'
 } > "$OUT_DIR/build-receipt.txt"

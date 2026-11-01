@@ -1,6 +1,6 @@
 #!/bin/sh
-# Reproduce the AWAI-60 cron schedule CLI compile from its immutable source
-# revision. Output remains a diagnostic artifact; this does not install it.
+# Reproduce the AWAI-60 cron schedule CLI compile from the current, pinned
+# Kotoba sources. Output remains a diagnostic artifact; this does not install it.
 
 set -eu
 
@@ -11,8 +11,9 @@ fi
 
 AMU_ROOT=$1
 OUT_DIR=$2
-SOURCE_REVISION=5745666a15ae2ead1152d1d008467da1959c2656
-EXPECTED_AMU_SHA256=dd71f3940267f55c3864b68010c557859bfa122caad8f579b550b5f1d2988240
+EXPECTED_AMU_SHA256=0df05effcc0624e94403e8aaf1780feab564de1b44b322680f5535582adb6c04
+EXPECTED_CLI_SHA256=92d8a25d028e63b8486022eb91984c3e7097278537f3b2e9cef277290b630dd4
+EXPECTED_SCHEDULE_SHA256=720b216c867eec90e33249d47ded08c8fcc685c3ab216e8a1c3a438389c174e5
 
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
 GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
@@ -41,16 +42,22 @@ if [ "$AMU_SHA256" != "$EXPECTED_AMU_SHA256" ]; then
   exit 2
 fi
 
-git -C "$REPO_ROOT" cat-file -e "$SOURCE_REVISION:kotoba/agent_cli/cron_schedule_cli.kotoba"
-git -C "$REPO_ROOT" cat-file -e "$SOURCE_REVISION:kotoba/itonami/schedule.kotoba"
 mkdir -p "$OUT_DIR/src/agent_cli" "$OUT_DIR/src/itonami"
-git -C "$REPO_ROOT" show "$SOURCE_REVISION:kotoba/agent_cli/cron_schedule_cli.kotoba" \
-  > "$OUT_DIR/src/agent_cli/cron_schedule_cli.kotoba"
-git -C "$REPO_ROOT" show "$SOURCE_REVISION:kotoba/itonami/schedule.kotoba" \
-  > "$OUT_DIR/src/itonami/schedule.kotoba"
+cp "$REPO_ROOT/kotoba/agent_cli/cron_schedule_cli.kotoba" \
+  "$OUT_DIR/src/agent_cli/cron_schedule_cli.kotoba"
+cp "$REPO_ROOT/kotoba/itonami/schedule.kotoba" \
+  "$OUT_DIR/src/itonami/schedule.kotoba"
 
 CLI_SHA256=$(shasum -a 256 "$OUT_DIR/src/agent_cli/cron_schedule_cli.kotoba" | cut -d ' ' -f 1)
 SCHEDULE_SHA256=$(shasum -a 256 "$OUT_DIR/src/itonami/schedule.kotoba" | cut -d ' ' -f 1)
+if [ "$CLI_SHA256" != "$EXPECTED_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected cron CLI source digest: $CLI_SHA256" >&2
+  exit 2
+fi
+if [ "$SCHEDULE_SHA256" != "$EXPECTED_SCHEDULE_SHA256" ]; then
+  printf '%s\n' "unexpected schedule source digest: $SCHEDULE_SHA256" >&2
+  exit 2
+fi
 printf 'KSL2\nentry /src/agent_cli/cron_schedule_cli.kotoba\nmodule agent-cli-cron-schedule /src/agent_cli/cron_schedule_cli.kotoba\nmodule itonami.schedule /src/itonami/schedule.kotoba\nfile %s /src/agent_cli/cron_schedule_cli.kotoba\nfile %s /src/itonami/schedule.kotoba\n' \
   "$CLI_SHA256" "$SCHEDULE_SHA256" > "$OUT_DIR/schedule.ksl"
 LOCK_SHA256=$(shasum -a 256 "$OUT_DIR/schedule.ksl" | cut -d ' ' -f 1)
@@ -60,18 +67,19 @@ COMPILE_RESULT=$("$AMU_ROOT" compile /src/agent_cli/cron_schedule_cli.kotoba \
   --target aarch64-macos --output cron-schedule.kseed \
   --source-lock schedule.ksl --source-lock-sha256 "$LOCK_SHA256" 3< .)
 EXTRACT_RESULT=$("$AMU_ROOT" extract-native cron-schedule.kseed \
-  --symbol cron-schedule-cli --output cron-schedule.raw 3< .)
+  --symbol cron-schedule-cli --output cron-schedule-cli.raw 3< .)
 KSEED_SHA256=$(shasum -a 256 cron-schedule.kseed | cut -d ' ' -f 1)
-RAW_SHA256=$(shasum -a 256 cron-schedule.raw | cut -d ' ' -f 1)
+RAW_SHA256=$(shasum -a 256 cron-schedule-cli.raw | cut -d ' ' -f 1)
 
 {
   printf 'format: itonami.cron-schedule-cli.diagnostic-build.v1\n'
-  printf 'source_revision: %s\n' "$SOURCE_REVISION"
+  printf 'source_revision: %s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
   printf 'amu_full_root_sha256: %s\n' "$AMU_SHA256"
   printf 'ksl2_sha256: %s\n' "$LOCK_SHA256"
   printf 'cli_source_sha256: %s\n' "$CLI_SHA256"
   printf 'schedule_source_sha256: %s\n' "$SCHEDULE_SHA256"
   printf 'kseed_sha256: %s\n' "$KSEED_SHA256"
+  printf 'raw_guest: %s\n' "cron-schedule-cli.raw"
   printf 'raw_sha256: %s\n' "$RAW_SHA256"
   printf 'compile_result: %s\n' "$COMPILE_RESULT"
   printf 'extract_result: %s\n' "$EXTRACT_RESULT"
