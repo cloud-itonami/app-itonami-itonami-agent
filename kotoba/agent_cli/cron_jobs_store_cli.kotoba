@@ -37,7 +37,7 @@
   (let [result (store/resume-job directory job-id offset)]
     (if (result-ok?-of [:result :string :string] result)
       0
-      (fail (result-error-of [:result :string :string] result "cron-store/resume-failed"))))
+      (fail (result-error-of [:result :string :string] result "cron-store/resume-failed")))))
 
 (defn main [] :i64
   (let [action (arg 0)
