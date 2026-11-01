@@ -39,6 +39,7 @@ Selfhost routes:
   cron schedule <expression>
   cron next-run <expression> <epoch-ms> <utc-offset-minutes>
   cron jobs list <absolute-app-data-dir> [false]  (Linux x86_64; false = active only)
+  cron jobs pause <absolute-app-data-dir> <job-id> [reason]  (Linux x86_64)
   cron jobs remove <absolute-app-data-dir> <job-id>  (Linux x86_64)
   cron notepad <base> <verb> [key] [value]
   kanban <base> <verb> [arguments]
@@ -119,6 +120,9 @@ case "$1" in
       jobs)
         if [ "$3" = list ] && { [ "$#" -eq 4 ] || [ "$#" -eq 5 ]; }; then
           run_cron_jobs_linux list "$4" "${5:-}" ""
+        fi
+        if [ "$3" = pause ] && { [ "$#" -eq 5 ] || [ "$#" -eq 6 ]; }; then
+          run_cron_jobs_linux pause "$4" "${5:-}" "${6:-}"
         fi
         if [ "$3" = remove ] && [ "$#" -eq 5 ]; then
           run_cron_jobs_linux remove "$4" "$5" ""

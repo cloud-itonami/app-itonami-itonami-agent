@@ -379,6 +379,64 @@ def main():
     if (list_scope / "d/jobs.json").read_text(encoding="ascii") != jobs_document:
         raise RuntimeError("read-only jobs list modified jobs.json")
 
+    pause_scope = out / "pause-scope"
+    (pause_scope / "d").mkdir(parents=True)
+    pause_document = ('{"jobs":[{"id":"pause-me","enabled":true,"state":"scheduled",'
+                      '"paused_at":null,"future":1.25e+7},{"id":"stay","future":-0.0001}],'
+                      '"extension":{"x":true},"updated_at":"old"}')
+    (pause_scope / "d/jobs.json").write_text(pause_document, encoding="ascii")
+    pause_stdout = execute("runtime-pause-positive", runner, payload, pause_scope,
+                           "pause", "pause-me", "operator request", 0, out, calls)
+    paused_document = (pause_scope / "d/jobs.json").read_text(encoding="ascii")
+    if ('"id":"pause-me","enabled":false,"state":"paused","paused_at":"' not in paused_document
+            or '"paused_reason":"operator request"' not in paused_document
+            or '"future":1.25e+7' not in paused_document
+            or '"id":"stay","future":-0.0001' not in paused_document
+            or '"extension":{"x":true}' not in paused_document):
+        raise RuntimeError(f"pause output did not preserve/update expected fields: {paused_document!r}")
+    pause_at = re.search(r'"paused_at":"([^"]+)"', paused_document)
+    pause_updated = re.search(r'"updated_at":"([^"]+)"', paused_document)
+    if not pause_at or not pause_updated or pause_at.group(1) != pause_updated.group(1):
+        raise RuntimeError(f"pause metadata timestamps do not match: {paused_document!r}")
+    parsed = dt.datetime.fromisoformat(pause_at.group(1).replace("Z", "+00:00"))
+    if parsed.tzinfo is None or abs(parsed.timestamp() - time.time()) > 10:
+        raise RuntimeError(f"pause timestamp is outside 10 seconds of host UTC: {pause_at.group(1)}")
+    if (pause_scope / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("pause positive store left a temporary file")
+
+    pause_refusal = out / "pause-refusal-scope"
+    (pause_refusal / "d").mkdir(parents=True)
+    pause_refusal_document = '{"jobs":[{"id":"present","enabled":true}],"extension":7}'
+    (pause_refusal / "d/jobs.json").write_text(pause_refusal_document, encoding="ascii")
+    execute("runtime-pause-missing-refusal", runner, payload, pause_refusal,
+            "pause", "missing", "", 1, out, calls)
+    if (pause_refusal / "d/jobs.json").read_text(encoding="ascii") != pause_refusal_document:
+        raise RuntimeError("pause missing-id refusal modified jobs.json")
+    if (pause_refusal / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("pause refusal left a temporary file")
+
+    launcher_pause = out / "launcher-pause-scope"
+    (launcher_pause / "d").mkdir(parents=True)
+    (launcher_pause / "d/jobs.json").write_text(pause_document, encoding="ascii")
+    launcher_pause_stdout = execute_launcher("launcher-pause-positive", package_launcher,
+                                             launcher_pause, "pause", "pause-me",
+                                             "operator request", 0, out, calls)
+    launcher_paused = (launcher_pause / "d/jobs.json").read_text(encoding="ascii")
+    if ('"enabled":false,"state":"paused"' not in launcher_paused
+            or '"paused_reason":"operator request"' not in launcher_paused
+            or '"extension":{"x":true}' not in launcher_paused):
+        raise RuntimeError(f"launcher pause output mismatch: {launcher_paused!r}")
+    if (launcher_pause / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("launcher pause left a temporary file")
+
+    launcher_pause_refusal = out / "launcher-pause-refusal-scope"
+    (launcher_pause_refusal / "d").mkdir(parents=True)
+    (launcher_pause_refusal / "d/jobs.json").write_text(pause_refusal_document, encoding="ascii")
+    execute_launcher("launcher-pause-missing-refusal", package_launcher,
+                     launcher_pause_refusal, "pause", "missing", "", 1, out, calls)
+    if (launcher_pause_refusal / "d/jobs.json").read_text(encoding="ascii") != pause_refusal_document:
+        raise RuntimeError("launcher pause refusal modified jobs.json")
+
     launcher_list = out / "launcher-list-scope"
     (launcher_list / "d").mkdir(parents=True)
     (launcher_list / "d/jobs.json").write_text(jobs_document, encoding="ascii")
@@ -425,6 +483,10 @@ def main():
         "list_active_only_runtime": "PASS",
         "list_active_only_launcher": "PASS",
         "list_invalid_job_refusal": "PASS",
+        "pause_runtime": "PASS",
+        "pause_missing_id_refusal_runtime": "PASS",
+        "pause_launcher_runtime": "PASS",
+        "pause_missing_id_refusal_launcher": "PASS",
         "candidate_package": {
             "manifest": "package/candidate-package.json",
             "manifest_sha256": sha(manifest_path.read_bytes()),
@@ -436,8 +498,9 @@ def main():
         "host_oracle_clock_check": "PASS within 10 seconds",
         "processes": calls,
         "stdout_sha256": {"positive": sha(positive_stdout), "refusal": sha(refusal_stdout),
-                          "launcher_positive": sha(launcher_positive_stdout)},
-        "scope": "standalone Linux x86_64 native cron jobs list/remove CLI with scoped FS35, positive/refusal controls, and packaged launcher; macOS runtime qualification remains open",
+                          "launcher_positive": sha(launcher_positive_stdout),
+                          "pause": sha(pause_stdout), "launcher_pause": sha(launcher_pause_stdout)},
+        "scope": "standalone Linux x86_64 native cron jobs list/pause/remove CLI with scoped FS35, positive/refusal controls, and packaged launcher; macOS runtime qualification remains open",
     }
     receipt_path = out / "build-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")

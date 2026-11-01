@@ -4,7 +4,9 @@
   (:require [hata.store-io :as fs]
             [itonami.cron-jobs-json :as jobs]
             [itonami.schedule :as schedule])
-  (:export [list-jobs list-jobs-json remove-job remove-job-at remove-job-json test-remove-job-json])
+  (:export [list-jobs list-jobs-json remove-job remove-job-at remove-job-json
+            pause-job pause-job-at pause-job-json
+            test-remove-job-json test-pause-job-json])
   (:capabilities [:clock/now :fs/app-data]))
 
 (defn- digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
@@ -40,6 +42,10 @@
       (result-err-of [:result :string :string] (json-result-error removed))
       (jobs/set-updated-at-json
         (result-value-of [:result :string :string] removed "") updated-at))))
+
+(defn pause-job-json [json :string id :string updated-at :string paused-at :string
+                      reason :string] [:result :string :string]
+  (jobs/pause-job-json json id updated-at paused-at reason))
 
 (defn- write-atomic [dir :string path :string data :string] :bool
   (let [tmp (child-path dir ".jobs.json.tmp")
@@ -82,6 +88,39 @@
       (result-err-of [:result :string :string] "cron-store/clock-unavailable")
       (remove-job-at cron-dir id updated-at))))
 
+(defn pause-job-at [cron-dir :string id :string updated-at :string paused-at :string
+                    reason :string] [:result :string :string]
+  (let [path (child-path cron-dir "jobs.json")
+        lock-path (child-path cron-dir ".itonami-jobs.lock")]
+    (if (or (= (string-length updated-at) 0)
+            (= (string-length paused-at) 0)
+            (= (string-length path) 0) (= (string-length lock-path) 0))
+      (result-err-of [:result :string :string] "cron-store/invalid-input")
+      (if (not (fs/lock lock-path))
+        (result-err-of [:result :string :string] "cron-store/busy-or-lock-denied")
+        (let [exists (fs/exists? path)
+              before (if exists (fs/read path) "{\"jobs\":[]}")
+              changed (pause-job-json before id updated-at paused-at reason)
+              committed (if (result-ok?-of [:result :string :string] changed)
+                          (write-atomic cron-dir path
+                            (result-value-of [:result :string :string] changed ""))
+                          false)
+              unlocked (fs/unlock lock-path)]
+          (if (not unlocked)
+            (result-err-of [:result :string :string] "cron-store/unlock-failed")
+            (if (not (result-ok?-of [:result :string :string] changed))
+              (result-err-of [:result :string :string] (json-result-error changed))
+              (if (not committed)
+                (result-err-of [:result :string :string] "cron-store/durable-write-failed")
+                (result-ok-of [:result :string :string]
+                  (result-value-of [:result :string :string] changed ""))))))))))
+
+(defn pause-job [cron-dir :string id :string reason :string] [:result :string :string]
+  (let [now (now-iso-utc)]
+    (if (= (string-length now) 0)
+      (result-err-of [:result :string :string] "cron-store/clock-unavailable")
+      (pause-job-at cron-dir id now now reason))))
+
 (defn list-jobs-json [json :string include-disabled :bool]
   [:result :string :string]
   (jobs/list-jobs-json json include-disabled))
@@ -100,3 +139,11 @@
         output (result-value-of [:result :string :string] result "")]
     (and (result-ok?-of [:result :string :string] result)
          (string=? output "{\"jobs\":[],\"updated_at\":\"2026-11-02T03:04:05.006Z\"}"))))
+
+(defn test-pause-job-json [] :bool
+  (let [source "{\"jobs\":[{\"id\":\"p\",\"enabled\":true,\"state\":\"scheduled\"}],\"extension\":1.25e+7}"
+        result (pause-job-json source "p" "2026-11-02T03:04:05.006Z"
+                               "2026-11-02T03:04:05.006Z" "Paused by agent")
+        output (result-value-of [:result :string :string] result "")]
+    (and (result-ok?-of [:result :string :string] result)
+         (string=? output "{\"jobs\":[{\"id\":\"p\",\"enabled\":false,\"state\":\"paused\",\"paused_at\":\"2026-11-02T03:04:05.006Z\",\"paused_reason\":\"Paused by agent\"}],\"extension\":1.25e+7,\"updated_at\":\"2026-11-02T03:04:05.006Z\"}"))))

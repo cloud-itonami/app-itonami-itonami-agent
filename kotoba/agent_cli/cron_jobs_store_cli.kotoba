@@ -26,14 +26,23 @@
       (say (result-value-of [:result :string :string] result "{}"))
       (fail (result-error-of [:result :string :string] result "cron-store/list-failed")))))
 
+(defn- pause-command [directory :string job-id :string reason :string] :i64
+  (let [why (if (string=? reason "") "Paused by agent" reason)
+        result (store/pause-job directory job-id why)]
+    (if (result-ok?-of [:result :string :string] result)
+      0
+      (fail (result-error-of [:result :string :string] result "cron-store/pause-failed")))))
+
 (defn main [] :i64
   (let [action (arg 0)
         directory (arg 1)]
     (cond
       (string=? action "list")
         (list-command directory (arg 2))
+      (string=? action "pause")
+        (pause-command directory (arg 2) (arg 3))
       (string=? action "remove")
         (let [job-id (arg 2)
               result (store/remove-job directory job-id)]
           (if (result-ok?-of [:result :string :string] result) 0 1))
-      :else (fail "usage: itonami-agent cron jobs list <absolute-app-data-dir> [false] | remove <absolute-app-data-dir> <job-id>"))))
+      :else (fail "usage: itonami-agent cron jobs list <absolute-app-data-dir> [false] | pause <absolute-app-data-dir> <job-id> [reason] | remove <absolute-app-data-dir> <job-id>"))))

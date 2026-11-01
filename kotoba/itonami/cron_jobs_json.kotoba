@@ -6,11 +6,12 @@
 (ns itonami.cron-jobs-json
   (:require [jcs.reader :as jcs])
   (:export [jobs-array-start replace-jobs-array set-updated-at-json
-            remove-job-json list-jobs-json
+            remove-job-json list-jobs-json pause-job-json
             test-replace-preserves-extensions test-replace-refuses-invalid
             test-remove-preserves-job-extensions test-remove-refuses-missing
             test-list-projects-hermes-fields test-list-refuses-non-object-job
-            test-updated-at-preserves-extensions]))
+            test-updated-at-preserves-extensions test-pause-preserves-extensions
+            test-pause-refuses-missing test-pause-escapes-reason]))
 
 (defn- skip-ws [b :vector-i64 i :i64] :i64
   (if (>= i (vector-count b)) i
@@ -288,6 +289,87 @@
           (result-ok-of [:result :string :string]
                         (string-concat "{\"jobs\":" (string-concat array "}"))))))))
 
+(defn- utf8-width [c :i64] :i64
+  (if (< c 128) 1 (if (< c 2048) 2 (if (< c 65536) 3 4))))
+
+(defn- hex-byte [n :i64] :string
+  (string-concat
+    (string-substring "0123456789abcdef" (quot n 16) (+ (quot n 16) 1))
+    (string-substring "0123456789abcdef" (rem n 16) (+ (rem n 16) 1))))
+
+(defn- json-string-body [s :string i :i64 n :i64 out :string] :string
+  (if (>= i n) out
+    (let [c (string-code-point-at s i)
+          width (utf8-width c)
+          part (string-substring s i (+ i width))
+          escaped (cond (= c 34) "\\\""
+                        (= c 92) "\\\\"
+                        (< c 32) (string-concat "\\u00" (hex-byte c))
+                        :else part)]
+      (recur s (+ i width) n (string-concat out escaped)))))
+
+(defn- json-string-value [s :string] :string
+  (string-concat "\"" (string-concat (json-string-body s 0 (string-byte-length s) "") "\"")))
+
+(defn- set-object-member-raw [object-json :string key :string raw :string] :string
+  (let [b (vector-i64-from-bytes (string-to-utf8 object-json))
+        root (skip-ws b 0)]
+    (if (or (not (jcs/json-valid? b)) (not (= (jcs/json-kind b root) 1))) ""
+      (let [at (jcs/json-member b root key)]
+        (if (>= at 0)
+          (splice-json-range b at (jcs/json-end b at) raw)
+          (let [end (jcs/json-end b root)
+                separator (if (> (jcs/json-count b root) 0) "," "")
+                field (string-concat separator
+                         (string-concat (json-string-value key)
+                           (string-concat ":" raw)))]
+            (splice-json-range b (- end 1) (- end 1) field)))))))
+
+(defn- pause-job-object [object-json :string paused-at :string reason :string] :string
+  (let [enabled (set-object-member-raw object-json "enabled" "false")
+        state (set-object-member-raw enabled "state" "\"paused\"")
+        at (set-object-member-raw state "paused_at" (json-string-value paused-at))]
+    (set-object-member-raw at "paused_reason" (json-string-value reason))))
+
+(defn- pause-jobs-array [b :vector-i64 array-at :i64 id :string paused-at :string
+                         reason :string i :i64 out :string count :i64 found :i64]
+  [:record :itonami.cron-jobs-json/PauseScan
+   [[:array :string] [:found :i64]]]
+  (if (>= i (jcs/json-count b array-at))
+    (record-new [:ref :itonami.cron-jobs-json/PauseScan]
+                (string-concat out "]") found)
+    (let [job (jcs/json-element b array-at i)
+          match (job-id-matches? b job id)
+          text (if match
+                 (pause-job-object (raw-value b job) paused-at reason)
+                 (raw-value b job))
+          next-out (string-concat out
+                      (string-concat (if (> count 0) "," "") text))]
+      (recur b array-at id paused-at reason (+ i 1) next-out (+ count 1)
+             (if match 1 found)))))
+
+(defn pause-job-json [json :string id :string updated-at :string paused-at :string
+                      reason :string] [:result :string :string]
+  ;; Match cronjob_manage pause: disable the selected job and record pause
+  ;; metadata while preserving every unrelated JSON byte and extension.
+  (let [b (vector-i64-from-bytes (string-to-utf8 json))
+        array-at (jobs-array-index b)]
+    (if (< array-at 0)
+      (result-err-of [:result :string :string] "cron-json/invalid-jobs-document")
+      (if (not (all-job-objects? b array-at 0))
+        (result-err-of [:result :string :string] "cron-json/job-entry-must-be-object")
+        (let [scan (pause-jobs-array b array-at id paused-at reason 0 "[" 0 0)
+              found (record-get [:ref :itonami.cron-jobs-json/PauseScan] scan :found)]
+          (if (= found 0)
+            (result-err-of [:result :string :string] "cron-json/job-not-found")
+            (let [array (record-get [:ref :itonami.cron-jobs-json/PauseScan] scan :array)
+                  changed (replace-jobs-array json array)]
+              (if (not (result-ok?-of [:result :string :string] changed))
+                (result-err-of [:result :string :string] "cron-json/pause-replacement-failed")
+                (set-updated-at-json
+                  (result-value-of [:result :string :string] changed "")
+                  updated-at)))))))))
+
 (defn test-list-projects-hermes-fields [] :bool
   (let [source "{\"jobs\":[{\"id\":\"live\",\"name\":\"A\",\"prompt\":\"p\",\"enabled\":true,\"private\":7},{\"id\":\"paused\",\"enabled\":false,\"state\":\"paused\"}],\"extension\":1.25e+7}"
         active (list-jobs-json source false)
@@ -341,3 +423,24 @@
          (result-ok?-of [:result :string :string] absent)
          (string=? added "{\"jobs\":[],\"extension\":1.25e+7,\"updated_at\":\"2026-11-02T03:04:05.006Z\"}")
          (not (result-ok?-of [:result :string :string] bad)))))
+
+(defn test-pause-preserves-extensions [] :bool
+  (let [source "{\"jobs\":[{\"id\":\"pause\",\"enabled\":true,\"state\":\"scheduled\",\"paused_at\":null,\"future\":1.25e+7},{\"id\":\"keep\",\"future\":-0.0001}],\"extension\":{\"x\":true}}"
+        result (pause-job-json source "pause" "2026-11-02T03:04:05.006Z"
+                               "2026-11-02T03:04:05.006Z" "Paused by agent")
+        output (result-value-of [:result :string :string] result "")]
+    (and (result-ok?-of [:result :string :string] result)
+         (string=? output "{\"jobs\":[{\"id\":\"pause\",\"enabled\":false,\"state\":\"paused\",\"paused_at\":\"2026-11-02T03:04:05.006Z\",\"future\":1.25e+7,\"paused_reason\":\"Paused by agent\"},{\"id\":\"keep\",\"future\":-0.0001}],\"extension\":{\"x\":true},\"updated_at\":\"2026-11-02T03:04:05.006Z\"}"))))
+
+(defn test-pause-refuses-missing [] :bool
+  (not (result-ok?-of [:result :string :string]
+        (pause-job-json "{\"jobs\":[{\"id\":\"existing\"}]}" "missing"
+                        "2026-11-02T03:04:05.006Z" "2026-11-02T03:04:05.006Z" "Paused by agent"))))
+
+(defn test-pause-escapes-reason [] :bool
+  (let [result (pause-job-json "{\"jobs\":[{\"id\":\"pause\"}]}" "pause"
+                               "2026-11-02T03:04:05.006Z" "2026-11-02T03:04:05.006Z"
+                               "quote \" and slash \\ and line\n")
+        output (result-value-of [:result :string :string] result "")]
+    (and (result-ok?-of [:result :string :string] result)
+         (string=? output "{\"jobs\":[{\"id\":\"pause\",\"enabled\":false,\"state\":\"paused\",\"paused_at\":\"2026-11-02T03:04:05.006Z\",\"paused_reason\":\"quote \\\" and slash \\\\ and line\\u000a\"}],\"updated_at\":\"2026-11-02T03:04:05.006Z\"}"))))
