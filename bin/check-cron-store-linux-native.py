@@ -147,15 +147,16 @@ def locked_project(out, kotoba_repo):
     return cli, lock, {str(path): sha(path.read_bytes()) for path in files}
 
 
-def execute(name, runner, payload, scope, job_id, expected_result, out, calls):
+def execute(name, runner, payload, scope, action, value, option, expected_result, out, calls):
     env = {
         "PATH": "/nonexistent",
-        "KEXE_ALLOW": "7,35,38",
+        "KEXE_ALLOW": "3,4,7,35,38",
         "KEXE_CAP_RESOURCES_35": str(scope),
         "KEXE_STACK_BYTES": "8388608",
         "KEXE_STRUCTURED_REPORT": "1",
     }
-    argv = [runner, payload, "0", "0", "x86_64", "7,35,38", "--", str(scope / "d"), job_id]
+    argv = [runner, payload, "0", "0", "x86_64", "3,4,7,35,38", "--",
+            action, str(scope / "d"), value, option]
     stdout = run(name, argv, out, env, calls)
     if not re.search(rb":result " + str(expected_result).encode() + rb"\b", stdout):
         state = {}
@@ -168,12 +169,15 @@ def execute(name, runner, payload, scope, job_id, expected_result, out, calls):
     return stdout
 
 
-def execute_launcher(name, launcher, scope, expected_exit, out, calls):
+def execute_launcher(name, launcher, scope, action, value, option, expected_exit, out, calls):
     env = dict(os.environ)
     env.pop("ITONAMI_CRON_JOBS_RUNNER", None)
     env.pop("ITONAMI_CRON_JOBS_PAYLOAD", None)
-    argv = [launcher, "cron", "jobs", "remove",
-            scope / "d", "remove-me"]
+    argv = [launcher, "cron", "jobs", action, scope / "d"]
+    if value != "":
+        argv.append(value)
+    if option != "":
+        argv.append(option)
     started = time.monotonic()
     result = subprocess.run(list(map(str, argv)), cwd=ROOT, env=env,
                             capture_output=True, timeout=120)
@@ -189,6 +193,8 @@ def execute_launcher(name, launcher, scope, expected_exit, out, calls):
         raise RuntimeError(f"{name} launcher did not report native success: {result.stdout!r}")
     if expected_exit == 1 and not re.search(rb":status :ok :result 1\b", result.stdout):
         raise RuntimeError(f"{name} launcher did not report native refusal: {result.stdout!r}")
+    if expected_exit == 2 and not re.search(rb":status :ok :result 2\b", result.stdout):
+        raise RuntimeError(f"{name} launcher did not report native input refusal: {result.stdout!r}")
     return result.stdout
 
 
@@ -270,7 +276,7 @@ def main():
         "project_payload_sha256": sha(payload_bytes),
         "runner_elf_sha256": sha(runner.read_bytes()),
         "launcher_sha256": sha(package_launcher.read_bytes()),
-        "capabilities": ["cli/args", "clock/now", "fs/app-data"],
+        "capabilities": ["cli/args", "clock/now", "fs/app-data", "io/write", "io/write-error"],
         "adoption": "not-public; Amu experimental source candidate",
     }
     manifest_path = package / "candidate-package.json"
@@ -283,7 +289,7 @@ def main():
         '{"jobs":[{"id":"remove-me","keep":1},{"id":"stay","future":1.25e+7}],'
         '"unknown":{"n":-0.0001},"updated_at":"old"}', encoding="ascii")
     positive_stdout = execute("runtime-clock-fs-positive", runner, payload, positive,
-                              "remove-me", 0, out, calls)
+                              "remove", "remove-me", "", 0, out, calls)
     persisted = (positive / "d/jobs.json").read_text(encoding="ascii")
     prefix = ('{"jobs":[{"id":"stay","future":1.25e+7}],'
               '"unknown":{"n":-0.0001},"updated_at":"')
@@ -301,7 +307,7 @@ def main():
     malformed = '{"jobs":'
     (refusal / "d/jobs.json").write_text(malformed, encoding="ascii")
     refusal_stdout = execute("runtime-clock-fs-refusal", runner, payload, refusal,
-                             "remove-me", 1, out, calls)
+                             "remove", "remove-me", "", 1, out, calls)
     if (refusal / "d/jobs.json").read_text(encoding="ascii") != malformed:
         raise RuntimeError("refusal modified malformed source JSON")
     if (refusal / "d/.jobs.json.tmp").exists():
@@ -313,7 +319,7 @@ def main():
         '{"jobs":[{"id":"remove-me","keep":1},{"id":"stay","future":1.25e+7}],'
         '"unknown":{"n":-0.0001},"updated_at":"old"}', encoding="ascii")
     launcher_positive_stdout = execute_launcher("launcher-clock-fs-positive", package_launcher,
-                                                launcher_positive, 0, out, calls)
+                                                launcher_positive, "remove", "remove-me", "", 0, out, calls)
     launcher_persisted = (launcher_positive / "d/jobs.json").read_text(encoding="ascii")
     if not launcher_persisted.startswith(prefix) or not launcher_persisted.endswith('"}'):
         raise RuntimeError(f"launcher positive store output mismatch: {launcher_persisted!r}")
@@ -328,7 +334,7 @@ def main():
     (launcher_refusal / "d").mkdir(parents=True)
     (launcher_refusal / "d/jobs.json").write_text(malformed, encoding="ascii")
     execute_launcher("launcher-clock-fs-refusal", package_launcher, launcher_refusal,
-                     1, out, calls)
+                     "remove", "remove-me", "", 1, out, calls)
     if (launcher_refusal / "d/jobs.json").read_text(encoding="ascii") != malformed:
         raise RuntimeError("launcher refusal modified malformed source JSON")
     if (launcher_refusal / "d/.jobs.json.tmp").exists():
@@ -355,6 +361,39 @@ def main():
         raise RuntimeError(f"launcher missing-artifact refusal mismatch: "
                            f"exit={missing_result.returncode} stderr={missing_result.stderr!r}")
 
+    list_scope = out / "list-scope"
+    (list_scope / "d").mkdir(parents=True)
+    jobs_document = ('{"jobs":[{"id":"active","name":"A","prompt":"p",'
+                     '"enabled":true,"private":"omit"},{"id":"paused",'
+                     '"enabled":false,"state":"paused"}],"extension":1.25e+7}')
+    (list_scope / "d/jobs.json").write_text(jobs_document, encoding="ascii")
+    list_stdout = execute("runtime-list-active-only", runner, payload, list_scope,
+                          "list", "false", "", 0, out, calls)
+    expected_list = b'{"jobs":[{"id":"active","name":"A","prompt":"p","enabled":true}]}'
+    if expected_list not in list_stdout or b'"private"' in list_stdout or b'"paused"' in list_stdout:
+        raise RuntimeError(f"native list projection/filter mismatch: {list_stdout!r}")
+    if (list_scope / "d/jobs.json").read_text(encoding="ascii") != jobs_document:
+        raise RuntimeError("read-only jobs list modified jobs.json")
+
+    launcher_list = out / "launcher-list-scope"
+    (launcher_list / "d").mkdir(parents=True)
+    (launcher_list / "d/jobs.json").write_text(jobs_document, encoding="ascii")
+    launcher_list_stdout = execute_launcher("launcher-list-active-only", package_launcher,
+                                            launcher_list, "list", "false", "", 0, out, calls)
+    if expected_list not in launcher_list_stdout or b'"private"' in launcher_list_stdout or b'"paused"' in launcher_list_stdout:
+        raise RuntimeError(f"launcher list projection/filter mismatch: {launcher_list_stdout!r}")
+    if (launcher_list / "d/jobs.json").read_text(encoding="ascii") != jobs_document:
+        raise RuntimeError("launcher jobs list modified jobs.json")
+
+    list_refusal = out / "list-refusal-scope"
+    (list_refusal / "d").mkdir(parents=True)
+    malformed_list = '{"jobs":[false]}'
+    (list_refusal / "d/jobs.json").write_text(malformed_list, encoding="ascii")
+    execute_launcher("launcher-list-refusal", package_launcher, list_refusal,
+                     "list", "", "", 2, out, calls)
+    if (list_refusal / "d/jobs.json").read_text(encoding="ascii") != malformed_list:
+        raise RuntimeError("list refusal modified invalid jobs document")
+
     receipt = {
         "format": "itonami.cron-jobs-linux-native-gate.v1",
         "itonami_source_revision": source_revision,
@@ -379,6 +418,9 @@ def main():
         "launcher_positive_runtime": "PASS",
         "launcher_refusal_runtime": "PASS",
         "launcher_missing_artifact_refusal": "PASS",
+        "list_active_only_runtime": "PASS",
+        "list_active_only_launcher": "PASS",
+        "list_invalid_job_refusal": "PASS",
         "candidate_package": {
             "manifest": "package/candidate-package.json",
             "manifest_sha256": sha(manifest_path.read_bytes()),
@@ -391,7 +433,7 @@ def main():
         "processes": calls,
         "stdout_sha256": {"positive": sha(positive_stdout), "refusal": sha(refusal_stdout),
                           "launcher_positive": sha(launcher_positive_stdout)},
-        "scope": "standalone Linux x86_64 native cron jobs remove CLI with clock plus scoped FS35; launcher and macOS clock qualification remain open",
+        "scope": "standalone Linux x86_64 native cron jobs list/remove CLI with scoped FS35, positive/refusal controls, and packaged launcher; macOS runtime qualification remains open",
     }
     receipt_path = out / "build-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")

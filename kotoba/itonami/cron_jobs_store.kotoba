@@ -4,7 +4,7 @@
   (:require [hata.store-io :as fs]
             [itonami.cron-jobs-json :as jobs]
             [itonami.schedule :as schedule])
-  (:export [remove-job remove-job-at remove-job-json test-remove-job-json])
+  (:export [list-jobs list-jobs-json remove-job remove-job-at remove-job-json test-remove-job-json])
   (:capabilities [:clock/now :fs/app-data]))
 
 (defn- digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
@@ -81,6 +81,18 @@
     (if (= (string-length updated-at) 0)
       (result-err-of [:result :string :string] "cron-store/clock-unavailable")
       (remove-job-at cron-dir id updated-at))))
+
+(defn list-jobs-json [json :string include-disabled :bool]
+  [:result :string :string]
+  (jobs/list-jobs-json json include-disabled))
+
+(defn list-jobs [cron-dir :string include-disabled :bool]
+  [:result :string :string]
+  (let [path (child-path cron-dir "jobs.json")]
+    (if (= (string-length path) 0)
+      (result-err-of [:result :string :string] "cron-store/invalid-input")
+      (let [document (if (fs/exists? path) (fs/read path) "{\"jobs\":[]}")]
+        (list-jobs-json document include-disabled)))))
 
 (defn test-remove-job-json [] :bool
   (let [source "{\"jobs\":[{\"id\":\"a\",\"future\":1.25e+7}],\"updated_at\":\"2026-11-01T00:00:00Z\"}"

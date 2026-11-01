@@ -6,9 +6,10 @@
 (ns itonami.cron-jobs-json
   (:require [jcs.reader :as jcs])
   (:export [jobs-array-start replace-jobs-array set-updated-at-json
-            remove-job-json
+            remove-job-json list-jobs-json
             test-replace-preserves-extensions test-replace-refuses-invalid
             test-remove-preserves-job-extensions test-remove-refuses-missing
+            test-list-projects-hermes-fields test-list-refuses-non-object-job
             test-updated-at-preserves-extensions]))
 
 (defn- skip-ws [b :vector-i64 i :i64] :i64
@@ -211,6 +212,96 @@
               (result-ok-of [:result :string :string]
                             (result-value-of [:result :string :string] doc-result ""))
               (result-err-of [:result :string :string] "cron-json/replacement-failed"))))))))
+
+(defn- raw-value [b :vector-i64 at :i64] :string
+  (let [end (jcs/json-end b at)
+        out (vector-alloc (- end at))
+        copied (copy-range b at end out 0)]
+    (string-from-utf8 (bytes-from-vector-i64 copied))))
+
+(defn- add-job-field [out :string b :vector-i64 job :i64 key :string] :string
+  (let [at (jcs/json-member b job key)]
+    (if (< at 0) out
+      (string-concat out
+        (string-concat (if (= (string-length out) 1) "" ",")
+          (string-concat (string-concat "\"" (string-concat key "\":"))
+                         (raw-value b at)))))))
+
+(defn- project-job [b :vector-i64 job :i64] :string
+  (let [a (add-job-field "{" b job "id")
+        b1 (add-job-field a b job "name")
+        c (add-job-field b1 b job "prompt")
+        d (add-job-field c b job "schedule")
+        e (add-job-field d b job "schedule_display")
+        f (add-job-field e b job "next_run_at")
+        g (add-job-field f b job "enabled")
+        h (add-job-field g b job "state")
+        i (add-job-field h b job "last_run_at")
+        j (add-job-field i b job "last_status")
+        k (add-job-field j b job "last_error")
+        l (add-job-field k b job "last_delivery_error")
+        m (add-job-field l b job "deliver")
+        n (add-job-field m b job "script")
+        o (add-job-field n b job "monitor_script")
+        p (add-job-field o b job "monitor_url")
+        q (add-job-field p b job "enabled_toolsets")
+        r (add-job-field q b job "repeat")]
+    (string-concat r "}")))
+
+(defn- active-job? [b :vector-i64 job :i64] :bool
+  (let [enabled (jcs/json-member b job "enabled")
+        state (jcs/json-member b job "state")
+        state-name (if (and (>= state 0) (= (jcs/json-kind b state) 3))
+                     (jcs/json-string b state) "")]
+    (and (not (and (>= enabled 0) (= (jcs/json-kind b enabled) 6)))
+         (not (or (= state-name "paused")
+                  (or (= state-name "completed") (= state-name "removed")))))))
+
+(defn- all-job-objects? [b :vector-i64 array-at :i64 i :i64] :bool
+  (if (>= i (jcs/json-count b array-at)) true
+    (let [job (jcs/json-element b array-at i)]
+      (and (= (jcs/json-kind b job) 1)
+           (all-job-objects? b array-at (+ i 1))))))
+
+(defn- list-jobs-array [b :vector-i64 array-at :i64 i :i64 include-disabled :bool
+                        out :string count :i64] :string
+  (if (>= i (jcs/json-count b array-at)) (string-concat out "]")
+    (let [job (jcs/json-element b array-at i)
+          visible (or include-disabled (active-job? b job))]
+      (if visible
+        (let [item (project-job b job)
+              next-out (string-concat out
+                          (string-concat (if (> count 0) "," "") item))]
+          (recur b array-at (+ i 1) include-disabled next-out (+ count 1)))
+        (recur b array-at (+ i 1) include-disabled out count)))))
+
+(defn list-jobs-json [json :string include-disabled :bool] [:result :string :string]
+  ;; Match Hermes cronjob_manage's list projection and include_disabled filter.
+  ;; Raw selected values preserve each field's JSON representation.
+  (let [b (vector-i64-from-bytes (string-to-utf8 json))
+        array-at (jobs-array-index b)]
+    (if (< array-at 0)
+      (result-err-of [:result :string :string] "cron-json/invalid-jobs-document")
+      (if (not (all-job-objects? b array-at 0))
+        (result-err-of [:result :string :string] "cron-json/job-entry-must-be-object")
+        (let [array (list-jobs-array b array-at 0 include-disabled "[" 0)]
+          (result-ok-of [:result :string :string]
+                        (string-concat "{\"jobs\":" (string-concat array "}"))))))))
+
+(defn test-list-projects-hermes-fields [] :bool
+  (let [source "{\"jobs\":[{\"id\":\"live\",\"name\":\"A\",\"prompt\":\"p\",\"enabled\":true,\"private\":7},{\"id\":\"paused\",\"enabled\":false,\"state\":\"paused\"}],\"extension\":1.25e+7}"
+        active (list-jobs-json source false)
+        all (list-jobs-json source true)
+        active-text (result-value-of [:result :string :string] active "")
+        all-text (result-value-of [:result :string :string] all "")]
+    (and (result-ok?-of [:result :string :string] active)
+         (string=? active-text "{\"jobs\":[{\"id\":\"live\",\"name\":\"A\",\"prompt\":\"p\",\"enabled\":true}]}")
+         (result-ok?-of [:result :string :string] all)
+         (string=? all-text "{\"jobs\":[{\"id\":\"live\",\"name\":\"A\",\"prompt\":\"p\",\"enabled\":true},{\"id\":\"paused\",\"enabled\":false,\"state\":\"paused\"}]}"))))
+
+(defn test-list-refuses-non-object-job [] :bool
+  (not (result-ok?-of [:result :string :string]
+         (list-jobs-json "{\"jobs\":[{\"id\":\"ok\"},false]}" true))))
 
 (defn test-replace-preserves-extensions [] :bool
   (let [source "{\"extension\":1.25e+7,\"jobs\":[{\"future\":-0.0001}],\"tail\":{\"x\":true}}"

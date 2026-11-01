@@ -1,16 +1,39 @@
 (ns agent-cli-cron-jobs-store
-  "Remove a cron job from an Itonami app-data directory with the Kotoba clock
-  and scoped Hata store adapter. The native launcher supplies the directory and
-  job ID as argv 0 and argv 1."
+  "List and remove cron jobs from an Itonami app-data directory using Kotoba
+  and the scoped Hata store adapter. The native launcher supplies the action,
+  directory, and optional job ID as argv values 0, 1, and 2."
   (:require [itonami.cron-jobs-store :as store])
   (:export [main])
-  (:capabilities #{:cli/args :clock/now :fs/app-data}))
+  (:capabilities #{:cli/args :clock/now :fs/app-data :io/write :io/write-error}))
 
 (defn- arg [index :i64] :string
   (typed-cap-call :cli/args :string :string (string-from-i64 index)))
 
+(defn- say [s :string] :i64
+  (let [w (typed-cap-call :io/write :string :string (string-concat s "\n"))]
+    0))
+
+(defn- fail [s :string] :i64
+  (let [w (typed-cap-call :io/write-error :string :string (string-concat "cron jobs: " s))]
+    2))
+
+(defn- include-disabled? [value :string] :bool
+  (not (string=? value "false")))
+
+(defn- list-command [directory :string option :string] :i64
+  (let [result (store/list-jobs directory (include-disabled? option))]
+    (if (result-ok?-of [:result :string :string] result)
+      (say (result-value-of [:result :string :string] result "{}"))
+      (fail (result-error-of [:result :string :string] result "cron-store/list-failed")))))
+
 (defn main [] :i64
-  (let [directory (arg 0)
-        job-id (arg 1)
-        result (store/remove-job directory job-id)]
-    (if (result-ok?-of [:result :string :string] result) 0 1)))
+  (let [action (arg 0)
+        directory (arg 1)]
+    (cond
+      (string=? action "list")
+        (list-command directory (arg 2))
+      (string=? action "remove")
+        (let [job-id (arg 2)
+              result (store/remove-job directory job-id)]
+          (if (result-ok?-of [:result :string :string] result) 0 1))
+      :else (fail "usage: itonami-agent cron jobs list <absolute-app-data-dir> [false] | remove <absolute-app-data-dir> <job-id>"))))
