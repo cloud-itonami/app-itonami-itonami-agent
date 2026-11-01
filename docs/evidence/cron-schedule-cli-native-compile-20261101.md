@@ -95,3 +95,21 @@ extraction succeeded at offset `37264`, length `39093`, arity `0`, raw SHA-256
 `836f916ce27d58fdfb67742c3a39b31abf32d39d866b9c25a551c6f225b8df69`.
 This remains diagnostic-only. No guest execution, test suite, or legacy oracle
 comparison was run.
+
+## ECMAScript edge whitespace — 2026-11-01
+
+Commit `da20ba9` aligns schedule input edge trimming with the explicit
+ECMAScript whitespace set used by CLJS `str/trim`. The Kotoba scan uses UTF-8
+byte offsets and advances by each code point's encoded width, matching Amu's
+byte-oriented substring contract. The pinned builder returned exit 0 with
+KSL2 lock SHA-256
+`aa32b3662557891ef9babc6fad03c51f3c5eeefcc440f0288d13065623ef5e4a`, CLI
+source SHA-256 `f55fb591ce6985f65ce5ae94f519c18b910b3913b12c73c318b04df5643534d3`,
+and schedule source SHA-256
+`60995b75815fbcc6df58f3abcbfcfd59df2f40b36ad3fd4f429e3d9626b0adcf`. Amu
+compiled a 39,175-byte kseed (SHA-256
+`1a7c8c89ac3b0f5f3f8e6fd975369d597218894a91cf2fb758aa2ebc9625685b`); native
+extraction succeeded at offset `37304`, length `39133`, arity `0`, raw SHA-256
+`c056100de5c59ad9b61afaa59feadacd3361545c82c9f1f6f9ee65e9413db494`.
+Qualification remains diagnostic-only; no Unicode runtime sample, test suite,
+or legacy oracle comparison was run.
