@@ -1,9 +1,8 @@
 (ns agent-cli-cron-schedule
-  "A native, pure schedule parser surface for cron jobs. This covers the
-  existing schedule parser's interval and five-field cron forms; relative
-  one-shot, natural-language, and ISO-time forms remain named refusals until
-  their clock/parser semantics are ported. The normalized output is an
-  intermediate CLI contract for the eventual cron create route."
+  "A native, pure schedule parser surface for cron jobs. It covers interval,
+  relative-duration, natural weekday/time, and five-field cron forms. Absolute
+  ISO-time parsing remains a named refusal until its date semantics are
+  ported. The normalized output is an intermediate contract for cron create."
   (:require [itonami.schedule :as schedule])
   (:export [cron-schedule-cli])
   (:capabilities #{:cli/args :io/write :io/write-error}))
@@ -17,18 +16,6 @@
 (defn- wire-die [s :string] :string
   (typed-cap-call :io/write-error :string :string s))
 
-(defn- lower [c :i64] :i64
-  (if (and (>= c 65) (<= c 90)) (+ c 32) c))
-
-(defn- every-prefix? [s :string] :bool
-  (if (< (string-length s) 6) false
-    (and (= (lower (string-code-point-at s 0)) 101)
-         (= (lower (string-code-point-at s 1)) 118)
-         (= (lower (string-code-point-at s 2)) 101)
-         (= (lower (string-code-point-at s 3)) 114)
-         (= (lower (string-code-point-at s 4)) 121)
-         (= (string-code-point-at s 5) 32))))
-
 (defn- say-line [s :string] :i64
   (let [w (wire-say (string-concat s "\n"))]
     0))
@@ -39,11 +26,12 @@
 
 (defn cron-schedule-cli [] :i64
   (let [input (wire-arg 0)
-        every (every-prefix? input)
-        body (if every (string-substring input 6 (string-length input)) input)
-        minutes (schedule/duration-minutes body)]
-    (if (> minutes 0)
-      (say-line (string-concat "interval " (string-from-i64 minutes)))
-      (if (string=? (schedule/cron-problem input) "schedule/ok")
-        (say-line (string-concat "cron " input))
-        (fail input)))))
+        form (schedule/parse-schedule-form input)
+        split (string-index-of form "\n")]
+    (if (< split 0) (fail input)
+      (let [kind (string-substring form 0 split)
+            value (string-substring form (inc split) (string-length form))]
+        (cond (= kind "interval") (say-line (string-concat "interval " value))
+              (= kind "once-after") (say-line (string-concat "once-after " value))
+              (= kind "cron") (say-line (string-concat "cron " value))
+              :else (fail input))))))

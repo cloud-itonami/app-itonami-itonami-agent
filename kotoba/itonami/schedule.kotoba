@@ -23,7 +23,7 @@
 ;; Written in the Amu selfhost seed subset (no ns docstring, no fn literal,
 ;; declared result types); README "Schedule" has the gate.
 (ns itonami.schedule
-  (:export [cron-problem duration-minutes next-cron-ms next-interval-ms next-once-ms due?
+  (:export [cron-problem duration-minutes parse-schedule-form next-cron-ms next-interval-ms next-once-ms due?
             days-from-civil civil-year civil-month civil-day weekday
             test-civil test-parse test-cron test-other]))
 
@@ -235,6 +235,134 @@
             (< (field-mask (field-at e 3) 1 12 false) 0)
             (< (field-mask (field-at e 4) 0 7 true) 0))
       "schedule/bad-cron" "schedule/ok")))
+
+;; ---------------------------------------------------------------------------
+;; Pure schedule input port from cron.cljk/parse-schedule. The result is a
+;; tagged wire form for the native CLI, not the old JSON object:
+;;   interval\n<minutes>, once-after\n<minutes>, cron\n<expression>
+;; Unsupported or malformed forms answer schedule/bad. Absolute ISO times
+;; remain a host/time parsing boundary and are refused here.
+
+(defn trim-ascii [s :string] :string
+  (let [start (duration-left s 0)
+        end (duration-right s (string-length s))]
+    (string-substring s start end)))
+
+(defn lower-text-run [s :string i :i64 acc :string] :string
+  (if (>= i (string-length s)) acc
+    (let [c (lower (string-code-point-at s i))]
+      (if (and (>= c 97) (<= c 122))
+        (recur s (inc i) (string-concat acc (string-substring "abcdefghijklmnopqrstuvwxyz" (- c 97) (- c 96))))
+        (recur s (inc i) (string-concat acc (string-substring s i (inc i))))))))
+
+(defn lower-text [s :string] :string (lower-text-run s 0 ""))
+
+(defn starts-with-text? [s :string prefix :string] :bool
+  (if (< (string-length s) (string-length prefix)) false
+    (string=? (string-substring s 0 (string-length prefix)) prefix)))
+
+(defn time-space? [c :i64] :bool
+  (if (< c 0) false (if (> c 32) false true)))
+
+(defn time-core? [s :string] :bool
+  (if (= (string-length s) 0) false
+    (if (>= (string-index-of s " ") 0) false true)))
+
+(defn parse-clock [s :string] :string
+  (let [text (trim-ascii (lower-text (trim-ascii s)))
+        n (string-length text)
+        suffix (if (>= n 2) (string-substring text (- n 2) n) "")
+        am (= suffix "am") pm (= suffix "pm")
+        ap (or am pm)
+        core (trim-ascii (if ap (string-substring text 0 (- n 2)) text))
+        colon (string-index-of core ":")
+        hour-text (if (< colon 0) core (string-substring core 0 colon))
+        minute-text (if (< colon 0) "0" (string-substring core (inc colon) (string-length core)))
+        hour (number-of hour-text)
+        minute (number-of minute-text)
+        hour-ok (and (>= (string-length hour-text) 1) (<= (string-length hour-text) 2) (>= hour 0))
+        minute-ok (if (< colon 0) true (and (= (string-length minute-text) 2) (>= minute 0)))
+        clock-ok (if ap (and (>= hour 1) (<= hour 12)) (and (>= hour 0) (<= hour 23)))
+        hour24 (if ap (+ (if (= hour 12) 0 hour) (if pm 12 0)) hour)]
+    (if (and hour-ok minute-ok clock-ok (<= minute 59) (time-core? core))
+      (string-concat (string-from-i64 hour24) (string-concat ":" (string-from-i64 minute)))
+      "")))
+
+(defn day-token [s :string] :string
+  (cond (= s "day") "*" (= s "daily") "*" (= s "everyday") "*"
+        (= s "weekday") "1-5" (= s "weekdays") "1-5"
+        (= s "weekend") "0,6" (= s "weekends") "0,6"
+        (= s "sun") "0" (= s "sunday") "0"
+        (= s "mon") "1" (= s "monday") "1"
+        (= s "tue") "2" (= s "tuesday") "2"
+        (= s "wed") "3" (= s "wednesday") "3"
+        (= s "thu") "4" (= s "thursday") "4"
+        (= s "fri") "5" (= s "friday") "5"
+        (= s "sat") "6" (= s "saturday") "6"
+        :else ""))
+
+(defn skip-day-separators [s :string i :i64] :i64
+  (if (>= i (string-length s)) i
+    (let [c (string-code-point-at s i)]
+      (if (or (= c 44) (time-space? c))
+        (recur s (inc i)) i))))
+
+(defn day-token-end [s :string i :i64] :i64
+  (if (>= i (string-length s)) i
+    (let [c (string-code-point-at s i)]
+      (if (or (= c 44) (time-space? c)) i (recur s (inc i))))))
+
+(defn day-list [s :string i :i64 acc :string star :bool seen :bool] :string
+  (let [start (skip-day-separators s i)]
+    (if (>= start (string-length s))
+      (if seen (if star "*" acc) "")
+      (let [end (day-token-end s start)
+            token (string-substring s start end)
+            value (day-token token)]
+        (cond (= token "and") (day-list s end acc star seen)
+              (= value "") ""
+              (= value "*") (day-list s end acc true true)
+              star (day-list s end acc star true)
+              :else (day-list s end (if (= acc "") value (string-concat acc (string-concat "," value))) star true))))))
+
+(defn strip-trailing-at [s :string] :string
+  (let [text (trim-ascii s) n (string-length text)]
+    (if (and (>= n 3) (= (string-substring text (- n 3) n) " at"))
+      (trim-ascii (string-substring text 0 (- n 3))) text)))
+
+(defn natural-cron-from [s :string i :i64] :string
+  (if (>= i (string-length s)) ""
+    (if (not (time-space? (string-code-point-at s i)))
+      (recur s (inc i))
+      (let [clock (parse-clock (string-substring s (inc i) (string-length s)))]
+        (if (= clock "")
+          (recur s (inc i))
+          (let [day-part (strip-trailing-at (string-substring s 0 i))
+                dow (day-list day-part 0 "" false false)
+                colon (string-index-of clock ":")
+                hour (string-substring clock 0 colon)
+                minute (string-substring clock (inc colon) (string-length clock))]
+            (if (= dow "") ""
+              (string-concat minute (string-concat " " (string-concat hour
+                (string-concat " * * " dow)))))))))))
+
+(defn natural-cron [s :string] :string
+  (natural-cron-from (trim-ascii (lower-text s)) 0))
+
+(defn parse-schedule-form [s :string] :string
+  (let [text (trim-ascii s)
+        lower-s (lower-text text)
+        every? (starts-with-text? lower-s "every ")
+        body (if every? (string-substring lower-s 6 (string-length lower-s)) lower-s)
+        relative? (starts-with-text? lower-s "in ")
+        relative (if relative? (duration-minutes (string-substring lower-s 3 (string-length lower-s))) -1)
+        natural (natural-cron body)
+        minutes (duration-minutes body)]
+    (cond (and relative? (> relative 0)) (string-concat "once-after\n" (string-from-i64 relative))
+          (not (= natural "")) (string-concat "cron\n" natural)
+          (> minutes 0) (string-concat "interval\n" (string-from-i64 minutes))
+          (= (cron-problem text) "schedule/ok") (string-concat "cron\n" text)
+          :else "schedule/bad")))
 
 ;; ---------------------------------------------------------------------------
 ;; next-cron: the first minute strictly after AFTER that matches, walked as
