@@ -76,3 +76,22 @@ extraction returned offset `36784`, length `38613`, arity `0`, with raw SHA-256
 The pinned Amu root remains diagnostic-candidate. No guest execution,
 launcher dispatch, CLI output check, cron persistence, or product runtime
 qualification occurred. No test suite or legacy oracle was run.
+
+## Natural weekday canonicalization — 2026-11-01
+
+Commit `e1cec20` deduplicates weekday aliases after mapping them to cron day
+values, matching the `distinct` behavior in CLJK `natural-schedule` (for
+example, `mon, monday` now yields a single `1`). The diagnostic builder is
+pinned to this source commit.
+
+The pinned builder returned exit 0 with KSL2 lock SHA-256
+`7409b3825023c79424f8a10e75b03cb25b9e6b0626b05dc48aa4539922d000f1`, CLI
+source SHA-256 `f55fb591ce6985f65ce5ae94f519c18b910b3913b12c73c318b04df5643534d3`,
+and schedule source SHA-256
+`a8e2bcfccc503877775d6eb3917c23ebf5fc4bba3077e06e5e1d6c3504cf506f`. The
+39,135-byte kseed SHA-256 is
+`ba0986074608d8df7558cd49a4f893b59d6544e177ed830dff5d915dd71fd9c3`; native
+extraction succeeded at offset `37264`, length `39093`, arity `0`, raw SHA-256
+`836f916ce27d58fdfb67742c3a39b31abf32d39d866b9c25a551c6f225b8df69`.
+This remains diagnostic-only. No guest execution, test suite, or legacy oracle
+comparison was run.
