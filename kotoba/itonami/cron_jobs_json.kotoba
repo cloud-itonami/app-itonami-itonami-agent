@@ -1,13 +1,15 @@
 ;; itonami.cron-jobs-json — lossless jobs-array replacement for Hermes' JSON
 ;; store. The JCS reader owns strict structural validation; this adapter
-;; replaces only the top-level `jobs` value and preserves every other byte,
-;; including extension fields with number forms outside JCS canonical output.
+;; replaces the top-level `jobs` value or `updated_at` string and preserves
+;; every other byte, including extension fields with number forms outside JCS
+;; canonical output.
 (ns itonami.cron-jobs-json
   (:require [jcs.reader :as jcs])
-  (:export [jobs-array-start replace-jobs-array
+  (:export [jobs-array-start replace-jobs-array set-updated-at-json
             remove-job-json
             test-replace-preserves-extensions test-replace-refuses-invalid
-            test-remove-preserves-job-extensions test-remove-refuses-missing]))
+            test-remove-preserves-job-extensions test-remove-refuses-missing
+            test-updated-at-preserves-extensions]))
 
 (defn- skip-ws [b :vector-i64 i :i64] :i64
   (if (>= i (vector-count b)) i
@@ -20,6 +22,17 @@
   (if (>= src-start src-end) dst
     (let [ignored (vector-assoc! dst dst-start (vector-at src src-start))]
       (copy-range src (+ src-start 1) src-end dst (+ dst-start 1)))))
+
+(defn- splice-json-range [src :vector-i64 start :i64 end :i64 replacement :string] :string
+  (let [rep (vector-i64-from-bytes (string-to-utf8 replacement))
+        rep-size (vector-count rep)
+        src-size (vector-count src)
+        out-size (+ (+ start rep-size) (- src-size end))
+        out (vector-alloc out-size)
+        p1 (copy-range src 0 start out 0)
+        p2 (copy-range rep 0 rep-size out start)
+        p3 (copy-range src end src-size out (+ start rep-size))]
+    (string-from-utf8 (bytes-from-vector-i64 p3))))
 
 (defn- jobs-array-index [b :vector-i64] :i64
   (if (not (jcs/json-valid? b)) -1
@@ -48,15 +61,90 @@
       (if (not (and (jcs/json-valid? rep) (= (jcs/json-kind rep rep-start) 2)))
         (result-err-of [:result :string :string] "cron-json/replacement-must-be-array")
         (let [end (jcs/json-end src at)
-              rep-size (vector-count rep)
-              src-size (vector-count src)
-              out-size (+ (+ at rep-size) (- src-size end))
-              out (vector-alloc out-size)
-              p1 (copy-range src 0 at out 0)
-              p2 (copy-range rep 0 rep-size out at)
-              p3 (copy-range src end src-size out (+ at rep-size))
-              text (string-from-utf8 (bytes-from-vector-i64 p3))]
+              text (splice-json-range src at end replacement)]
           (result-ok-of [:result :string :string] text))))))
+
+(defn- timestamp-digits? [s :string start :i64 end :i64] :bool
+  (if (>= start end) true
+    (let [c (string-code-point-at s start)]
+      (and (>= c 48) (<= c 57) (timestamp-digits? s (+ start 1) end)))))
+
+(defn- timestamp-char? [s :string i :i64 expected :i64] :bool
+  (= (string-code-point-at s i) expected))
+
+(defn- two-digits [s :string i :i64] :i64
+  (+ (* 10 (- (string-code-point-at s i) 48))
+     (- (string-code-point-at s (+ i 1)) 48)))
+
+(defn- year-number [s :string] :i64
+  (+ (* 1000 (- (string-code-point-at s 0) 48))
+     (+ (* 100 (- (string-code-point-at s 1) 48))
+        (+ (* 10 (- (string-code-point-at s 2) 48))
+           (- (string-code-point-at s 3) 48)))))
+
+(defn- leap-year? [year :i64] :bool
+  (or (= (rem year 400) 0)
+      (and (not (= (rem year 100) 0)) (= (rem year 4) 0))))
+
+(defn- days-in-month [year :i64 month :i64] :i64
+  (cond (= month 2) (if (leap-year? year) 29 28)
+        (or (= month 4) (or (= month 6) (or (= month 9) (= month 11)))) 30
+        :else 31))
+
+(defn- timestamp-valid? [s :string] :bool
+  (let [n (string-length s)]
+    (if (not (or (= n 20) (= n 24))) false
+      (let [year (year-number s)
+            month (two-digits s 5)
+            day (two-digits s 8)
+            hour (two-digits s 11)
+            minute (two-digits s 14)
+            second (two-digits s 17)
+            shape (and (timestamp-digits? s 0 4)
+                       (timestamp-char? s 4 45)
+                       (timestamp-digits? s 5 7)
+                       (timestamp-char? s 7 45)
+                       (timestamp-digits? s 8 10)
+                       (timestamp-char? s 10 84)
+                       (timestamp-digits? s 11 13)
+                       (timestamp-char? s 13 58)
+                       (timestamp-digits? s 14 16)
+                       (timestamp-char? s 16 58)
+                       (timestamp-digits? s 17 19)
+                       (if (= n 20)
+                         (timestamp-char? s 19 90)
+                         (and (timestamp-char? s 19 46)
+                              (timestamp-digits? s 20 23)
+                              (timestamp-char? s 23 90))))]
+        (and shape
+             (>= month 1) (<= month 12)
+             (>= day 1) (<= day (days-in-month year month))
+             (>= hour 0) (<= hour 23)
+             (>= minute 0) (<= minute 59)
+             (>= second 0) (<= second 59))))))
+
+(defn set-updated-at-json [json :string timestamp :string] [:result :string :string]
+  ;; Hermes writes an ISO timestamp on every mutation. Accept only the UTC
+  ;; forms used by its ISO serializer, so the value can be quoted without
+  ;; introducing an unescaped JSON character.
+  (let [src (vector-i64-from-bytes (string-to-utf8 json))
+        root (skip-ws src 0)]
+    (if (not (jcs/json-valid? src))
+      (result-err-of [:result :string :string] "cron-json/invalid-jobs-document")
+      (if (not (= (jcs/json-kind src root) 1))
+        (result-err-of [:result :string :string] "cron-json/root-must-be-object")
+        (if (not (timestamp-valid? timestamp))
+          (result-err-of [:result :string :string] "cron-json/invalid-updated-at")
+          (let [at (jcs/json-member src root "updated_at")
+                quoted (string-concat "\"" (string-concat timestamp "\""))
+                output (if (>= at 0)
+                         (splice-json-range src at (jcs/json-end src at) quoted)
+                         (let [end (jcs/json-end src root)
+                               separator (if (> (jcs/json-count src root) 0) "," "")
+                               field (string-concat separator
+                                       (string-concat "\"updated_at\":" quoted))]
+                           (splice-json-range src (- end 1) (- end 1) field)))]
+            (result-ok-of [:result :string :string] output)))))))
 
 (defn- job-id-matches? [b :vector-i64 job :i64 id :string] :bool
   (let [id-at (jcs/json-member b job "id")]
@@ -149,3 +237,16 @@
 (defn test-remove-refuses-missing [] :bool
   (not (result-ok?-of [:result :string :string]
                       (remove-job-json "{\"jobs\":[{\"id\":\"existing\"}]}" "missing"))))
+
+(defn test-updated-at-preserves-extensions [] :bool
+  (let [source "{\"jobs\":[],\"extension\":1.25e+7,\"updated_at\":\"2026-11-02T03:04:05Z\"}"
+        result (set-updated-at-json source "2026-11-02T03:04:05.006Z")
+        output (result-value-of [:result :string :string] result "")
+        absent (set-updated-at-json "{\"jobs\":[],\"extension\":1.25e+7}" "2026-11-02T03:04:05.006Z")
+        added (result-value-of [:result :string :string] absent "")
+        bad (set-updated-at-json source "2026-02-30T03:04:05.006Z")]
+    (and (result-ok?-of [:result :string :string] result)
+         (string=? output "{\"jobs\":[],\"extension\":1.25e+7,\"updated_at\":\"2026-11-02T03:04:05.006Z\"}")
+         (result-ok?-of [:result :string :string] absent)
+         (string=? added "{\"jobs\":[],\"extension\":1.25e+7,\"updated_at\":\"2026-11-02T03:04:05.006Z\"}")
+         (not (result-ok?-of [:result :string :string] bad)))))

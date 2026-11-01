@@ -1,0 +1,85 @@
+;; itonami.cron-jobs-store — native single-writer removal with durable replace.
+;; The directory must already exist inside the host-granted app-data scope.
+(ns itonami.cron-jobs-store
+  (:require [hata.store-io :as fs]
+            [itonami.cron-jobs-json :as jobs]
+            [itonami.schedule :as schedule])
+  (:export [remove-job remove-job-json test-remove-job-json])
+  (:capabilities [:clock/now :fs/app-data]))
+
+(defn- digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
+
+(defn- parse-epoch-digits [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s)) acc
+    (let [c (string-code-point-at s i)]
+      (if (not (digit? c)) -1
+        (let [d (- c 48)]
+          (if (or (> acc 922337203685477580)
+                  (and (= acc 922337203685477580) (> d 7))) -1
+            (recur s (inc i) (+ (* acc 10) d))))))))
+
+(defn- now-iso-utc [] :string
+  (let [wire (typed-cap-call :clock/now :string :string "wall")
+        millis (if (= (string-length wire) 0) -1 (parse-epoch-digits wire 0 0))]
+    (if (< millis 0) "" (schedule/epoch-ms->iso-utc millis))))
+
+(defn- child-path [dir :string name :string] :string
+  (let [n (string-length dir)]
+    (if (= n 0) ""
+      (if (= (string-code-point-at dir (dec n)) 47)
+        (string-concat dir name)
+        (string-concat dir (string-concat "/" name))))))
+
+(defn- json-result-error [r [:result :string :string]] :string
+  (result-error-of [:result :string :string] r "cron-store/transform-failed"))
+
+(defn remove-job-json [json :string id :string updated-at :string]
+  [:result :string :string]
+  (let [removed (jobs/remove-job-json json id)]
+    (if (not (result-ok?-of [:result :string :string] removed))
+      (result-err-of [:result :string :string] (json-result-error removed))
+      (jobs/set-updated-at-json
+        (result-value-of [:result :string :string] removed "") updated-at))))
+
+(defn- write-atomic [dir :string path :string data :string] :bool
+  (let [tmp (child-path dir ".jobs.json.tmp")
+        written (fs/write tmp data)]
+    (if (not written) false
+      (if (not (fs/sync tmp)) false
+        (if (not (fs/rename tmp path)) false
+          (fs/sync dir))))))
+
+(defn remove-job [cron-dir :string id :string]
+  [:result :string :string]
+  (let [updated-at (now-iso-utc)
+        path (child-path cron-dir "jobs.json")
+        lock-path (child-path cron-dir ".itonami-jobs.lock")]
+    (if (= (string-length updated-at) 0)
+      (result-err-of [:result :string :string] "cron-store/clock-unavailable")
+      (if (or (= (string-length path) 0) (= (string-length lock-path) 0))
+        (result-err-of [:result :string :string] "cron-store/invalid-directory")
+        (if (not (fs/lock lock-path))
+          (result-err-of [:result :string :string] "cron-store/busy-or-lock-denied")
+          (let [exists (fs/exists? path)
+                before (if exists (fs/read path) "{\"jobs\":[]}")
+                changed (remove-job-json before id updated-at)
+                committed (if (result-ok?-of [:result :string :string] changed)
+                            (write-atomic cron-dir path
+                              (result-value-of [:result :string :string] changed ""))
+                            false)
+                unlocked (fs/unlock lock-path)]
+            (if (not unlocked)
+              (result-err-of [:result :string :string] "cron-store/unlock-failed")
+              (if (not (result-ok?-of [:result :string :string] changed))
+                (result-err-of [:result :string :string] (json-result-error changed))
+                (if (not committed)
+                  (result-err-of [:result :string :string] "cron-store/durable-write-failed")
+                  (result-ok-of [:result :string :string]
+                    (result-value-of [:result :string :string] changed "")))))))))))
+
+(defn test-remove-job-json [] :bool
+  (let [source "{\"jobs\":[{\"id\":\"a\",\"future\":1.25e+7}],\"updated_at\":\"2026-11-01T00:00:00Z\"}"
+        result (remove-job-json source "a" "2026-11-02T03:04:05.006Z")
+        output (result-value-of [:result :string :string] result "")]
+    (and (result-ok?-of [:result :string :string] result)
+         (string=? output "{\"jobs\":[],\"updated_at\":\"2026-11-02T03:04:05.006Z\"}"))))

@@ -16,6 +16,8 @@ AMU_CLI_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
 KOTOBA_COMMIT=63e30efc6402320fca6f9c70abd93f113e05d99c
 KOTOBA_JCS_PATH=lib/org.ietf.jcs/kotoba/jcs/reader.kotoba
 EXPECTED_JCS_SHA256=f8af2953904bd0a96e7b5c3b9e34151bcae3754e5358669adb8ac289acc0872f
+KOTOBA_STORE_IO_PATH=lib/kotoba.hata/src/hata/store_io.kotoba
+EXPECTED_STORE_IO_SHA256=096f6d29d77f374313600a51a18366ee59525c7385456a01218a160904187b10
 
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
 GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
@@ -48,25 +50,34 @@ if [ "$AMU_CLI_SHA256" != "$EXPECTED_AMU_CLI_SHA256" ]; then
   exit 2
 fi
 
-mkdir -p "$OUT_DIR/src/gate" "$OUT_DIR/src/itonami" "$OUT_DIR/src/jcs"
+mkdir -p "$OUT_DIR/src/gate" "$OUT_DIR/src/hata" "$OUT_DIR/src/itonami" "$OUT_DIR/src/jcs"
 cp "$REPO_ROOT/kotoba/itonami/cron_jobs_json.kotoba" "$OUT_DIR/src/itonami/cron_jobs_json.kotoba"
+cp "$REPO_ROOT/kotoba/itonami/cron_jobs_store.kotoba" "$OUT_DIR/src/itonami/cron_jobs_store.kotoba"
+cp "$REPO_ROOT/kotoba/itonami/schedule.kotoba" "$OUT_DIR/src/itonami/schedule.kotoba"
 cp "$REPO_ROOT/test/native/cron_jobs_json_gate.kotoba" "$OUT_DIR/src/gate/cron_jobs_json_gate.kotoba"
 git -C "$KOTOBA_REPO" show "$KOTOBA_COMMIT:$KOTOBA_JCS_PATH" > "$OUT_DIR/src/jcs/reader.kotoba"
+git -C "$KOTOBA_REPO" show "$KOTOBA_COMMIT:$KOTOBA_STORE_IO_PATH" > "$OUT_DIR/src/hata/store_io.kotoba"
 
 GATE="$OUT_DIR/src/gate/cron_jobs_json_gate.kotoba"
+STORE_IO="$OUT_DIR/src/hata/store_io.kotoba"
 SOURCE="$OUT_DIR/src/itonami/cron_jobs_json.kotoba"
+STORE="$OUT_DIR/src/itonami/cron_jobs_store.kotoba"
+SCHEDULE="$OUT_DIR/src/itonami/schedule.kotoba"
 JCS="$OUT_DIR/src/jcs/reader.kotoba"
 GATE_SHA256=$(shasum -a 256 "$GATE" | cut -d ' ' -f 1)
+STORE_IO_SHA256=$(shasum -a 256 "$STORE_IO" | cut -d ' ' -f 1)
 SOURCE_SHA256=$(shasum -a 256 "$SOURCE" | cut -d ' ' -f 1)
+STORE_SHA256=$(shasum -a 256 "$STORE" | cut -d ' ' -f 1)
+SCHEDULE_SHA256=$(shasum -a 256 "$SCHEDULE" | cut -d ' ' -f 1)
 JCS_SHA256=$(shasum -a 256 "$JCS" | cut -d ' ' -f 1)
-if [ "$JCS_SHA256" != "$EXPECTED_JCS_SHA256" ]; then
-  printf 'unexpected pinned JCS source digest: %s\n' "$JCS_SHA256" >&2
+if [ "$JCS_SHA256" != "$EXPECTED_JCS_SHA256" ] || [ "$STORE_IO_SHA256" != "$EXPECTED_STORE_IO_SHA256" ]; then
+  printf 'unexpected pinned Kotoba library source digest: JCS=%s store-io=%s\n' "$JCS_SHA256" "$STORE_IO_SHA256" >&2
   exit 2
 fi
 
-printf 'KSL2\nentry %s\nmodule itonami.cron-jobs-json %s\nmodule itonami.cron-jobs-json-gate %s\nmodule jcs.reader %s\nfile %s %s\nfile %s %s\nfile %s %s\n' \
-  "$GATE" "$SOURCE" "$GATE" "$JCS" \
-  "$GATE_SHA256" "$GATE" "$SOURCE_SHA256" "$SOURCE" "$JCS_SHA256" "$JCS" \
+printf 'KSL2\nentry %s\nmodule hata.store-io %s\nmodule itonami.cron-jobs-json %s\nmodule itonami.cron-jobs-json-gate %s\nmodule itonami.cron-jobs-store %s\nmodule itonami.schedule %s\nmodule jcs.reader %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\n' \
+  "$GATE" "$STORE_IO" "$SOURCE" "$GATE" "$STORE" "$SCHEDULE" "$JCS" \
+  "$GATE_SHA256" "$GATE" "$STORE_IO_SHA256" "$STORE_IO" "$SOURCE_SHA256" "$SOURCE" "$STORE_SHA256" "$STORE" "$SCHEDULE_SHA256" "$SCHEDULE" "$JCS_SHA256" "$JCS" \
   > "$OUT_DIR/source.ksl"
 LOCK_SHA256=$(shasum -a 256 "$OUT_DIR/source.ksl" | cut -d ' ' -f 1)
 PROGRAM="$OUT_DIR/cron-jobs-json-gate"
@@ -82,9 +93,12 @@ SOURCE_REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)
   printf 'itonami_source_revision: %s\n' "$SOURCE_REVISION"
   printf 'kotoba_source_commit: %s\n' "$KOTOBA_COMMIT"
   printf 'kotoba_jcs_source_sha256: %s\n' "$JCS_SHA256"
+  printf 'kotoba_store_io_source_sha256: %s\n' "$STORE_IO_SHA256"
   printf 'amu_cli_commit: %s\n' "$AMU_CLI_COMMIT"
   printf 'amu_cli_sha256: %s\n' "$AMU_CLI_SHA256"
   printf 'adapter_source_sha256: %s\n' "$SOURCE_SHA256"
+  printf 'store_source_sha256: %s\n' "$STORE_SHA256"
+  printf 'schedule_source_sha256: %s\n' "$SCHEDULE_SHA256"
   printf 'test_gate_source_sha256: %s\n' "$GATE_SHA256"
   printf 'ksl2_sha256: %s\n' "$LOCK_SHA256"
   printf 'program_sha256: %s\n' "$PROGRAM_SHA256"
@@ -92,7 +106,7 @@ SOURCE_REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)
   printf 'compile_result: %s\n' "$COMPILE_RESULT"
   printf 'codesign_verification: PASS\n'
   printf 'native_positive_refusal_gate: PASS\n'
-  printf 'scope: lossless top-level jobs-array replacement and job removal; no jobs create/update or launcher route qualification\n'
+  printf 'scope: standalone native positive/refusal gate for Kotoba JSON transforms and UTC timestamp formatting; store source is compiled only, with no filesystem runtime gate, full CRUD, or launcher route qualification\n'
 } > "$OUT_DIR/build-receipt.txt"
 
 cat "$OUT_DIR/build-receipt.txt"

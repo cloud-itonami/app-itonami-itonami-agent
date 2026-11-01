@@ -1,9 +1,15 @@
 (ns itonami.cron-jobs-json-gate
-  (:require [itonami.cron-jobs-json :as jobs])
-  (:export [main]))
+  (:require [itonami.cron-jobs-json :as jobs]
+            [itonami.cron-jobs-store :as store]
+            [itonami.schedule :as schedule])
+  (:export [main])
+  (:capabilities [:fs/app-data]))
 
 (defn main [] :i64
   (if (and (jobs/test-replace-preserves-extensions)
            (jobs/test-replace-refuses-invalid)
            (jobs/test-remove-preserves-job-extensions)
-           (jobs/test-remove-refuses-missing)) 0 1))
+           (jobs/test-remove-refuses-missing)
+           (jobs/test-updated-at-preserves-extensions)
+           (store/test-remove-job-json)
+           (schedule/test-iso-utc)) 0 1))

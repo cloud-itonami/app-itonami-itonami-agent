@@ -1,6 +1,6 @@
 # Itonami cron jobs JSON adapter — 2026-11-02
 
-This slice adds a Kotoba adapter that replaces only the top-level `jobs`
+This slice adds a Kotoba adapter that replaces or removes the top-level `jobs`
 array in a JSON document. It delegates strict structural validation to the
 canonical Kotoba JCS reader and splices the replacement into the original UTF-8
 bytes. Other top-level members remain byte-for-byte unchanged, including
@@ -36,8 +36,16 @@ remaining job objects byte-for-byte. The native positive case retains a nested
 refused. Latest receipt:
 `/Users/junkawasaki/github/workspaces/codex/awai-60-cron-jobs-json-native-gate-20261102-r6/build-receipt.txt`.
 
-This still does not implement create/update CRUD, locking, durable filesystem
-writes, or launcher dispatch. The reader uses the strict JCS profile: valid RFC
-8259 documents with escaped object keys or duplicate keys are refused.
+The standalone artifact now also runs positive/refusal cases for adding and
+replacing Hermes-style `updated_at`, and the Kotoba UTC formatter (epoch,
+leap-day with milliseconds, and negative-time refusal). A Kotoba store module
+compiles against the canonical Hata `store-io` interface and uses the Kotoba
+clock capability for timestamps. Latest receipt:
+`/Users/junkawasaki/github/workspaces/codex/awai-60-cron-jobs-json-native-gate-20261102-r17/build-receipt.txt`.
+
+The store's filesystem calls are compiled but not executed by this gate. Full
+create/update CRUD, a filesystem runtime gate, and launcher dispatch remain
+unqualified. The reader uses the strict JCS profile: valid RFC 8259 documents
+with escaped object keys or duplicate keys are refused.
 Compatibility with Hermes-generated `jobs.json` files remains to be qualified
 before using this adapter for writes.

@@ -25,7 +25,7 @@
 (ns itonami.schedule
   (:export [cron-problem duration-minutes parse-schedule-form next-cron-ms next-interval-ms next-once-ms due?
             days-from-civil civil-year civil-month civil-day weekday
-            test-civil test-parse test-cron test-other]))
+            epoch-ms->iso-utc test-civil test-parse test-cron test-other test-iso-utc]))
 
 ;; ---------------------------------------------------------------------------
 ;; Civil calendar (H. Hinnant's days_from_civil / civil_from_days), in days
@@ -73,6 +73,42 @@
 ;; 0 = Sunday; 1970-01-01 was a Thursday
 (defn weekday [z :i64] :i64
   (let [r (- (+ z 4) (* 7 (quot (+ z 4) 7)))] (if (< r 0) (+ r 7) r)))
+
+(defn- pad2 [n :i64] :string
+  (if (< n 10) (string-concat "0" (string-from-i64 n)) (string-from-i64 n)))
+
+(defn- pad3 [n :i64] :string
+  (if (< n 10) (string-concat "00" (string-from-i64 n))
+    (if (< n 100) (string-concat "0" (string-from-i64 n)) (string-from-i64 n))))
+
+(defn- pad4 [n :i64] :string
+  (if (< n 10) (string-concat "000" (string-from-i64 n))
+    (if (< n 100) (string-concat "00" (string-from-i64 n))
+      (if (< n 1000) (string-concat "0" (string-from-i64 n)) (string-from-i64 n)))))
+
+(defn epoch-ms->iso-utc [epoch-ms :i64] :string
+  ;; The store's updated_at uses the UTC subset emitted by Date#toISOString.
+  (if (< epoch-ms 0) ""
+    (let [days (floor-div epoch-ms 86400000)
+          day-ms (- epoch-ms (* days 86400000))
+          year (civil-year days)
+          month (civil-month days)
+          day (civil-day days)
+          hour (quot day-ms 3600000)
+          minute (quot (- day-ms (* hour 3600000)) 60000)
+          second (quot (- day-ms (* hour 3600000) (* minute 60000)) 1000)
+          millis (- day-ms (* hour 3600000) (* minute 60000) (* second 1000))]
+      (if (or (< year 0) (> year 9999)) ""
+        (let [date-month (string-concat (pad4 year)
+                     (string-concat "-" (pad2 month)))
+              date-full (string-concat date-month (string-concat "-" (pad2 day)))
+              time-hour (string-concat (pad2 hour)
+                     (string-concat ":" (pad2 minute)))
+              time-second (string-concat time-hour
+                     (string-concat ":" (pad2 second)))
+              time-millis (string-concat time-second
+                     (string-concat "." (pad3 millis)))]
+          (string-concat date-full (string-concat "T" (string-concat time-millis "Z"))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Parsing. A field is a bit mask (bit v = value v allowed); -1 = malformed.
@@ -549,3 +585,8 @@
            (not (due? true 1792638000001 1792638000000))
            (not (due? false 1792638000000 1792638000000))
            (not (due? true -1 1792638000000))) true false))
+
+(defn test-iso-utc [] :bool
+  (and (string=? (epoch-ms->iso-utc 0) "1970-01-01T00:00:00.000Z")
+       (string=? (epoch-ms->iso-utc 951782400123) "2000-02-29T00:00:00.123Z")
+       (string=? (epoch-ms->iso-utc -1) "")))
