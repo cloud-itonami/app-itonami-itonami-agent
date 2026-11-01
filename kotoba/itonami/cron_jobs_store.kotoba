@@ -377,7 +377,7 @@
                   (result-error-of [:result :string :string] changed "cron-store/update-schedule-failed"))
                 (if (not committed)
                   (result-err-of [:result :string :string] "cron-store/durable-write-failed")
-                  (result-ok-of [:result :string :string] id)))))))))
+                  (result-ok-of [:result :string :string] id))))))))))
 
 (defn update-schedule [cron-dir :string id :string schedule-text :string offset-text :string]
   [:result :string :string]

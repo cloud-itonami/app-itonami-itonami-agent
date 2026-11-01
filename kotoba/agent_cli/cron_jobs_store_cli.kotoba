@@ -50,7 +50,7 @@
   (let [result (store/update-schedule directory job-id schedule-text offset)]
     (if (result-ok?-of [:result :string :string] result)
       0
-      (fail (result-error-of [:result :string :string] result "cron-store/update-schedule-failed"))))
+      (fail (result-error-of [:result :string :string] result "cron-store/update-schedule-failed")))))
 
 (defn main [] :i64
   (let [action (arg 0)
