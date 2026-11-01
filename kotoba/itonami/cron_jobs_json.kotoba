@@ -465,7 +465,7 @@
                 (if (not (result-ok?-of [:result :string :string] changed))
                   (result-err-of [:result :string :string] "cron-json/resume-replacement-failed")
                   (set-updated-at-json
-                    (result-value-of [:result :string :string] changed "") updated-at)))))))))
+                    (result-value-of [:result :string :string] changed "") updated-at))))))))))
 
 (defn test-resume-cron-preserves-extensions [] :bool
   (let [source "{\"jobs\":[{\"id\":\"resume\",\"enabled\":false,\"state\":\"paused\",\"paused_at\":\"old\",\"paused_reason\":\"old\",\"schedule\":{\"kind\":\"cron\",\"expr\":\"*/15 * * * *\"},\"next_run_at\":null,\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":{\"x\":true}}"
