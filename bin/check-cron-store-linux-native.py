@@ -71,6 +71,8 @@ def run(name, argv, cwd, env, calls, timeout=900):
     calls.append({"name": name, "exit": result.returncode,
                   "seconds": round(time.monotonic() - started, 3),
                   "stdout_sha256": sha(result.stdout), "stderr_sha256": sha(result.stderr)})
+    write(Path(cwd) / f"{name}.stdout", result.stdout)
+    write(Path(cwd) / f"{name}.stderr", result.stderr)
     if result.returncode != 0:
         raise RuntimeError(f"{name} failed ({result.returncode}): "
                            f"{result.stderr.decode(errors='replace')[-2000:]}")
@@ -155,7 +157,13 @@ def execute(name, runner, payload, scope, mode, out, calls):
     argv = [runner, payload, "0", "0", "x86_64", "7,35,38", "--", "/d", mode]
     stdout = run(name, argv, out, env, calls)
     if not re.search(rb":result 0\b", stdout):
-        raise RuntimeError(f"{name} returned no successful KX64 result: {stdout!r}")
+        state = {}
+        for path in sorted(scope.rglob("*")):
+            if path.is_file():
+                state[str(path.relative_to(scope))] = path.read_bytes()[:4096].decode(errors="replace")
+        raise RuntimeError(f"{name} returned no successful KX64 result: "
+                           f"stdout={stdout!r}; stderr={(out / (name + '.stderr')).read_bytes()!r}; "
+                           f"scope={state!r}")
     return stdout
 
 

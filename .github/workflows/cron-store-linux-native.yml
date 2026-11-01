@@ -36,6 +36,14 @@ jobs:
           git -C "$GITHUB_WORKSPACE" -c protocol.version=2 fetch --depth=1 origin "$SOURCE_REF"
           git -C "$GITHUB_WORKSPACE" checkout --detach FETCH_HEAD
       - name: Run the pinned Kotoba artifact on Amu native Linux runtime
+        id: native-gate
         run: |
           python3 bin/check-cron-store-linux-native.py \
             --output "$RUNNER_TEMP/itonami-cron-store-linux-native"
+      - name: Retain native gate evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: itonami-cron-store-linux-native
+          path: ${{ runner.temp }}/itonami-cron-store-linux-native
+          if-no-files-found: warn
