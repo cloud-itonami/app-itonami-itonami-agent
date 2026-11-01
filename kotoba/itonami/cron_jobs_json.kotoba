@@ -4,14 +4,17 @@
 ;; every other byte, including extension fields with number forms outside JCS
 ;; canonical output.
 (ns itonami.cron-jobs-json
-  (:require [jcs.reader :as jcs])
+  (:require [jcs.reader :as jcs]
+            [itonami.schedule :as schedule])
   (:export [jobs-array-start replace-jobs-array set-updated-at-json
-            remove-job-json list-jobs-json pause-job-json
+            remove-job-json list-jobs-json pause-job-json resume-job-json
             test-replace-preserves-extensions test-replace-refuses-invalid
             test-remove-preserves-job-extensions test-remove-refuses-missing
             test-list-projects-hermes-fields test-list-refuses-non-object-job
             test-updated-at-preserves-extensions test-pause-preserves-extensions
-            test-pause-refuses-missing test-pause-escapes-reason]))
+            test-pause-refuses-missing test-pause-escapes-reason
+            test-resume-cron-preserves-extensions test-resume-once-completed
+            test-resume-refuses-invalid-schedule]))
 
 (defn- skip-ws [b :vector-i64 i :i64] :i64
   (if (>= i (vector-count b)) i
@@ -369,6 +372,123 @@
                 (set-updated-at-json
                   (result-value-of [:result :string :string] changed "")
                   updated-at)))))))))
+
+(defn- object-string [b :vector-i64 object-at :i64 key :string] :string
+  (let [at (jcs/json-member b object-at key)]
+    (if (or (< at 0) (not (= (jcs/json-kind b at) 3))) ""
+      (jcs/json-string b at))))
+
+(defn- object-int [b :vector-i64 object-at :i64 key :string] :i64
+  (let [at (jcs/json-member b object-at key)]
+    (if (or (< at 0) (not (jcs/json-int-ok? b at))) -1
+      (jcs/json-int b at))))
+
+(defn- resumed-job-object [b :vector-i64 job-at :i64 now-ms :i64 offset :i64]
+  [:result :string :string]
+  (let [schedule-at (jcs/json-member b job-at "schedule")]
+    (if (or (< schedule-at 0) (not (= (jcs/json-kind b schedule-at) 1)))
+      (result-err-of [:result :string :string] "cron-json/invalid-schedule")
+      (let [kind (object-string b schedule-at "kind")
+            schedule-next-ms (cond
+                      (string=? kind "cron")
+                        (let [expr (object-string b schedule-at "expr")]
+                          (if (= (schedule/cron-problem expr) "schedule/ok")
+                            (schedule/next-cron-ms expr now-ms offset) -2))
+                      (string=? kind "interval")
+                        (let [minutes (object-int b schedule-at "minutes")]
+                          (if (> minutes 0) (schedule/next-interval-ms now-ms minutes) -2))
+                      (string=? kind "once")
+                        (let [run-at (object-string b schedule-at "run_at")
+                              run-ms (schedule/iso-time-epoch-ms run-at)]
+                          (if (< run-ms 0) -2 (schedule/next-once-ms run-ms now-ms)))
+                      :else -2)
+            recurring? (or (string=? kind "cron") (string=? kind "interval"))
+            stored-at (jcs/json-member b job-at "next_run_at")
+            stored-ms (if (and (>= stored-at 0) (= (jcs/json-kind b stored-at) 3))
+                        (schedule/iso-time-epoch-ms (jcs/json-string b stored-at)) -1)
+            ;; Preserve the legacy resume behavior for a recurring job whose
+            ;; stored next_run_at is already due; otherwise compute from now.
+            next-ms (if (and recurring? (>= stored-ms 0) (<= stored-ms now-ms))
+                      stored-ms schedule-next-ms)]
+        (if (< next-ms -1)
+          (result-err-of [:result :string :string] "cron-json/invalid-schedule")
+          (let [next-value (if (< next-ms 0) "null"
+                             (json-string-value (schedule/epoch-ms->iso-utc next-ms)))
+                enabled (set-object-member-raw (raw-value b job-at) "enabled" "true")
+                state (set-object-member-raw enabled "state"
+                         (if (>= next-ms 0) "\"scheduled\"" "\"completed\""))
+                paused-at (set-object-member-raw state "paused_at" "null")
+                paused-reason (set-object-member-raw paused-at "paused_reason" "null")]
+            (result-ok-of [:result :string :string]
+              (set-object-member-raw paused-reason "next_run_at" next-value))))))))
+
+(defn- resume-jobs-array [b :vector-i64 array-at :i64 id :string now-ms :i64
+                          offset :i64 i :i64 out :string count :i64 found :i64 error :string]
+  [:record :itonami.cron-jobs-json/ResumeScan
+   [[:array :string] [:found :i64] [:error :string]]]
+  (if (or (>= i (jcs/json-count b array-at)) (> (string-length error) 0))
+    (record-new [:ref :itonami.cron-jobs-json/ResumeScan]
+                (if (>= i (jcs/json-count b array-at))
+                  (string-concat out "]") out) found error)
+    (let [job-at (jcs/json-element b array-at i)
+          match (job-id-matches? b job-at id)
+          resumed (if match (resumed-job-object b job-at now-ms offset)
+                    (result-ok-of [:result :string :string] (raw-value b job-at)))
+          failure (if (result-ok?-of [:result :string :string] resumed) ""
+                    (result-error-of [:result :string :string] resumed "cron-json/resume-failed"))
+          text (if (result-ok?-of [:result :string :string] resumed)
+                 (result-value-of [:result :string :string] resumed "") "")
+          next-out (if (> (string-length failure) 0) out
+                     (string-concat out
+                       (string-concat (if (> count 0) "," "") text)))]
+      (recur b array-at id now-ms offset (inc i) next-out
+             (if (> (string-length failure) 0) count (inc count))
+             (if match 1 found) failure))))
+
+(defn resume-job-json [json :string id :string updated-at :string now-ms :i64
+                       offset :i64] [:result :string :string]
+  (let [b (vector-i64-from-bytes (string-to-utf8 json))
+        array-at (jobs-array-index b)]
+    (if (< array-at 0)
+      (result-err-of [:result :string :string] "cron-json/invalid-jobs-document")
+      (if (not (all-job-objects? b array-at 0))
+        (result-err-of [:result :string :string] "cron-json/job-entry-must-be-object")
+        (let [scan (resume-jobs-array b array-at id now-ms offset 0 "[" 0 0 "")
+              found (record-get [:ref :itonami.cron-jobs-json/ResumeScan] scan :found)
+              error (record-get [:ref :itonami.cron-jobs-json/ResumeScan] scan :error)]
+          (if (> (string-length error) 0)
+            (result-err-of [:result :string :string] error)
+            (if (= found 0)
+              (result-err-of [:result :string :string] "cron-json/job-not-found")
+              (let [changed (replace-jobs-array json
+                              (record-get [:ref :itonami.cron-jobs-json/ResumeScan] scan :array))]
+                (if (not (result-ok?-of [:result :string :string] changed))
+                  (result-err-of [:result :string :string] "cron-json/resume-replacement-failed")
+                  (set-updated-at-json
+                    (result-value-of [:result :string :string] changed "") updated-at)))))))))
+
+(defn test-resume-cron-preserves-extensions [] :bool
+  (let [source "{\"jobs\":[{\"id\":\"resume\",\"enabled\":false,\"state\":\"paused\",\"paused_at\":\"old\",\"paused_reason\":\"old\",\"schedule\":{\"kind\":\"cron\",\"expr\":\"*/15 * * * *\"},\"next_run_at\":null,\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":{\"x\":true}}"
+        result (resume-job-json source "resume" "2026-11-02T03:04:05.000Z"
+                                1793588645000 540)
+        output (result-value-of [:result :string :string] result "")]
+    (and (result-ok?-of [:result :string :string] result)
+         (string=? output "{\"jobs\":[{\"id\":\"resume\",\"enabled\":true,\"state\":\"scheduled\",\"paused_at\":null,\"paused_reason\":null,\"schedule\":{\"kind\":\"cron\",\"expr\":\"*/15 * * * *\"},\"next_run_at\":\"2026-11-02T03:15:00.000Z\",\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":{\"x\":true},\"updated_at\":\"2026-11-02T03:04:05.000Z\"}"))))
+
+(defn test-resume-once-completed [] :bool
+  (let [result (resume-job-json
+                 "{\"jobs\":[{\"id\":\"once\",\"enabled\":false,\"schedule\":{\"kind\":\"once\",\"run_at\":\"2020-01-01T00:00:00Z\"},\"next_run_at\":null}]}"
+                 "once" "2026-11-02T03:04:05.000Z" 1793588645000 0)
+        output (result-value-of [:result :string :string] result "")]
+    (and (result-ok?-of [:result :string :string] result)
+         (>= (string-index-of output "\"state\":\"completed\"") 0)
+         (>= (string-index-of output "\"next_run_at\":null") 0))))
+
+(defn test-resume-refuses-invalid-schedule [] :bool
+  (not (result-ok?-of [:result :string :string]
+        (resume-job-json
+          "{\"jobs\":[{\"id\":\"bad\",\"schedule\":{\"kind\":\"cron\",\"expr\":\"* * *\"}}]}"
+          "bad" "2026-11-02T03:04:05.000Z" 1793588645000 0))))
 
 (defn test-list-projects-hermes-fields [] :bool
   (let [source "{\"jobs\":[{\"id\":\"live\",\"name\":\"A\",\"prompt\":\"p\",\"enabled\":true,\"private\":7},{\"id\":\"paused\",\"enabled\":false,\"state\":\"paused\"}],\"extension\":1.25e+7}"

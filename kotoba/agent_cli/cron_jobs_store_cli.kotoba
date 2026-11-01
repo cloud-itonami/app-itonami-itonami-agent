@@ -1,5 +1,5 @@
 (ns agent-cli-cron-jobs-store
-  "List and remove cron jobs from an Itonami app-data directory using Kotoba
+  "List and mutate cron jobs in an Itonami app-data directory using Kotoba
   and the scoped Hata store adapter. The native launcher supplies the action,
   directory, and optional job ID as argv values 0, 1, and 2."
   (:require [itonami.cron-jobs-store :as store])
@@ -33,6 +33,12 @@
       0
       (fail (result-error-of [:result :string :string] result "cron-store/pause-failed")))))
 
+(defn- resume-command [directory :string job-id :string offset :string] :i64
+  (let [result (store/resume-job directory job-id offset)]
+    (if (result-ok?-of [:result :string :string] result)
+      0
+      (fail (result-error-of [:result :string :string] result "cron-store/resume-failed"))))
+
 (defn main [] :i64
   (let [action (arg 0)
         directory (arg 1)]
@@ -41,8 +47,10 @@
         (list-command directory (arg 2))
       (string=? action "pause")
         (pause-command directory (arg 2) (arg 3))
+      (string=? action "resume")
+        (resume-command directory (arg 2) (arg 3))
       (string=? action "remove")
         (let [job-id (arg 2)
               result (store/remove-job directory job-id)]
           (if (result-ok?-of [:result :string :string] result) 0 1))
-      :else (fail "usage: itonami-agent cron jobs list <absolute-app-data-dir> [false] | pause <absolute-app-data-dir> <job-id> [reason] | remove <absolute-app-data-dir> <job-id>"))))
+      :else (fail "usage: itonami-agent cron jobs list <absolute-app-data-dir> [false] | pause <absolute-app-data-dir> <job-id> [reason] | resume <absolute-app-data-dir> <job-id> | remove <absolute-app-data-dir> <job-id>"))))

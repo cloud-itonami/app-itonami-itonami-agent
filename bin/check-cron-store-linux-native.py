@@ -174,10 +174,13 @@ def execute(name, runner, payload, scope, action, value, option, expected_result
     return stdout
 
 
-def execute_launcher(name, launcher, scope, action, value, option, expected_exit, out, calls):
+def execute_launcher(name, launcher, scope, action, value, option, expected_exit, out, calls,
+                    env_overrides=None):
     env = dict(os.environ)
     env.pop("ITONAMI_CRON_JOBS_RUNNER", None)
     env.pop("ITONAMI_CRON_JOBS_PAYLOAD", None)
+    if env_overrides:
+        env.update(env_overrides)
     argv = [launcher, "cron", "jobs", action, scope / "d"]
     if value != "":
         argv.append(value)
@@ -438,6 +441,78 @@ def main():
     if (launcher_pause_refusal / "d/jobs.json").read_text(encoding="ascii") != pause_refusal_document:
         raise RuntimeError("launcher pause refusal modified jobs.json")
 
+    resume_document = ('{"jobs":[{"id":"resume-me","enabled":false,"state":"paused",'
+                       '"paused_at":"old","paused_reason":"old",'
+                       '"schedule":{"kind":"cron","expr":"*/15 * * * *"},'
+                       '"next_run_at":null,"future":1.25e+7}],"extension":{"x":true}}')
+    resume_scope = out / "resume-scope"
+    (resume_scope / "d").mkdir(parents=True)
+    (resume_scope / "d/jobs.json").write_text(resume_document, encoding="ascii")
+    resume_stdout = execute("runtime-resume-cron-positive", runner, payload, resume_scope,
+                            "resume", "resume-me", "+0000", 0, out, calls)
+    resumed = json.loads((resume_scope / "d/jobs.json").read_text(encoding="ascii"))
+    resumed_job = resumed["jobs"][0]
+    if (resumed_job.get("enabled") is not True or resumed_job.get("state") != "scheduled"
+            or resumed_job.get("paused_at") is not None
+            or resumed_job.get("paused_reason") is not None
+            or resumed.get("extension") != {"x": True}
+            or resumed_job.get("future") != 1.25e7):
+        raise RuntimeError(f"resume did not restore job state or preserve extensions: {resumed!r}")
+    next_at = dt.datetime.fromisoformat(resumed_job["next_run_at"].replace("Z", "+00:00"))
+    now = dt.datetime.now(dt.timezone.utc)
+    if (next_at <= now or (next_at - now).total_seconds() > 15 * 60
+            or next_at.minute % 15 != 0 or next_at.second != 0):
+        raise RuntimeError(f"resume cron next_run_at is outside expected UTC quarter hour: {next_at}")
+    updated_at = dt.datetime.fromisoformat(resumed["updated_at"].replace("Z", "+00:00"))
+    if abs(updated_at.timestamp() - time.time()) > 10:
+        raise RuntimeError(f"resume updated_at is outside 10 seconds of host UTC: {updated_at}")
+    if (resume_scope / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("resume positive store left a temporary file")
+
+    expired_once_scope = out / "resume-expired-once-scope"
+    (expired_once_scope / "d").mkdir(parents=True)
+    (expired_once_scope / "d/jobs.json").write_text(
+        '{"jobs":[{"id":"expired","enabled":false,"schedule":{"kind":"once",'
+        '"run_at":"2020-01-01T00:00:00Z"},"next_run_at":null}]}', encoding="ascii")
+    execute("runtime-resume-expired-once", runner, payload, expired_once_scope,
+            "resume", "expired", "+0000", 0, out, calls)
+    expired = json.loads((expired_once_scope / "d/jobs.json").read_text(encoding="ascii"))["jobs"][0]
+    if expired.get("enabled") is not True or expired.get("state") != "completed" or expired.get("next_run_at") is not None:
+        raise RuntimeError(f"expired one-shot resume mismatch: {expired!r}")
+
+    invalid_resume_scope = out / "resume-invalid-scope"
+    (invalid_resume_scope / "d").mkdir(parents=True)
+    invalid_resume_document = '{"jobs":[{"id":"bad","schedule":{"kind":"cron","expr":"* * *"}}]}'
+    (invalid_resume_scope / "d/jobs.json").write_text(invalid_resume_document, encoding="ascii")
+    execute("runtime-resume-invalid-refusal", runner, payload, invalid_resume_scope,
+            "resume", "bad", "+0000", 2, out, calls, allow_stderr=True)
+    if (invalid_resume_scope / "d/jobs.json").read_text(encoding="ascii") != invalid_resume_document:
+        raise RuntimeError("invalid resume refusal modified jobs.json")
+
+    launcher_resume = out / "launcher-resume-scope"
+    (launcher_resume / "d").mkdir(parents=True)
+    (launcher_resume / "d/jobs.json").write_text(resume_document, encoding="ascii")
+    launcher_resume_stdout = execute_launcher("launcher-resume-cron-positive", package_launcher,
+                                              launcher_resume, "resume", "resume-me", "", 0,
+                                              out, calls, env_overrides={"TZ": "UTC"})
+    launcher_resumed = json.loads((launcher_resume / "d/jobs.json").read_text(encoding="ascii"))
+    launcher_next = dt.datetime.fromisoformat(
+        launcher_resumed["jobs"][0]["next_run_at"].replace("Z", "+00:00"))
+    if (launcher_resumed["jobs"][0].get("state") != "scheduled"
+            or launcher_resumed["jobs"][0].get("enabled") is not True
+            or launcher_next <= dt.datetime.now(dt.timezone.utc)
+            or launcher_next.minute % 15 != 0 or launcher_next.second != 0):
+        raise RuntimeError(f"launcher resume cron output mismatch: {launcher_resumed!r}")
+
+    launcher_invalid_resume = out / "launcher-resume-invalid-scope"
+    (launcher_invalid_resume / "d").mkdir(parents=True)
+    (launcher_invalid_resume / "d/jobs.json").write_text(invalid_resume_document, encoding="ascii")
+    execute_launcher("launcher-resume-invalid-refusal", package_launcher,
+                     launcher_invalid_resume, "resume", "bad", "", 2, out, calls,
+                     env_overrides={"TZ": "UTC"})
+    if (launcher_invalid_resume / "d/jobs.json").read_text(encoding="ascii") != invalid_resume_document:
+        raise RuntimeError("launcher invalid-resume refusal modified jobs.json")
+
     launcher_list = out / "launcher-list-scope"
     (launcher_list / "d").mkdir(parents=True)
     (launcher_list / "d/jobs.json").write_text(jobs_document, encoding="ascii")
@@ -488,6 +563,11 @@ def main():
         "pause_missing_id_refusal_runtime": "PASS",
         "pause_launcher_runtime": "PASS",
         "pause_missing_id_refusal_launcher": "PASS",
+        "resume_cron_runtime": "PASS",
+        "resume_expired_once_runtime": "PASS",
+        "resume_invalid_schedule_refusal_runtime": "PASS",
+        "resume_cron_launcher_runtime": "PASS",
+        "resume_invalid_schedule_refusal_launcher": "PASS",
         "candidate_package": {
             "manifest": "package/candidate-package.json",
             "manifest_sha256": sha(manifest_path.read_bytes()),
@@ -500,8 +580,9 @@ def main():
         "processes": calls,
         "stdout_sha256": {"positive": sha(positive_stdout), "refusal": sha(refusal_stdout),
                           "launcher_positive": sha(launcher_positive_stdout),
-                          "pause": sha(pause_stdout), "launcher_pause": sha(launcher_pause_stdout)},
-        "scope": "standalone Linux x86_64 native cron jobs list/pause/remove CLI with scoped FS35, positive/refusal controls, and packaged launcher; macOS runtime qualification remains open",
+                          "pause": sha(pause_stdout), "launcher_pause": sha(launcher_pause_stdout),
+                          "resume": sha(resume_stdout), "launcher_resume": sha(launcher_resume_stdout)},
+        "scope": "standalone Linux x86_64 native cron jobs list/pause/resume/remove CLI with scoped FS35, positive/refusal controls, and packaged launcher; macOS runtime qualification remains open",
     }
     receipt_path = out / "build-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")

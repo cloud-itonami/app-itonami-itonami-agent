@@ -23,7 +23,8 @@
 ;; Written in the Amu selfhost seed subset (no ns docstring, no fn literal,
 ;; declared result types); README "Schedule" has the gate.
 (ns itonami.schedule
-  (:export [cron-problem duration-minutes parse-schedule-form next-cron-ms next-interval-ms next-once-ms due?
+  (:export [cron-problem duration-minutes parse-schedule-form iso-time-epoch-ms
+            next-cron-ms next-interval-ms next-once-ms due?
             days-from-civil civil-year civil-month civil-day weekday
             epoch-ms->iso-utc test-civil test-parse test-cron test-other test-iso-utc]))
 
@@ -472,6 +473,24 @@
 (defn parse-iso-time-form [s :string] :string
   (let [n (string-length s)]
     (if (< n 20) "" (parse-iso-time-form-bounded s n))))
+
+(defn- nonnegative-decimal [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s)) acc
+    (let [c (string-code-point-at s i)]
+      (if (or (< c 48) (> c 57)) -1
+        (let [d (- c 48)]
+          (if (or (> acc 922337203685477580)
+                  (and (= acc 922337203685477580) (> d 7))) -1
+            (recur s (inc i) (+ (* acc 10) d))))))))
+
+(defn iso-time-epoch-ms [s :string] :i64
+  ;; Resume only accepts timestamps in the supported ISO subset and the
+  ;; nonnegative epoch range used by the bounded native scheduler.
+  (let [form (parse-iso-time-form s)
+        newline (string-index-of form "\n")]
+    (if (or (< newline 0) (not (string=? (string-substring form 0 newline) "once-at"))
+            (>= (+ newline 1) (string-length form))) -1
+      (nonnegative-decimal form (+ newline 1) 0))))
 
 (defn parse-schedule-form [s :string] :string
   (let [text (trim-space s)

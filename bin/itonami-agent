@@ -40,6 +40,7 @@ Selfhost routes:
   cron next-run <expression> <epoch-ms> <utc-offset-minutes>
   cron jobs list <absolute-app-data-dir> [false]  (Linux x86_64; false = active only)
   cron jobs pause <absolute-app-data-dir> <job-id> [reason]  (Linux x86_64)
+  cron jobs resume <absolute-app-data-dir> <job-id>  (Linux x86_64)
   cron jobs remove <absolute-app-data-dir> <job-id>  (Linux x86_64)
   cron notepad <base> <verb> [key] [value]
   kanban <base> <verb> [arguments]
@@ -123,6 +124,14 @@ case "$1" in
         fi
         if [ "$3" = pause ] && { [ "$#" -eq 5 ] || [ "$#" -eq 6 ]; }; then
           run_cron_jobs_linux pause "$4" "${5:-}" "${6:-}"
+        fi
+        if [ "$3" = resume ] && [ "$#" -eq 5 ]; then
+          local_offset=$(date +%z 2>/dev/null) || blocked "cron jobs resume (local timezone unavailable)"
+          case "$local_offset" in
+            [+-][0-9][0-9][0-9][0-9]) ;;
+            *) blocked "cron jobs resume (invalid local timezone offset)" ;;
+          esac
+          run_cron_jobs_linux resume "$4" "$5" "$local_offset"
         fi
         if [ "$3" = remove ] && [ "$#" -eq 5 ]; then
           run_cron_jobs_linux remove "$4" "$5" ""
