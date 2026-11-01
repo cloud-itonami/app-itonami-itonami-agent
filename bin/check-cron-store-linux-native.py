@@ -154,7 +154,7 @@ def execute(name, runner, payload, scope, mode, out, calls):
         "KEXE_STACK_BYTES": "8388608",
         "KEXE_STRUCTURED_REPORT": "1",
     }
-    argv = [runner, payload, "0", "0", "x86_64", "7,35,38", "--", "/d", mode]
+    argv = [runner, payload, "0", "0", "x86_64", "7,35,38", "--", str(scope / "d"), mode]
     stdout = run(name, argv, out, env, calls)
     if not re.search(rb":result 0\b", stdout):
         state = {}
