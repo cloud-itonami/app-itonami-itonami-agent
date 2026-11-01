@@ -187,55 +187,6 @@
     (if (blank-space? (string-code-point-at s i))
       (nonblank-from? s (inc i)) true)))
 
-(defn- created-schedule-json [kind :string value :string display :string
-                              now-ms :i64 offset :i64]
-  [:result :string :string]
-  (cond
-    (string=? kind "interval")
-      (let [minutes (schedule/parse-i64-digits value 0 0)
-            max-minutes (quot (- 9223372036854775807 now-ms) 60000)]
-        (if (or (< minutes 1) (> minutes max-minutes))
-          (result-err-of [:result :string :string] "cron-json/invalid-schedule")
-          (result-ok-of [:result :string :string]
-            (string-concat "{\"kind\":\"interval\",\"minutes\":"
-              (string-concat (string-from-i64 minutes)
-                (string-concat ",\"display\":"
-                  (string-concat (jobs/json-quote
-                    (string-concat "every " (string-concat (string-from-i64 minutes) "m"))) "}")))))))
-    (string=? kind "once-after")
-      (let [minutes (schedule/parse-i64-digits value 0 0)
-            max-minutes (quot (- 9223372036854775807 now-ms) 60000)
-            run-ms (if (or (< minutes 1) (> minutes max-minutes)) -1
-                     (+ now-ms (* minutes 60000)))
-            run-at (schedule/epoch-ms->iso-utc run-ms)]
-        (if (= (string-length run-at) 0)
-          (result-err-of [:result :string :string] "cron-json/invalid-schedule")
-          (result-ok-of [:result :string :string]
-            (string-concat "{\"kind\":\"once\",\"run_at\":"
-              (string-concat (jobs/json-quote run-at)
-                (string-concat ",\"display\":"
-                  (string-concat (jobs/json-quote
-                    (string-concat "once in " (string-concat (string-from-i64 minutes) "m"))) "}")))))))
-    (string=? kind "once-at")
-      (let [run-ms (schedule/parse-i64-digits value 0 0)
-            run-at (schedule/epoch-ms->iso-utc run-ms)]
-        (if (= (string-length run-at) 0)
-          (result-err-of [:result :string :string] "cron-json/invalid-schedule")
-          (result-ok-of [:result :string :string]
-            (string-concat "{\"kind\":\"once\",\"run_at\":"
-              (string-concat (jobs/json-quote run-at)
-                (string-concat ",\"display\":"
-                  (string-concat (jobs/json-quote (string-concat "once at " run-at)) "}")))))))
-    (string=? kind "cron")
-      (if (not (= (schedule/cron-problem value) "schedule/ok"))
-        (result-err-of [:result :string :string] "cron-json/invalid-schedule")
-        (result-ok-of [:result :string :string]
-          (string-concat "{\"kind\":\"cron\",\"expr\":"
-            (string-concat (jobs/json-quote value)
-              (string-concat ",\"display\":"
-                (string-concat (jobs/json-quote display) "}"))))))
-    :else (result-err-of [:result :string :string] "cron-json/invalid-schedule")))
-
 (defn create-job [cron-dir :string schedule-text :string prompt :string name :string
                   offset-text :string] [:result :string :string]
   (let [now-ms (now-epoch-ms)
@@ -267,7 +218,7 @@
               (= (string-length job-name) 0)
               (and (string=? kind "cron") (or (< offset -840) (> offset 840))))
           (result-err-of [:result :string :string] "cron-store/invalid-create-input")
-          (let [schedule-json (created-schedule-json kind value schedule-text now-ms cron-offset)]
+          (let [schedule-json (jobs/created-schedule-json kind value schedule-text now-ms cron-offset)]
             (if (not (result-ok?-of [:result :string :string] schedule-json))
               (result-err-of [:result :string :string]
                 (result-error-of [:result :string :string] schedule-json "cron-json/invalid-schedule"))
