@@ -34,7 +34,7 @@ The follow-up gate also removes all jobs matching an ID while preserving the
 remaining job objects byte-for-byte. The native positive case retains a nested
 `-0.0001` extension value and a remaining `1.25e+7` value; a missing ID is
 refused. Latest receipt:
-`/Users/junkawasaki/github/workspaces/codex/awai-60-cron-jobs-json-native-gate-20261102-r4/build-receipt.txt`.
+`/Users/junkawasaki/github/workspaces/codex/awai-60-cron-jobs-json-native-gate-20261102-r6/build-receipt.txt`.
 
 This still does not implement create/update CRUD, locking, durable filesystem
 writes, or launcher dispatch. The reader uses the strict JCS profile: valid RFC
