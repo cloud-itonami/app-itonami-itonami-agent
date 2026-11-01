@@ -25,10 +25,10 @@ AMU_RUNNER_SOURCE = "seed/x86_64-kx64-runner.kotoba"
 AMU_RUNNER_SHA256 = "c9f1fe1b5c1748450fb11b233cbdc9d9234880a60dc480c0387b173f60d905be"
 AMU_CANDIDATE_SOURCE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
 # Amu PR #1769 adds experimental project-profile admission for entropy wire 23.
-# This first runtime pass derives F1=F2=F3 from the pinned source and records the
-# compiler digest. Pin that observed digest and rerun the exact-head gate next.
-AMU_CANDIDATE_COMPILER_SHA256 = ""
-AMU_CANDIDATE_COMPILER_BYTES = 0
+# First standalone runtime gate: F1=F2=F3 at this exact compiler digest. Keep
+# the digest and byte count pinned so subsequent consumer runs prove identity.
+AMU_CANDIDATE_COMPILER_SHA256 = "4e4cbb4a66c47ba8277045489e2dd75c28e781a4ffa8a37ed7d3733b5387fc96"
+AMU_CANDIDATE_COMPILER_BYTES = 10306048
 AMU_CANDIDATE_RUNNER_SHA256 = "27349b7edfea5833f41263cdbf6195e5f26848bfb491e406c2d826987194d3b2"
 KOTOBA_COMMIT = "63e30efc6402320fca6f9c70abd93f113e05d99c"
 KOTOBA_JCS_PATH = "lib/org.ietf.jcs/kotoba/jcs/reader.kotoba"
