@@ -570,6 +570,44 @@ def main():
     if (create_prompt_refusal / "d/jobs.json").read_text(encoding="ascii") != create_refusal_document:
         raise RuntimeError("empty-prompt create refusal modified jobs.json")
 
+    update_schedule_document = (
+        '{"jobs":[{"id":"change-me","schedule":{"kind":"interval","minutes":5},'
+        '"schedule_display":"every 5m","next_run_at":null,"future":1.25e+7},'
+        '{"id":"stay","future":-0.0001}],"extension":{"keep":true},"updated_at":"old"}')
+    update_schedule_scope = out / "update-schedule-scope"
+    (update_schedule_scope / "d").mkdir(parents=True)
+    (update_schedule_scope / "d/jobs.json").write_text(update_schedule_document, encoding="ascii")
+    execute("runtime-update-schedule-positive", runner, payload, update_schedule_scope,
+            "update-schedule", "change-me", "every 10m", 0, out, calls,
+            extra1="+0000")
+    updated_doc = json.loads((update_schedule_scope / "d/jobs.json").read_text(encoding="ascii"))
+    updated_job = updated_doc["jobs"][0]
+    updated_at = dt.datetime.fromisoformat(updated_doc["updated_at"].replace("Z", "+00:00"))
+    updated_next = dt.datetime.fromisoformat(updated_job["next_run_at"].replace("Z", "+00:00"))
+    if (updated_job.get("schedule") != {"kind": "interval", "minutes": 10}
+            or updated_job.get("schedule_display") != "every 10m"
+            or updated_job.get("future") != 1.25e7
+            or updated_doc.get("extension") != {"keep": True}
+            or updated_doc["jobs"][1] != {"id": "stay", "future": -0.0001}
+            or (updated_next - updated_at).total_seconds() != 10 * 60
+            or abs(updated_at.timestamp() - time.time()) > 10):
+        raise RuntimeError(f"update-schedule fields, timing or extension mismatch: {updated_doc!r}")
+    if (update_schedule_scope / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("update-schedule positive left a temporary file")
+
+    for label, job_id, schedule_text in (("invalid", "change-me", "not-a-schedule"),
+                                         ("missing", "missing", "every 10m")):
+        refusal_scope = out / f"update-schedule-{label}-scope"
+        (refusal_scope / "d").mkdir(parents=True)
+        (refusal_scope / "d/jobs.json").write_text(update_schedule_document, encoding="ascii")
+        execute(f"runtime-update-schedule-{label}-refusal", runner, payload, refusal_scope,
+                "update-schedule", job_id, schedule_text, 2, out, calls,
+                allow_stderr=True, extra1="+0000")
+        if (refusal_scope / "d/jobs.json").read_text(encoding="ascii") != update_schedule_document:
+            raise RuntimeError(f"update-schedule {label} refusal modified jobs.json")
+        if (refusal_scope / "d/.jobs.json.tmp").exists():
+            raise RuntimeError(f"update-schedule {label} refusal left a temporary file")
+
     launcher_create_scope = out / "launcher-create-scope"
     (launcher_create_scope / "d").mkdir(parents=True)
     (launcher_create_scope / "d/jobs.json").write_text(create_document, encoding="ascii")
@@ -608,6 +646,34 @@ def main():
         raise RuntimeError("launcher invalid-create refusal modified jobs.json")
     if (launcher_create_refusal / "d/.jobs.json.tmp").exists():
         raise RuntimeError("launcher create refusal left a temporary file")
+
+    launcher_update_scope = out / "launcher-update-schedule-scope"
+    (launcher_update_scope / "d").mkdir(parents=True)
+    (launcher_update_scope / "d/jobs.json").write_text(update_schedule_document, encoding="ascii")
+    execute_launcher("launcher-update-schedule-positive", package_launcher, launcher_update_scope,
+                     "update-schedule", "change-me", "every 10m", 0, out, calls,
+                     env_overrides={"TZ": "UTC"}, extra1="+0000")
+    launcher_updated = json.loads((launcher_update_scope / "d/jobs.json").read_text(encoding="ascii"))
+    launcher_updated_at = dt.datetime.fromisoformat(launcher_updated["updated_at"].replace("Z", "+00:00"))
+    launcher_updated_next = dt.datetime.fromisoformat(
+        launcher_updated["jobs"][0]["next_run_at"].replace("Z", "+00:00"))
+    if (launcher_updated["jobs"][0].get("schedule") != {"kind": "interval", "minutes": 10}
+            or (launcher_updated_next - launcher_updated_at).total_seconds() != 10 * 60
+            or launcher_updated.get("extension") != {"keep": True}):
+        raise RuntimeError(f"launcher update-schedule mismatch: {launcher_updated!r}")
+
+    launcher_update_refusal = out / "launcher-update-schedule-refusal-scope"
+    (launcher_update_refusal / "d").mkdir(parents=True)
+    (launcher_update_refusal / "d/jobs.json").write_text(update_schedule_document, encoding="ascii")
+    execute_launcher("launcher-update-schedule-invalid-refusal", package_launcher,
+                     launcher_update_refusal, "update-schedule", "change-me",
+                     "not-a-schedule", 2, out, calls, env_overrides={"TZ": "UTC"},
+                     extra1="+0000")
+    if ((launcher_update_refusal / "d/jobs.json").read_text(encoding="ascii")
+            != update_schedule_document):
+        raise RuntimeError("launcher update-schedule refusal modified jobs.json")
+    if (launcher_update_refusal / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("launcher update-schedule refusal left a temporary file")
 
     launcher_create_prompt_refusal = out / "launcher-create-prompt-refusal-scope"
     (launcher_create_prompt_refusal / "d").mkdir(parents=True)

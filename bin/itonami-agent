@@ -82,6 +82,7 @@ Selfhost routes:
   cron jobs resume <absolute-app-data-dir> <job-id>  (Linux x86_64)
   cron jobs remove <absolute-app-data-dir> <job-id>  (Linux x86_64)
   cron jobs create <absolute-app-data-dir> <schedule> <prompt> [name]  (Linux x86_64)
+  cron jobs update-schedule <absolute-app-data-dir> <job-id> <schedule>  (Linux x86_64)
   cron notepad <base> <verb> [key] [value]
   kanban <base> <verb> [arguments]
   session-search <base> <query> [limit] [after] [before] [detail] [sort] [sid] [pbase]
@@ -189,6 +190,14 @@ case "$1" in
             *) blocked "cron jobs create (invalid local timezone offset)" ;;
           esac
           run_cron_jobs_linux create "$4" "$5" "$6" "${7:-}" "$local_offset"
+        fi
+        if [ "$3" = update-schedule ] && [ "$#" -eq 7 ]; then
+          local_offset=$(date +%z 2>/dev/null) || blocked "cron jobs update-schedule (local timezone unavailable)"
+          case "$local_offset" in
+            [+-][0-9][0-9][0-9][0-9]) ;;
+            *) blocked "cron jobs update-schedule (invalid local timezone offset)" ;;
+          esac
+          run_cron_jobs_linux update-schedule "$4" "$5" "$6" "$local_offset"
         fi
         blocked "$@"
         ;;

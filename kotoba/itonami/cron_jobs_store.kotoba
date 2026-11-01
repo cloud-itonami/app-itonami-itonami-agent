@@ -4,7 +4,8 @@
   (:require [hata.store-io :as fs]
             [itonami.cron-jobs-json :as jobs]
             [itonami.schedule :as schedule])
-  (:export [list-jobs list-jobs-json create-job remove-job remove-job-at remove-job-json
+  (:export [list-jobs list-jobs-json create-job update-schedule update-schedule-at
+            remove-job remove-job-at remove-job-json
             pause-job pause-job-at pause-job-json
             resume-job resume-job-at resume-job-json
             test-remove-job-json test-pause-job-json test-resume-job-json])
@@ -323,6 +324,68 @@
       (result-err-of [:result :string :string] "cron-store/invalid-input")
       (let [document (if (fs/exists? path) (fs/read path) "{\"jobs\":[]}")]
         (list-jobs-json document include-disabled)))))
+
+(defn update-schedule-at [cron-dir :string id :string schedule-text :string
+                          updated-at :string now-ms :i64 offset-text :string]
+  [:result :string :string]
+  (let [offset (offset-minutes offset-text)
+        form (schedule/parse-schedule-form schedule-text)
+        split (string-index-of form "\n")
+        kind (if (< split 0) "" (string-substring form 0 split))
+        value (schedule-form-part form "")
+        next-ms (cond
+          (or (string=? kind "interval") (string=? kind "once-after"))
+            (schedule/next-interval-ms now-ms (parse-epoch-digits value 0 0))
+          (string=? kind "once-at")
+            (schedule/next-once-ms (parse-epoch-digits value 0 0) now-ms)
+          (string=? kind "cron")
+            (schedule/next-cron-ms value now-ms offset)
+          :else -1)
+        next-run-at (if (< next-ms 0) "" (schedule/epoch-ms->iso-utc next-ms))
+        display (if (or (string=? kind "interval") (string=? kind "once-after"))
+                  (string-concat (if (string=? kind "interval") "every " "once in ")
+                    (string-concat value "m"))
+                  schedule-text)
+        schedule-json (if (or (string=? kind "interval") (string=? kind "once-after")
+                              (string=? kind "once-at") (string=? kind "cron"))
+                        (created-schedule-json kind value display now-ms
+                          (if (string=? kind "cron") offset 0))
+                        (result-err-of [:result :string :string] "cron-json/invalid-schedule"))
+        path (child-path cron-dir "jobs.json")
+        lock-path (child-path cron-dir ".itonami-jobs.lock")]
+    (if (or (= (string-length id) 0) (= (string-length updated-at) 0)
+            (< now-ms 0) (< offset -9999) (= (string-length path) 0)
+            (= (string-length lock-path) 0)
+            (and (string=? kind "cron") (or (< offset -840) (> offset 840))))
+      (result-err-of [:result :string :string] "cron-store/invalid-input")
+      (if (not (result-ok?-of [:result :string :string] schedule-json))
+        (result-err-of [:result :string :string] "cron-store/invalid-schedule")
+        (if (not (fs/lock lock-path))
+          (result-err-of [:result :string :string] "cron-store/busy-or-lock-denied")
+          (let [before (if (fs/exists? path) (fs/read path) "{\"jobs\":[]}")
+                changed (jobs/update-schedule-json before id
+                          (result-value-of [:result :string :string] schedule-json "")
+                          display next-run-at updated-at)
+                committed (if (result-ok?-of [:result :string :string] changed)
+                            (write-atomic cron-dir path
+                              (result-value-of [:result :string :string] changed "")) false)
+                unlocked (fs/unlock lock-path)]
+            (if (not unlocked)
+              (result-err-of [:result :string :string] "cron-store/unlock-failed")
+              (if (not (result-ok?-of [:result :string :string] changed))
+                (result-err-of [:result :string :string]
+                  (result-error-of [:result :string :string] changed "cron-store/update-schedule-failed"))
+                (if (not committed)
+                  (result-err-of [:result :string :string] "cron-store/durable-write-failed")
+                  (result-ok-of [:result :string :string] id)))))))))
+
+(defn update-schedule [cron-dir :string id :string schedule-text :string offset-text :string]
+  [:result :string :string]
+  (let [now-ms (now-epoch-ms)
+        updated-at (schedule/epoch-ms->iso-utc now-ms)]
+    (if (or (< now-ms 0) (= (string-length updated-at) 0))
+      (result-err-of [:result :string :string] "cron-store/clock-unavailable")
+      (update-schedule-at cron-dir id schedule-text updated-at now-ms offset-text))))
 
 (defn test-remove-job-json [] :bool
   (let [source "{\"jobs\":[{\"id\":\"a\",\"future\":1.25e+7}],\"updated_at\":\"2026-11-01T00:00:00Z\"}"

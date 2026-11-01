@@ -7,7 +7,7 @@
   (:require [jcs.reader :as jcs]
             [itonami.schedule :as schedule])
   (:export [jobs-array-start replace-jobs-array set-updated-at-json
-            remove-job-json list-jobs-json pause-job-json resume-job-json
+            remove-job-json list-jobs-json pause-job-json resume-job-json update-schedule-json
             json-quote create-job-object append-job-json
             test-replace-preserves-extensions test-replace-refuses-invalid
             test-remove-preserves-job-extensions test-remove-refuses-missing
@@ -15,7 +15,8 @@
             test-updated-at-preserves-extensions test-pause-preserves-extensions
             test-pause-refuses-missing test-pause-escapes-reason
             test-resume-cron-preserves-extensions test-resume-once-completed
-            test-resume-refuses-invalid-schedule]))
+            test-resume-refuses-invalid-schedule test-update-schedule-preserves-extensions
+            test-update-schedule-refuses-missing]))
 
 (defn- skip-ws [b :vector-i64 i :i64] :i64
   (if (>= i (vector-count b)) i
@@ -519,6 +520,64 @@
                   (set-updated-at-json
                     (result-value-of [:result :string :string] changed "") updated-at))))))))))
 
+(defn- update-schedule-object [object-json :string schedule-json :string display :string
+                               next-run-at :string] :string
+  (let [with-schedule (set-object-member-raw object-json "schedule" schedule-json)
+        with-display (set-object-member-raw with-schedule "schedule_display"
+                        (json-string-value display))
+        next-value (if (= (string-length next-run-at) 0) "null"
+                     (json-string-value next-run-at))]
+    (set-object-member-raw with-display "next_run_at" next-value)))
+
+(defn- update-schedule-array [b :vector-i64 array-at :i64 id :string
+                              schedule-json :string display :string next-run-at :string
+                              i :i64 out :string count :i64 found :i64]
+  [:record :itonami.cron-jobs-json/ScheduleScan
+   [[:array :string] [:found :i64]]]
+  (if (>= i (jcs/json-count b array-at))
+    (record-new [:ref :itonami.cron-jobs-json/ScheduleScan]
+                (string-concat out "]") found)
+    (let [job (jcs/json-element b array-at i)
+          match (job-id-matches? b job id)
+          text (if match
+                 (update-schedule-object (raw-value b job) schedule-json display next-run-at)
+                 (raw-value b job))
+          next-out (string-concat out
+                      (string-concat (if (> count 0) "," "") text))]
+      (recur b array-at id schedule-json display next-run-at (inc i) next-out (inc count)
+             (if match 1 found)))))
+
+(defn update-schedule-json [json :string id :string schedule-json :string display :string
+                            next-run-at :string updated-at :string]
+  [:result :string :string]
+  ;; The schedule-only update changes exactly the scheduler-owned fields and
+  ;; preserves every other job/document byte, including future extensions.
+  (let [b (vector-i64-from-bytes (string-to-utf8 json))
+        schedule-b (vector-i64-from-bytes (string-to-utf8 schedule-json))
+        schedule-at (skip-ws schedule-b 0)
+        next-valid (or (= (string-length next-run-at) 0) (timestamp-valid? next-run-at))]
+    (if (< (jobs-array-index b) 0)
+      (result-err-of [:result :string :string] "cron-json/invalid-jobs-document")
+      (let [array-at (jobs-array-index b)]
+        (if (not (all-job-objects? b array-at 0))
+          (result-err-of [:result :string :string] "cron-json/job-entry-must-be-object")
+          (if (or (not (jcs/json-valid? schedule-b))
+                  (not (= (jcs/json-kind schedule-b schedule-at) 1))
+                  (not next-valid)
+                  (not (timestamp-valid? updated-at)))
+            (result-err-of [:result :string :string] "cron-json/invalid-schedule-update")
+            (let [scan (update-schedule-array b array-at id schedule-json display next-run-at
+                                               0 "[" 0 0)
+                  found (record-get [:ref :itonami.cron-jobs-json/ScheduleScan] scan :found)]
+              (if (= found 0)
+                (result-err-of [:result :string :string] "cron-json/job-not-found")
+                (let [changed (replace-jobs-array json
+                                (record-get [:ref :itonami.cron-jobs-json/ScheduleScan] scan :array))]
+                  (if (result-ok?-of [:result :string :string] changed)
+                    (set-updated-at-json
+                      (result-value-of [:result :string :string] changed "") updated-at)
+                    (result-err-of [:result :string :string] "cron-json/schedule-replacement-failed"))))))))))
+
 (defn test-resume-cron-preserves-extensions [] :bool
   (let [source "{\"jobs\":[{\"id\":\"resume\",\"enabled\":false,\"state\":\"paused\",\"paused_at\":\"old\",\"paused_reason\":\"old\",\"schedule\":{\"kind\":\"cron\",\"expr\":\"*/15 * * * *\"},\"next_run_at\":null,\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":{\"x\":true}}"
         result (resume-job-json source "resume" "2026-11-02T03:04:05.000Z"
@@ -541,6 +600,22 @@
         (resume-job-json
           "{\"jobs\":[{\"id\":\"bad\",\"schedule\":{\"kind\":\"cron\",\"expr\":\"* * *\"}}]}"
           "bad" "2026-11-02T03:04:05.000Z" 1793588645000 0))))
+
+(defn test-update-schedule-preserves-extensions [] :bool
+  (let [source "{\"jobs\":[{\"id\":\"change\",\"schedule\":{\"kind\":\"interval\",\"minutes\":5},\"schedule_display\":\"every 5m\",\"next_run_at\":null,\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":true}"
+        result (update-schedule-json source "change" "{\"kind\":\"interval\",\"minutes\":10}"
+                                     "every 10m" "2026-11-02T03:14:05.006Z"
+                                     "2026-11-02T03:04:05.006Z")
+        output (result-value-of [:result :string :string] result "")]
+    (and (result-ok?-of [:result :string :string] result)
+         (string=? output "{\"jobs\":[{\"id\":\"change\",\"schedule\":{\"kind\":\"interval\",\"minutes\":10},\"schedule_display\":\"every 10m\",\"next_run_at\":\"2026-11-02T03:14:05.006Z\",\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":true,\"updated_at\":\"2026-11-02T03:04:05.006Z\"}"))))
+
+(defn test-update-schedule-refuses-missing [] :bool
+  (not (result-ok?-of [:result :string :string]
+        (update-schedule-json "{\"jobs\":[{\"id\":\"stay\"}]}" "missing"
+                              "{\"kind\":\"interval\",\"minutes\":5}"
+                              "every 5m" "2026-11-02T03:09:05.006Z"
+                              "2026-11-02T03:04:05.006Z"))))
 
 
 (defn test-list-projects-hermes-fields [] :bool

@@ -45,6 +45,13 @@
       (say (result-value-of [:result :string :string] result ""))
       (fail (result-error-of [:result :string :string] result "cron-store/create-failed")))))
 
+(defn- update-schedule-command [directory :string job-id :string schedule-text :string
+                               offset :string] :i64
+  (let [result (store/update-schedule directory job-id schedule-text offset)]
+    (if (result-ok?-of [:result :string :string] result)
+      0
+      (fail (result-error-of [:result :string :string] result "cron-store/update-schedule-failed"))))
+
 (defn main [] :i64
   (let [action (arg 0)
         directory (arg 1)]
@@ -57,8 +64,10 @@
         (resume-command directory (arg 2) (arg 3))
       (string=? action "create")
         (create-command directory (arg 2) (arg 3) (arg 4) (arg 5))
+      (string=? action "update-schedule")
+        (update-schedule-command directory (arg 2) (arg 3) (arg 4))
       (string=? action "remove")
         (let [job-id (arg 2)
               result (store/remove-job directory job-id)]
           (if (result-ok?-of [:result :string :string] result) 0 1))
-      :else (fail "usage: itonami-agent cron jobs list <absolute-app-data-dir> [false] | pause <absolute-app-data-dir> <job-id> [reason] | resume <absolute-app-data-dir> <job-id> | remove <absolute-app-data-dir> <job-id> | create <absolute-app-data-dir> <schedule> <prompt> [name] <utc-offset>"))))
+      :else (fail "usage: itonami-agent cron jobs list <absolute-app-data-dir> [false] | pause <absolute-app-data-dir> <job-id> [reason] | resume <absolute-app-data-dir> <job-id> | remove <absolute-app-data-dir> <job-id> | create <absolute-app-data-dir> <schedule> <prompt> [name] <utc-offset> | update-schedule <absolute-app-data-dir> <job-id> <schedule> <utc-offset>"))))
