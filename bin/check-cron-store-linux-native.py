@@ -176,7 +176,7 @@ def execute(name, runner, payload, scope, action, value, option, expected_result
 
 
 def execute_launcher(name, launcher, scope, action, value, option, expected_exit, out, calls,
-                    env_overrides=None, extra1="", extra2=""):
+                    env_overrides=None, extra1="", extra2="", append_empty_option=False):
     env = dict(os.environ)
     env.pop("ITONAMI_CRON_JOBS_RUNNER", None)
     env.pop("ITONAMI_CRON_JOBS_PAYLOAD", None)
@@ -185,7 +185,7 @@ def execute_launcher(name, launcher, scope, action, value, option, expected_exit
     argv = [launcher, "cron", "jobs", action, scope / "d"]
     if value != "":
         argv.append(value)
-    if option != "":
+    if option != "" or append_empty_option:
         argv.append(option)
     if extra1 != "":
         argv.append(extra1)
@@ -570,6 +570,57 @@ def main():
     if (create_prompt_refusal / "d/jobs.json").read_text(encoding="ascii") != create_refusal_document:
         raise RuntimeError("empty-prompt create refusal modified jobs.json")
 
+    launcher_create_scope = out / "launcher-create-scope"
+    (launcher_create_scope / "d").mkdir(parents=True)
+    (launcher_create_scope / "d/jobs.json").write_text(create_document, encoding="ascii")
+    launcher_create_stdout = execute_launcher(
+        "launcher-create-positive", package_launcher, launcher_create_scope,
+        "create", "every 5m", "native prompt", 0, out, calls,
+        env_overrides={"TZ": "UTC"}, extra1="Launcher prompt job")
+    launcher_created_doc = json.loads((launcher_create_scope / "d/jobs.json").read_text(encoding="ascii"))
+    if len(launcher_created_doc.get("jobs", [])) != 1:
+        raise RuntimeError(f"launcher create did not append exactly one job: {launcher_created_doc!r}")
+    launcher_created_job = launcher_created_doc["jobs"][0]
+    if (not re.fullmatch(r"[0-9a-f]{12}", launcher_created_job.get("id", ""))
+            or launcher_created_job.get("name") != "Launcher prompt job"
+            or launcher_created_job.get("prompt") != "native prompt"
+            or launcher_created_job.get("schedule", {}).get("kind") != "interval"
+            or launcher_created_job.get("schedule", {}).get("minutes") != 5
+            or launcher_created_doc.get("extension") != {"keep": 1.25e7}):
+        raise RuntimeError(f"launcher create fields or extension preservation mismatch: {launcher_created_doc!r}")
+    launcher_create_updated = dt.datetime.fromisoformat(
+        launcher_created_doc["updated_at"].replace("Z", "+00:00"))
+    launcher_create_next = dt.datetime.fromisoformat(
+        launcher_created_job["next_run_at"].replace("Z", "+00:00"))
+    if (abs(launcher_create_updated.timestamp() - time.time()) > 10
+            or (launcher_create_next - launcher_create_updated).total_seconds() != 5 * 60):
+        raise RuntimeError(f"launcher create timestamp or next-run mismatch: {launcher_created_doc!r}")
+    if (launcher_create_scope / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("launcher create positive store left a temporary file")
+
+    launcher_create_refusal = out / "launcher-create-refusal-scope"
+    (launcher_create_refusal / "d").mkdir(parents=True)
+    (launcher_create_refusal / "d/jobs.json").write_text(create_refusal_document, encoding="ascii")
+    execute_launcher("launcher-create-invalid-schedule-refusal", package_launcher,
+                     launcher_create_refusal, "create", "not-a-schedule", "native prompt", 2,
+                     out, calls, env_overrides={"TZ": "UTC"})
+    if (launcher_create_refusal / "d/jobs.json").read_text(encoding="ascii") != create_refusal_document:
+        raise RuntimeError("launcher invalid-create refusal modified jobs.json")
+    if (launcher_create_refusal / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("launcher create refusal left a temporary file")
+
+    launcher_create_prompt_refusal = out / "launcher-create-prompt-refusal-scope"
+    (launcher_create_prompt_refusal / "d").mkdir(parents=True)
+    (launcher_create_prompt_refusal / "d/jobs.json").write_text(create_refusal_document, encoding="ascii")
+    execute_launcher("launcher-create-empty-prompt-refusal", package_launcher,
+                     launcher_create_prompt_refusal, "create", "every 5m", "", 2,
+                     out, calls, env_overrides={"TZ": "UTC"}, append_empty_option=True)
+    if ((launcher_create_prompt_refusal / "d/jobs.json").read_text(encoding="ascii")
+            != create_refusal_document):
+        raise RuntimeError("launcher empty-prompt create refusal modified jobs.json")
+    if (launcher_create_prompt_refusal / "d/.jobs.json.tmp").exists():
+        raise RuntimeError("launcher create prompt refusal left a temporary file")
+
     launcher_resume = out / "launcher-resume-scope"
     (launcher_resume / "d").mkdir(parents=True)
     (launcher_resume / "d/jobs.json").write_text(resume_document, encoding="ascii")
@@ -654,6 +705,9 @@ def main():
         "create_runtime": "PASS",
         "create_invalid_schedule_refusal": "PASS",
         "create_empty_prompt_refusal": "PASS",
+        "create_launcher_runtime": "PASS",
+        "create_invalid_schedule_refusal_launcher": "PASS",
+        "create_empty_prompt_refusal_launcher": "PASS",
         "candidate_package": {
             "manifest": "package/candidate-package.json",
             "manifest_sha256": sha(manifest_path.read_bytes()),
@@ -667,7 +721,8 @@ def main():
         "stdout_sha256": {"positive": sha(positive_stdout), "refusal": sha(refusal_stdout),
                           "launcher_positive": sha(launcher_positive_stdout),
                           "pause": sha(pause_stdout), "launcher_pause": sha(launcher_pause_stdout),
-                          "resume": sha(resume_stdout), "launcher_resume": sha(launcher_resume_stdout)},
+                          "resume": sha(resume_stdout), "launcher_resume": sha(launcher_resume_stdout),
+                          "launcher_create": sha(launcher_create_stdout)},
         "scope": "standalone Linux x86_64 native cron jobs create/list/pause/resume/remove CLI with scoped FS35, route-specific entropy, positive/refusal controls, and packaged launcher; macOS runtime qualification remains open",
     }
     receipt_path = out / "build-receipt.json"
