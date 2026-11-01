@@ -47,8 +47,17 @@ cron persistence or launcher dispatch.
 
 ## Amu compile evidence
 
-The two Kotoba modules compiled and `cron-schedule-cli` extracted under a
-locally available Amu full root. The compile used exact KSL2 source hashes:
+The two Kotoba modules compiled and `cron-schedule-cli` extracted through the
+checked-in diagnostic builder, pinned to immutable Itonami source revision
+`5745666a15ae2ead1152d1d008467da1959c2656`. Reproduction:
+
+```sh
+bin/build-cron-schedule-cli-diagnostic \
+  /Users/junkawasaki/github/kotoba-lang/amu/seed/bootstrap/aarch64-macos/amu-full-root.macho \
+  /Users/junkawasaki/github/workspaces/codex/awai-60-iso-time-diagnostic-2
+```
+
+The compile used these exact KSL2 source hashes:
 
 - `kotoba/agent_cli/cron_schedule_cli.kotoba`:
   `bc9979c8d68b54dc4605dc6c5cf60e08687a53e90a44087915d4d1f4df584fe1`.
@@ -58,6 +67,7 @@ locally available Amu full root. The compile used exact KSL2 source hashes:
   `7bc6ab46063c10c8721da5a2d9115930c5434c3cf2809134e0cd1e06af7bc627`.
 - Amu checkout `a4c16e7c47005d2235dc48d3f69569773a1606e7`; full-root SHA-256
   `dd71f3940267f55c3864b68010c557859bfa122caad8f579b550b5f1d2988240`.
+- The builder receipt is under `workspaces/codex/awai-60-iso-time-diagnostic-2/`.
 - Compile returned `{:ok true, :target :aarch64-macos, :bytes 43551}`.
 - Extraction returned `{:ok, :offset 41536, :length 43509, :arity 0}`.
 - Kseed SHA-256 `c8550516f74cd7dc5b21e7e3ee8375509cee02089e0ea8f54ca7e794ab8e9efe`;
