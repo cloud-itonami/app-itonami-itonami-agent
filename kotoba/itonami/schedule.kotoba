@@ -363,16 +363,85 @@
 (defn natural-cron [s :string] :string
   (natural-cron-from (trim-space (lower-text s)) 0))
 
+;; Bounded ISO timestamp form accepted by the old JS Date parser: a four-digit
+;; date, `T`, time with seconds, and either Z or a numeric UTC offset. Date
+;; days 1..31 follow JS Date normalization (e.g. February 30 rolls into March);
+;; month, clock, and offset fields are range-checked. This is intentionally not
+;; the full set of implementation-defined strings accepted by JS Date.
+(defn decimal-digits? [s :string i :i64 end :i64] :bool
+  (if (>= i end) true
+    (if (digit? (string-code-point-at s i)) (recur s (inc i) end) false)))
+
+(defn fixed-decimal [s :string i :i64 n :i64] :i64
+  (number-of (string-substring s i (+ i n))))
+
+(defn fraction-millis [s :string start :i64 end :i64] :i64
+  (let [n (- end start)
+        take (if (> n 3) 3 n)
+        value (number-of (string-substring s start (+ start take)))]
+    (if (= take 1) (* value 100) (if (= take 2) (* value 10) value))))
+
+(defn parse-iso-time-form-bounded [s :string n :i64] :string
+  (let [zulu (and (> n 0) (= (lower (string-code-point-at s (dec n))) 122))
+        zone-start (if zulu (dec n) (- n 6))
+        zone-sign (if zulu 0 (string-code-point-at s zone-start))
+        zone-shape (or zulu (and (or (= zone-sign 43) (= zone-sign 45))
+                                 (>= zone-start 0) (= (string-code-point-at s (- n 3)) 58)))
+        zone-hour (if zulu 0 (fixed-decimal s (inc zone-start) 2))
+        zone-minute (if zulu 0 (fixed-decimal s (- n 2) 2))
+        zone-valid (and zone-shape (>= zone-hour 0) (<= zone-hour 23)
+                        (>= zone-minute 0) (<= zone-minute 59)
+                        (or zulu (and (decimal-digits? s (inc zone-start) (+ zone-start 3))
+                                      (decimal-digits? s (- n 2) n))))
+        core-end zone-start
+        fraction? (and (> core-end 19) (= (string-code-point-at s 19) 46))
+        fraction-start (if fraction? 20 core-end)
+        fraction-valid (if fraction? (and (< fraction-start core-end)
+                                              (decimal-digits? s fraction-start core-end))
+                           (= core-end 19))
+        year (fixed-decimal s 0 4)
+        month (fixed-decimal s 5 2)
+        day (fixed-decimal s 8 2)
+        hour (fixed-decimal s 11 2)
+        minute (fixed-decimal s 14 2)
+        second (fixed-decimal s 17 2)
+        millis (if fraction? (fraction-millis s fraction-start core-end) 0)
+        date-shape (and (>= core-end 19)
+                        (= (string-code-point-at s 4) 45) (= (string-code-point-at s 7) 45)
+                        (= (lower (string-code-point-at s 10)) 116)
+                        (= (string-code-point-at s 13) 58) (= (string-code-point-at s 16) 58)
+                        (decimal-digits? s 0 4) (decimal-digits? s 5 7)
+                        (decimal-digits? s 8 10) (decimal-digits? s 11 13)
+                        (decimal-digits? s 14 16) (decimal-digits? s 17 19))
+        clock-valid (and (>= hour 0) (<= hour 24) (>= minute 0) (<= minute 59)
+                         (>= second 0) (<= second 59)
+                         (or (< hour 24) (and (= minute 0) (= second 0) (= millis 0))))]
+    (if (and date-shape fraction-valid zone-valid (>= year 0) (>= month 1) (<= month 12)
+             (>= day 1) (<= day 31) clock-valid)
+      (let [offset-minutes (* (if (= zone-sign 45) 1 (if (= zone-sign 43) -1 0))
+                              (+ (* zone-hour 60) zone-minute))
+            epoch (+ (* (days-from-civil year month day) 86400000)
+                     (* hour 3600000) (* minute 60000) (* second 1000) millis
+                     (* offset-minutes 60000))]
+        (string-concat "once-at\n" (string-from-i64 epoch)))
+      "")))
+
+(defn parse-iso-time-form [s :string] :string
+  (let [n (string-length s)]
+    (if (< n 20) "" (parse-iso-time-form-bounded s n))))
+
 (defn parse-schedule-form [s :string] :string
   (let [text (trim-space s)
         lower-s (lower-text text)
+        absolute (parse-iso-time-form text)
         every? (starts-with-text? lower-s "every ")
         body (if every? (string-substring lower-s 6 (string-length lower-s)) lower-s)
         relative? (starts-with-text? lower-s "in ")
         relative (if relative? (duration-minutes (string-substring lower-s 3 (string-length lower-s))) -1)
         natural (natural-cron body)
         minutes (duration-minutes body)]
-    (cond (and relative? (> relative 0)) (string-concat "once-after\n" (string-from-i64 relative))
+    (cond (not (= absolute "")) absolute
+          (and relative? (> relative 0)) (string-concat "once-after\n" (string-from-i64 relative))
           (not (= natural "")) (string-concat "cron\n" natural)
           (> minutes 0) (string-concat "interval\n" (string-from-i64 minutes))
           (= (cron-problem text) "schedule/ok") (string-concat "cron\n" text)

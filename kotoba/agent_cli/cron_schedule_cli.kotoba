@@ -33,5 +33,6 @@
             value (string-substring form (inc split) (string-length form))]
         (cond (= kind "interval") (say-line (string-concat "interval " value))
               (= kind "once-after") (say-line (string-concat "once-after " value))
+              (= kind "once-at") (say-line (string-concat "once-at " value))
               (= kind "cron") (say-line (string-concat "cron " value))
               :else (fail input))))))
