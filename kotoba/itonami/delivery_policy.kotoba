@@ -5,9 +5,10 @@
   success. The caller supplies resolved facts explicitly, so this policy has
   no promise, map, adapter-registry, or host dependency. Branch order is part
   of the contract. String-valued delivery lanes are exposed as a comma list
-  because the Amu safe profile has no string-vector container. The bot-chat
-  parser encodes nil as `none` and a string result as `value:<name>` (empty
-  for the current profile)."
+  because the Amu safe profile has no string-vector container. Sequence input
+  has an internal [:list :string] normalizer; the native module boundary does
+  not export that list type yet. The bot-chat parser encodes nil as `none` and
+  a string result as `value:<name>` (empty for the current profile)."
   (:export [classify-outcome normalize-deliver-string lanes-csv
             parse-bot-chat-token]))
 
@@ -62,8 +63,22 @@
 
 (defn normalize-deliver-string [deliver :string] :string
   ;; The scalar-string branch of normalize-deliver-value. Empty encodes the
-  ;; source's nil/empty case; sequential values need a separate host boundary.
+  ;; source's nil/empty case.
   (if (= deliver "") "local" deliver))
+
+(defn- normalize-deliver-list-run [items [:list :string] i :i64 n :i64 out :string] :string
+  (if (>= i n)
+    (if (= out "") "local" out)
+    (let [item (trimmed (typed-list-nth [:list :string] items i))]
+      (if (= item "")
+        (normalize-deliver-list-run items (+ i 1) n out)
+        (normalize-deliver-list-run
+          items (+ i 1) n
+          (if (= out "") item (string-concat (string-concat out ",") item)))))))
+
+(defn- normalize-deliver-list [items [:list :string]] :string
+  ;; Sequential string values: trim each lane, remove blanks, then join.
+  (normalize-deliver-list-run items 0 (vector-count items) ""))
 
 (defn- contains-lane? [lanes :string lane :string] :bool
   (if (= lanes "") false
