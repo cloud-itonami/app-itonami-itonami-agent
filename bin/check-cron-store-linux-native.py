@@ -17,11 +17,15 @@ import time
 from pathlib import Path
 
 
-AMU_COMMIT = "49dccb68f1a6ef9aece7e9de30bf6224687d06fc"
+AMU_COMMIT = "06b3d1021e6d2d41a1c2c0d22004cb758ca9d631"
 AMU_BINARY_PATH = "bin/amu-linux-x86_64"
 AMU_BINARY_SHA256 = "2cbd90970f9766481ae46fd30ae515548e7b3163a9272f7a0497c988258dd654"
 AMU_RUNNER_SOURCE = "seed/x86_64-kx64-runner.kotoba"
 AMU_RUNNER_SHA256 = "c9f1fe1b5c1748450fb11b233cbdc9d9234880a60dc480c0387b173f60d905be"
+AMU_CANDIDATE_SOURCE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
+AMU_CANDIDATE_COMPILER_SHA256 = "5bae07e401b812dba440c8125ba43c7a74393ddafaec49f6922d094f316477c9"
+AMU_CANDIDATE_COMPILER_BYTES = 10306048
+AMU_CANDIDATE_RUNNER_SHA256 = "27349b7edfea5833f41263cdbf6195e5f26848bfb491e406c2d826987194d3b2"
 KOTOBA_COMMIT = "63e30efc6402320fca6f9c70abd93f113e05d99c"
 KOTOBA_JCS_PATH = "lib/org.ietf.jcs/kotoba/jcs/reader.kotoba"
 KOTOBA_JCS_SHA256 = "f8af2953904bd0a96e7b5c3b9e34151bcae3754e5358669adb8ac289acc0872f"
@@ -73,6 +77,36 @@ def run(name, argv, cwd, env, calls, timeout=900):
     if result.stderr:
         raise RuntimeError(f"{name} wrote stderr: {result.stderr.decode(errors='replace')[-2000:]}")
     return result.stdout
+
+
+def derive_project_compiler(baseline, amu_repo, out, env, calls):
+    manifest = git_blob(amu_repo, AMU_COMMIT, "seed/FULL-MANIFEST").decode("ascii")
+    modules = [line for line in manifest.splitlines() if line and not line.startswith("#")]
+    if len(modules) != 60 or "seed/98-x86_64-project.kotoba" not in modules:
+        raise RuntimeError("pinned Amu FULL-MANIFEST does not match the 60-source candidate")
+    sources = out / "amu-full-candidate.kotoba"
+    with sources.open("wb") as stream:
+        for module in modules:
+            path = AMU_CANDIDATE_SOURCE if module == "seed/98-x86_64-project.kotoba" else module
+            stream.write(git_blob(amu_repo, AMU_COMMIT, path))
+            stream.write(b"\n")
+
+    compiler = baseline
+    generations = []
+    for index in (1, 2, 3):
+        image = out / f"amu-candidate-F{index}.elf"
+        run(f"derive-amu-F{index}", [compiler, "compile", sources, "--target", "x86_64-linux",
+            "--output", image, "--format", "static"], out, env, calls, timeout=900)
+        image.chmod(0o700)
+        image_bytes = image.read_bytes()
+        generations.append({"sha256": sha(image_bytes), "bytes": len(image_bytes)})
+        compiler = image
+    if generations[0] != generations[1] or generations[1] != generations[2]:
+        raise RuntimeError(f"Amu full-source derivation did not reach a fixed point: {generations}")
+    if generations[-1] != {"sha256": AMU_CANDIDATE_COMPILER_SHA256,
+                           "bytes": AMU_CANDIDATE_COMPILER_BYTES}:
+        raise RuntimeError(f"Amu candidate compiler differs from qualified digest: {generations[-1]}")
+    return compiler, generations, sha(sources.read_bytes())
 
 
 def locked_project(out, kotoba_repo):
@@ -152,15 +186,17 @@ def main():
     amu_binary = out / "amu-linux-x86_64"
     write(amu_binary, amu_binary_bytes)
     amu_binary.chmod(0o700)
+    calls = []
+    compile_env = {"PATH": "/nonexistent", "KEXE_CAP_RESOURCES_35": str(out),
+                   "KEXE_STACK_BYTES": "8388608"}
+    candidate_compiler, generations, candidate_sources_sha = derive_project_compiler(
+        amu_binary, amu_repo, out, compile_env, calls)
     runner_source = out / "x86_64-kx64-runner.kotoba"
     write(runner_source, runner_source_bytes)
     gate, lock, source_digests = locked_project(out, kotoba_repo)
-    calls = []
 
     artifact = out / "cron-store.kx64"
-    compile_env = {"PATH": "/nonexistent", "KEXE_CAP_RESOURCES_35": str(out),
-                   "KEXE_STACK_BYTES": "8388608"}
-    run("compile-project", [amu_binary, "compile", gate, "--target", "x86_64-linux",
+    run("compile-project", [candidate_compiler, "compile", gate, "--target", "x86_64-linux",
         "--output", artifact, "--format", "kx64-v1", "--source-lock", lock,
         "--source-lock-sha256", sha(lock.read_bytes())], out, compile_env, calls)
     head, separator, payload_bytes = artifact.read_bytes().partition(b"\n\n")
@@ -171,8 +207,10 @@ def main():
     write(payload, payload_bytes)
 
     runner = out / "kx64-runner.elf"
-    run("compile-runner", [amu_binary, "compile", runner_source, "--target", "x86_64-linux",
+    run("compile-runner", [candidate_compiler, "compile", runner_source, "--target", "x86_64-linux",
         "--output", runner, "--format", "kx64-runner"], out, compile_env, calls)
+    if sha(runner.read_bytes()) != AMU_CANDIDATE_RUNNER_SHA256:
+        raise RuntimeError("derived Amu candidate KX64 runner digest mismatch")
     runner.chmod(0o700)
 
     positive = out / "positive-scope"
@@ -211,6 +249,9 @@ def main():
         "itonami_source_revision": source_revision,
         "amu_source_commit": AMU_COMMIT,
         "amu_linux_compiler_sha256": sha(amu_binary_bytes),
+        "amu_candidate_source_sha256": candidate_sources_sha,
+        "amu_candidate_compiler_sha256": sha(candidate_compiler.read_bytes()),
+        "amu_candidate_generations": generations,
         "kotoba_source_commit": KOTOBA_COMMIT,
         "kotoba_jcs_source_sha256": KOTOBA_JCS_SHA256,
         "kotoba_store_io_source_sha256": KOTOBA_STORE_IO_SHA256,
