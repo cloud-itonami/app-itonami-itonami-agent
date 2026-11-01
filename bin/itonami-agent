@@ -1,9 +1,6 @@
 #!/bin/sh
-# The trench-4 flip structure (ledger measurement 51): covered routes run
-# as one-shot kexe guests through the loader -- no kbb, no node. Routes
-# not yet ported fall back to bin/itonami-agent-kbb (the old
-# `env -S kbb --backend sci` launcher) and are listed in the ledger's
-# flip inventory; when the list empties, the fallback goes away.
+# Covered routes run as one-shot kexe guests through the loader. Unported
+# routes fail closed until their Kotoba guest is implemented and qualified.
 #
 # Guest manifest (offset/arity/grants per guest -- from the amu build;
 # one offset serves every target of one source build):
@@ -29,6 +26,38 @@ run_guest() {
   KEXE_COMMAND=1 exec "$LOADER" "$GUESTS/$raw" "$offset" 0 "$ARCH" "$grants" -- "$@"
 }
 
+blocked() {
+  printf '%s\n' "itonami-agent: route '$*' is blocked pending Kotoba/Amu selfhost port" >&2
+  exit 78
+}
+
+usage() {
+  cat <<'EOF'
+Usage: itonami-agent <route> [arguments]
+
+Selfhost routes:
+  cron notepad <base> <verb> [key] [value]
+  kanban <base> <verb> [arguments]
+  session-search <base> <query> [limit] [after] [before] [detail] [sort] [sid] [pbase]
+  turn <base> <job-id> <task>
+  turn-loop <base> <job-id> <task>
+
+Other routes are blocked until their Kotoba/Amu selfhost port is qualified.
+EOF
+}
+
+if [ "$#" -eq 0 ]; then
+  usage
+  exit 0
+fi
+
+case "$1" in
+  help|--help|-h)
+    usage
+    exit 0
+    ;;
+esac
+
 case "$1" in
   cron)
     case "$2" in
@@ -39,7 +68,7 @@ case "$1" in
         run_guest notepad-cli.raw 28280 3,34,35,37,38,39 "$verb" "$base" "$key" "$value"
         ;;
       *)
-        exec "$HERE/itonami-agent-kbb" "$@"
+        blocked "$@"
         ;;
     esac
     ;;
@@ -67,6 +96,6 @@ case "$1" in
     run_guest turn-loop.raw 61004 3,34,35,37,38,11 "$@"
     ;;
   *)
-    exec "$HERE/itonami-agent-kbb" "$@"
+    blocked "$@"
     ;;
 esac
