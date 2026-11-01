@@ -664,7 +664,7 @@
                           (= (jcs/json-kind b name-at) 3)
                           (= (jcs/json-string b name-at) target))
           match (and (= found 0) (or id-match name-match))
-          value (if match (update-job-object (raw-value b job) patch-at schedule-json display next-run-at)
+          value (if match (update-job-object (raw-value b job) b patch-at schedule-json display next-run-at)
                   (raw-value b job))
           next-out (string-concat out (string-concat (if (> count 0) "," "") value))]
       (recur b array-at target patch-at schedule-json display next-run-at (inc i)
