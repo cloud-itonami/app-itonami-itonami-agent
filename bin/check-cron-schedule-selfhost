@@ -1,0 +1,115 @@
+#!/bin/sh
+# Compile and execute the pure schedule selfhost gate through the locked
+# multi-module Amu CLI. This is a bounded native qualification probe, not the
+# Itonami product launcher or a release gate.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+EXPECTED_CLI_SHA256=03edb244e1eefde4193bb5a18e1a7eddd9716e1d2c46d27c5f03dfaa1e42b499
+EXPECTED_SCHEDULE_SHA256=0d69ed31b6601dacdf9c65e3d98c2d44328925ac6cddefa46125db2679fb7cbe
+AMU_COMMIT=b16fe2b49237d6418d27864a09e36d17ba289c5d
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+CLI_SHA256=$(shasum -a 256 "$CLI" | cut -d ' ' -f 1)
+if [ "$CLI_SHA256" != "$EXPECTED_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected Amu CLI digest: $CLI_SHA256" >&2
+  exit 2
+fi
+SCHEDULE="$REPO_ROOT/kotoba/itonami/schedule.kotoba"
+SCHEDULE_SHA256=$(shasum -a 256 "$SCHEDULE" | cut -d ' ' -f 1)
+if [ "$SCHEDULE_SHA256" != "$EXPECTED_SCHEDULE_SHA256" ]; then
+  printf '%s\n' "unexpected schedule source digest: $SCHEDULE_SHA256" >&2
+  exit 2
+fi
+
+mkdir -p "$OUT_DIR"
+cp "$SCHEDULE" "$OUT_DIR/itonami-schedule.kotoba"
+cat > "$OUT_DIR/schedule-gate.kotoba" <<'EOF'
+(ns schedule-gate (:require [itonami.schedule :as schedule]) (:export [main]))
+(defn main [] :i64
+  (+ (if (schedule/test-civil) 1 0)
+     (+ (if (schedule/test-parse) 2 0)
+        (+ (if (schedule/test-cron) 4 0)
+           (if (schedule/test-other) 8 0)))))
+EOF
+
+SCHEDULE_PATH="$OUT_DIR/itonami-schedule.kotoba"
+GATE_PATH="$OUT_DIR/schedule-gate.kotoba"
+SCHEDULE_FILE_SHA=$(shasum -a 256 "$SCHEDULE_PATH" | cut -d ' ' -f 1)
+GATE_FILE_SHA=$(shasum -a 256 "$GATE_PATH" | cut -d ' ' -f 1)
+cat > "$OUT_DIR/schedule.ksl" <<EOF
+KSL2
+entry $GATE_PATH
+module itonami.schedule $SCHEDULE_PATH
+module schedule-gate $GATE_PATH
+file $SCHEDULE_FILE_SHA $SCHEDULE_PATH
+file $GATE_FILE_SHA $GATE_PATH
+EOF
+LOCK_SHA=$(shasum -a 256 "$OUT_DIR/schedule.ksl" | cut -d ' ' -f 1)
+
+"$CLI" compile "$GATE_PATH" --source-lock "$OUT_DIR/schedule.ksl" \
+  -o "$OUT_DIR/schedule-tests.macho"
+codesign --verify --strict "$OUT_DIR/schedule-tests.macho"
+RESULT=$("$OUT_DIR/schedule-tests.macho")
+if [ "$RESULT" != 15 ]; then
+  printf 'schedule test mask mismatch: expected 15, got %s\n' "$RESULT" >&2
+  exit 1
+fi
+
+cp "$SCHEDULE_PATH" "$OUT_DIR/schedule-before-refusal.kotoba"
+printf '\n' >> "$SCHEDULE_PATH"
+if "$CLI" compile "$GATE_PATH" --source-lock "$OUT_DIR/schedule.ksl" \
+  -o "$OUT_DIR/should-not-exist.macho" > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! rg -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+{
+  printf 'format: itonami.cron-schedule-selfhost-gate.v1\n'
+  printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$CLI_SHA256"
+  printf 'schedule_source_sha256: %s\n' "$SCHEDULE_SHA256"
+  printf 'gate_source_sha256: %s\n' "$GATE_FILE_SHA"
+  printf 'source_lock_sha256: %s\n' "$LOCK_SHA"
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$OUT_DIR/schedule-tests.macho" | cut -d ' ' -f 1)"
+  printf 'runtime_result: %s\n' "$RESULT"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: bounded multi-module native selfhost schedule gate; not product-launcher qualification\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"
