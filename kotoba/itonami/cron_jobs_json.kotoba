@@ -671,7 +671,7 @@
              next-out (inc count) (if match 1 found)))))
 
 (defn update-job-json [json :string id-or-name :string patch-json :string
-                       updated-at :string now-ms :i64 offset-text :string]
+                       updated-at :string now-ms :i64 offset :i64]
   [:result :string :string]
   ;; Implements cronjob_manage update fields except profile-configured model pinning.
   (let [b (vector-i64-from-bytes (string-to-utf8 json))
@@ -685,7 +685,6 @@
         split (string-index-of form "\n")
         kind (if (< split 0) "" (string-substring form 0 split))
         value (if (< split 0) "" (string-substring form (inc split) (string-length form)))
-        offset (offset-minutes offset-text)
         cron-offset (if (string=? kind "cron") offset 0)
         next-ms (cond
           (or (string=? kind "interval") (string=? kind "once-after"))
@@ -727,7 +726,7 @@
   (let [source "{\"jobs\":[{\"id\":\"update\",\"name\":\"old\",\"prompt\":\"old prompt\",\"continuity\":true,\"skills\":[\"old\"],\"skill\":\"old\",\"repeat\":{\"times\":1,\"completed\":2},\"schedule\":{\"kind\":\"interval\",\"minutes\":5},\"next_run_at\":null,\"future\":1.25e+7},{\"id\":\"stay\"}],\"extension\":true}"
         patch "{\"prompt\":\"\",\"name\":\"new\",\"continuity\":false,\"context_from\":[],\"skills\":[],\"repeat\":2,\"schedule\":\"every 10m\"}"
         result (update-job-json source "update" patch "2026-11-02T03:04:05.006Z"
-                                1793588645006 "+0000")
+                                1793588645006 0)
         output (result-value-of [:result :string :string] result "")]
     (and (result-ok?-of [:result :string :string] result)
          (>= (string-index-of output "\"prompt\":\"\"") 0)
@@ -744,9 +743,9 @@
 (defn test-update-job-refuses-invalid-patch [] :bool
   (let [source "{\"jobs\":[{\"id\":\"update\",\"prompt\":\"old\"}]}"
         unknown (update-job-json source "update" "{\"unexpected\":1}"
-                                 "2026-11-02T03:04:05.006Z" 1793588645006 "+0000")
+                                 "2026-11-02T03:04:05.006Z" 1793588645006 0)
         invalid (update-job-json source "update" "{\"continuity\":\"false\"}"
-                                 "2026-11-02T03:04:05.006Z" 1793588645006 "+0000")]
+                                 "2026-11-02T03:04:05.006Z" 1793588645006 0)]
     (and (not (result-ok?-of [:result :string :string] unknown))
          (not (result-ok?-of [:result :string :string] invalid)))))
 

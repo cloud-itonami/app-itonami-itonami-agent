@@ -336,7 +336,8 @@
       (if (not (fs/lock lock-path))
         (result-err-of [:result :string :string] "cron-store/busy-or-lock-denied")
         (let [before (if (fs/exists? path) (fs/read path) "{\"jobs\":[]}")
-              changed (jobs/update-job-json before id-or-name patch-json updated-at now-ms offset-text)
+              changed (jobs/update-job-json before id-or-name patch-json updated-at now-ms
+                        (offset-minutes offset-text))
               committed (if (result-ok?-of [:result :string :string] changed)
                           (write-atomic cron-dir path
                             (result-value-of [:result :string :string] changed "")) false)
