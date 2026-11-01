@@ -168,10 +168,11 @@ def execute(name, runner, payload, scope, job_id, expected_result, out, calls):
     return stdout
 
 
-def execute_launcher(name, runner, payload, scope, expected_exit, out, calls):
-    env = dict(os.environ, ITONAMI_CRON_JOBS_RUNNER=str(runner),
-               ITONAMI_CRON_JOBS_PAYLOAD=str(payload))
-    argv = [ROOT / "bin/itonami-agent", "cron", "jobs", "remove",
+def execute_launcher(name, launcher, scope, expected_exit, out, calls):
+    env = dict(os.environ)
+    env.pop("ITONAMI_CRON_JOBS_RUNNER", None)
+    env.pop("ITONAMI_CRON_JOBS_PAYLOAD", None)
+    argv = [launcher, "cron", "jobs", "remove",
             scope / "d", "remove-me"]
     started = time.monotonic()
     result = subprocess.run(list(map(str, argv)), cwd=ROOT, env=env,
@@ -245,6 +246,37 @@ def main():
         raise RuntimeError("derived Amu candidate KX64 runner digest mismatch")
     runner.chmod(0o700)
 
+    source_revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).decode().strip()
+    package = out / "package"
+    package_bin = package / "bin"
+    package_bin.mkdir(parents=True)
+    package_launcher = package_bin / "itonami-agent"
+    package_runner = package_bin / "cron-jobs-runner"
+    package_payload = package_bin / "cron-jobs.payload"
+    shutil.copy2(ROOT / "bin/itonami-agent", package_launcher)
+    shutil.copy2(runner, package_runner)
+    shutil.copy2(payload, package_payload)
+    package_launcher.chmod(0o700)
+    package_runner.chmod(0o700)
+    package_manifest = {
+        "format": "itonami.cron-store-linux-native-candidate-package.v1",
+        "candidate_only": True,
+        "target": "x86_64-linux",
+        "itonami_source_revision": source_revision,
+        "amu_source_commit": AMU_COMMIT,
+        "amu_candidate_compiler_sha256": sha(candidate_compiler.read_bytes()),
+        "kotoba_source_commit": KOTOBA_COMMIT,
+        "project_kx64_sha256": sha(artifact.read_bytes()),
+        "project_payload_sha256": sha(payload_bytes),
+        "runner_elf_sha256": sha(runner.read_bytes()),
+        "launcher_sha256": sha(package_launcher.read_bytes()),
+        "capabilities": ["cli/args", "clock/now", "fs/app-data"],
+        "adoption": "not-public; Amu experimental source candidate",
+    }
+    manifest_path = package / "candidate-package.json"
+    manifest_path.write_text(json.dumps(package_manifest, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8")
+
     positive = out / "positive-scope"
     (positive / "d").mkdir(parents=True)
     (positive / "d/jobs.json").write_text(
@@ -280,7 +312,7 @@ def main():
     (launcher_positive / "d/jobs.json").write_text(
         '{"jobs":[{"id":"remove-me","keep":1},{"id":"stay","future":1.25e+7}],'
         '"unknown":{"n":-0.0001},"updated_at":"old"}', encoding="ascii")
-    launcher_positive_stdout = execute_launcher("launcher-clock-fs-positive", runner, payload,
+    launcher_positive_stdout = execute_launcher("launcher-clock-fs-positive", package_launcher,
                                                 launcher_positive, 0, out, calls)
     launcher_persisted = (launcher_positive / "d/jobs.json").read_text(encoding="ascii")
     if not launcher_persisted.startswith(prefix) or not launcher_persisted.endswith('"}'):
@@ -295,14 +327,34 @@ def main():
     launcher_refusal = out / "launcher-refusal-scope"
     (launcher_refusal / "d").mkdir(parents=True)
     (launcher_refusal / "d/jobs.json").write_text(malformed, encoding="ascii")
-    execute_launcher("launcher-clock-fs-refusal", runner, payload, launcher_refusal,
+    execute_launcher("launcher-clock-fs-refusal", package_launcher, launcher_refusal,
                      1, out, calls)
     if (launcher_refusal / "d/jobs.json").read_text(encoding="ascii") != malformed:
         raise RuntimeError("launcher refusal modified malformed source JSON")
     if (launcher_refusal / "d/.jobs.json.tmp").exists():
         raise RuntimeError("launcher refusal left a temporary file")
 
-    source_revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).decode().strip()
+    missing_package_bin = out / "missing-package/bin"
+    missing_package_bin.mkdir(parents=True)
+    missing_launcher = missing_package_bin / "itonami-agent"
+    shutil.copy2(ROOT / "bin/itonami-agent", missing_launcher)
+    missing_scope = out / "launcher-missing-scope"
+    (missing_scope / "d").mkdir(parents=True)
+    missing_env = dict(os.environ)
+    missing_env.pop("ITONAMI_CRON_JOBS_RUNNER", None)
+    missing_env.pop("ITONAMI_CRON_JOBS_PAYLOAD", None)
+    missing_result = subprocess.run([str(missing_launcher), "cron", "jobs", "remove",
+        str(missing_scope / "d"), "remove-me"], cwd=ROOT, env=missing_env,
+        capture_output=True, timeout=120)
+    calls.append({"name": "launcher-missing-artifact", "exit": missing_result.returncode,
+                  "seconds": 0, "stdout_sha256": sha(missing_result.stdout),
+                  "stderr_sha256": sha(missing_result.stderr)})
+    write(out / "launcher-missing-artifact.stdout", missing_result.stdout)
+    write(out / "launcher-missing-artifact.stderr", missing_result.stderr)
+    if missing_result.returncode != 78 or b"native artifact missing" not in missing_result.stderr:
+        raise RuntimeError(f"launcher missing-artifact refusal mismatch: "
+                           f"exit={missing_result.returncode} stderr={missing_result.stderr!r}")
+
     receipt = {
         "format": "itonami.cron-jobs-linux-native-gate.v1",
         "itonami_source_revision": source_revision,
@@ -326,6 +378,14 @@ def main():
         "refusal_runtime": "PASS",
         "launcher_positive_runtime": "PASS",
         "launcher_refusal_runtime": "PASS",
+        "launcher_missing_artifact_refusal": "PASS",
+        "candidate_package": {
+            "manifest": "package/candidate-package.json",
+            "manifest_sha256": sha(manifest_path.read_bytes()),
+            "launcher_sha256": sha(package_launcher.read_bytes()),
+            "runner_sha256": sha(package_runner.read_bytes()),
+            "payload_sha256": sha(package_payload.read_bytes()),
+        },
         "codesign": "not-applicable: Linux static ELF",
         "host_oracle_clock_check": "PASS within 10 seconds",
         "processes": calls,
