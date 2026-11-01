@@ -1,0 +1,21 @@
+(ns itonami.delivery-policy
+  "Pure Kotoba port of itonami.agent.delivery/classify-outcome. `facts` is
+  seven ASCII 0/1 flags in this order: delivery-error, should-deliver,
+  delivery-queued, notification-suppressed, unresolved-origin, incident-acked,
+  success. The caller supplies resolved facts explicitly, so this policy has
+  no promise, map, adapter-registry, or host dependency. Branch order is part
+  of the contract."
+  (:export [classify-outcome]))
+
+(defn- flag? [facts :string i :i64] :bool
+  (and (> (string-length facts) i)
+       (= 49 (string-code-point-at facts i))))
+
+(defn classify-outcome [facts :string normalized-deliver :string] :string
+  (cond (flag? facts 0) "failed"
+        (and (flag? facts 1) (flag? facts 2)) "queued"
+        (flag? facts 3) "suppressed"
+        (and (flag? facts 1) (flag? facts 4)) "not_configured"
+        (and (flag? facts 1) (not (string=? "local" normalized-deliver))) "delivered"
+        (and (flag? facts 5) (not (flag? facts 6))) "suppressed_acked"
+        :else "suppressed"))
