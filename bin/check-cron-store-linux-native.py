@@ -77,6 +77,8 @@ def run(name, argv, cwd, env, calls, timeout=900):
 
 def locked_project(out, kotoba_repo):
     sources = out / "src"
+    for directory in ("gate", "hata", "itonami", "jcs"):
+        (sources / directory).mkdir(parents=True, exist_ok=True)
     gate = sources / "gate/cron_jobs_store_clock_gate.kotoba"
     store_io = sources / "hata/store_io.kotoba"
     jobs = sources / "itonami/cron_jobs_json.kotoba"
