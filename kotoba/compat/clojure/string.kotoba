@@ -8,11 +8,12 @@
   Boundaries measured for this compiler (safe profile), each fail-closed or
   named here rather than approximated silently:
   - split needs NO string container (the safe profile has none: :vector-string
-    is outside the profile; count wants a bounded vector): split-count (pieces,
-    empty pieces counted -- Clojure str/split parity, test-pinned) plus
-    split-piece (the k-th piece). join has no container to take, so ported
-    callers fold string-concat; split-lines is split-count/piece over pieces
-    delimited by a one-code-point newline.
+    is outside the profile; count wants a bounded vector): split-count plus
+    split-piece (the k-th piece), both scanning with string-index-of over
+    remaining suffixes. split-count follows ClojureScript str/split's trailing
+    empty-piece removal and empty-pattern behavior. join has no container to
+    take, so ported callers fold string-concat; split-lines is split-count/piece
+    over pieces delimited by a one-code-point newline.
   - string-index-of-from is compile-admitted but NOT runtime-executable (the
     same trap as string-fold-ascii / string-upper), so split-piece scans with
     string-index-of on the remaining suffix.
@@ -137,7 +138,25 @@
                                        (string-length s))))))
 
 (defn split-count [s :string sep :string] :i64
-  (string-split-count s sep))
+  (let [n (string-length s)
+        seplen (string-length sep)]
+    (if (= seplen 0)
+      (if (= n 0) 0 (+ 1 (utf16-length-run s 0 n 0)))
+      (if (= n 0) 1 (split-count-run s sep seplen 0 0)))))
+
+(defn- utf16-length-run [s :string i :i64 n :i64 total :i64] :i64
+  (if (>= i n)
+    total
+    (let [c (string-code-point-at s i)]
+      (utf16-length-run s (+ i 1) n (+ total (if (> c 65535) 2 1))))))
+
+(defn- split-count-run [s :string sep :string seplen :i64 segment :i64 count :i64] :i64
+  (let [i (string-index-of s sep)]
+    (if (< i 0)
+      (if (> (string-length s) 0) (+ segment 1) count)
+      (split-count-run (string-substring s (+ i seplen) (string-length s))
+                       sep seplen (+ segment 1)
+                       (if (> i 0) (+ segment 1) count)))))
 
 (defn split-piece [s :string sep :string k :i64] :string
   (split-piece-run s sep k (string-length sep)))
