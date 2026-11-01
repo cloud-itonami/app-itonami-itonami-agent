@@ -37,6 +37,7 @@ Usage: itonami-agent <route> [arguments]
 
 Selfhost routes:
   cron schedule <expression>
+  cron next-run <expression> <epoch-ms> <utc-offset-minutes>
   cron notepad <base> <verb> [key] [value]
   kanban <base> <verb> [arguments]
   session-search <base> <query> [limit] [after] [before] [detail] [sort] [sid] [pbase]
@@ -69,6 +70,14 @@ case "$1" in
           blocked "cron schedule (native artifact missing)"
         fi
         exec "$schedule_cli" "$@"
+        ;;
+      next-run)
+        shift 2
+        schedule_cli="$HERE/cron-schedule-cli"
+        if [ ! -x "$schedule_cli" ]; then
+          blocked "cron next-run (native artifact missing)"
+        fi
+        exec "$schedule_cli" --next-run "$@"
         ;;
       notepad)
         shift 2

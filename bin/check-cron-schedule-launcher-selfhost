@@ -72,8 +72,27 @@ if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/r
   exit 1
 fi
 
+NEXT_RUN_EXPECTED=$(printf '300000\n0')
+NEXT_RUN_ACTUAL=$("$OUT_DIR/bin/itonami-agent" cron next-run 'every 5m' 0 0)
+if [ "$NEXT_RUN_ACTUAL" != "$NEXT_RUN_EXPECTED" ]; then
+  printf 'launcher next-run result mismatch: got %s\n' "$NEXT_RUN_ACTUAL" >&2
+  exit 1
+fi
+
+NEXT_RUN_REFUSAL=$("$OUT_DIR/bin/itonami-agent" cron next-run 'not-a-schedule' 0 0 \
+  2> "$OUT_DIR/next-run-refusal.stderr")
+if [ "$NEXT_RUN_REFUSAL" != 2 ]; then
+  printf 'launcher next-run refusal marker mismatch: expected 2, got %s\n' "$NEXT_RUN_REFUSAL" >&2
+  exit 1
+fi
+if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/next-run-refusal.stderr"; then
+  cat "$OUT_DIR/next-run-refusal.stderr" >&2
+  printf '%s\n' "launcher next-run refusal did not emit its named diagnostic" >&2
+  exit 1
+fi
+
 set +e
-"$OUT_DIR/missing/bin/itonami-agent" cron schedule 'every 5m' \
+"$OUT_DIR/missing/bin/itonami-agent" cron next-run 'every 5m' 0 0 \
   > "$OUT_DIR/missing.stdout" 2> "$OUT_DIR/missing.stderr"
 MISSING_STATUS=$?
 set -e
@@ -82,7 +101,7 @@ if [ "$MISSING_STATUS" -ne 78 ]; then
   cat "$OUT_DIR/missing.stderr" >&2
   exit 1
 fi
-if ! rg -q "route 'cron schedule \(native artifact missing\)' is blocked" "$OUT_DIR/missing.stderr"; then
+if ! rg -q "route 'cron next-run \(native artifact missing\)' is blocked" "$OUT_DIR/missing.stderr"; then
   cat "$OUT_DIR/missing.stderr" >&2
   printf '%s\n' "missing-artifact refusal did not identify the blocked route" >&2
   exit 1
@@ -93,14 +112,16 @@ if [ -e "$OUT_DIR/kbb-was-run" ]; then
 fi
 
 {
-  printf 'format: itonami.cron-schedule-launcher-gate.v1\n'
+  printf 'format: itonami.cron-schedule-launcher-gate.v2\n'
   printf 'source_revision: %s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD)"
   printf 'artifact_sha256: %s\n' "$ARTIFACT_SHA256"
   printf 'positive_route: PASS\n'
   printf 'invalid_schedule_refusal: PASS\n'
+  printf 'positive_next_run_route: PASS\n'
+  printf 'invalid_next_run_refusal: PASS\n'
   printf 'missing_artifact_status: %s\n' "$MISSING_STATUS"
   printf 'missing_artifact_fallback_invocation: REFUSED\n'
-  printf 'qualification: launcher schedule subroute only; no cron persistence/runtime qualification\n'
+  printf 'qualification: schedule parser and next-run subroutes only; no cron persistence/runtime qualification\n'
 } > "$OUT_DIR/launcher-receipt.txt"
 
 cat "$OUT_DIR/launcher-receipt.txt"
