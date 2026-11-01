@@ -24,17 +24,18 @@ command is wired into the installed launcher or qualified as a product route.
 ## Command and result
 
 The KSL2 lock mapped these exact source digests to `/src` paths. The CLI
-module itself was the entry module, importing `itonami.schedule`. With FD 3
-bound to the scratch project directory:
+module itself was the entry module, importing `itonami.schedule`. The
+reproducible command is `bin/build-cron-schedule-cli-diagnostic`; it verifies
+the full-root digest and writes only to a new directory under `workspaces/`.
+It was run as:
 
 ```sh
-amu-full-root.macho compile /src/agent_cli/cron_schedule_cli.kotoba \
-  --target aarch64-macos --output cron-schedule.kseed \
-  --source-lock schedule.ksl --source-lock-sha256 <KSL2-SHA256> 3< .
-amu-full-root.macho extract-native cron-schedule.kseed \
-  --symbol cron-schedule-cli --output cron-schedule.raw 3< .
+bin/build-cron-schedule-cli-diagnostic \
+  /Users/junkawasaki/github/kotoba-lang/amu/seed/bootstrap/aarch64-macos/amu-full-root.macho \
+  /Users/junkawasaki/github/workspaces/codex/awai-60-cron-cli-build-script
 ```
 
+The command returned exit 0 and wrote `workspaces/codex/awai-60-cron-cli-build-script/build-receipt.txt`.
 Compile returned `ok true`; output was 29,103 bytes, SHA-256
 `4352a11c4cfdc6b2d9c570971ae5690a5908d017ef29697f5ae5a09ca030ecec`.
 Extraction returned `ok`, offset `27116`, raw length `29061`, arity `0`; raw
