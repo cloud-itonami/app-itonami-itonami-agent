@@ -27,6 +27,8 @@ package.
 standalone macOS native program. The Amu CLI returned success and
 `codesign --verify --strict` passed. Program size is 133,152 bytes; SHA-256 is
 `bb48d5426e48a610045b310f978d21359dd431cb7b7667da44d5a978b112adac`.
+`file` identifies it as a Mach-O 64-bit arm64 executable. `otool -L` lists no
+dynamic libraries, and `nm -u` reports no undefined symbols.
 
 Reproduction:
 
@@ -44,7 +46,8 @@ root.
 ## Qualification boundary
 
 Amu PR #1764 is open and unmerged, so this is candidate-dependent evidence.
-The program was compiled and signature-checked, but not invoked. Output/exit
+The program was compiled, signature-checked, and inspected for dynamic
+dependencies, but not invoked. Output/exit
 parity, ARM/Linux artifacts, product packaging, launcher dispatch, scheduler
 persistence, and profile-aware product behavior remain unqualified. Do not
 present this candidate as deployed or production-ready.
