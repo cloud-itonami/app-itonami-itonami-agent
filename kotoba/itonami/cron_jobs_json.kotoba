@@ -7,7 +7,7 @@
   (:require [jcs.reader :as jcs]
             [itonami.schedule :as schedule])
   (:export [jobs-array-start replace-jobs-array set-updated-at-json
-            remove-job-json list-jobs-json pause-job-json resume-job-json update-schedule-json
+            remove-job-json list-jobs-json pause-job-json resume-job-json update-job-json
             json-quote create-job-object append-job-json
             test-replace-preserves-extensions test-replace-refuses-invalid
             test-remove-preserves-job-extensions test-remove-refuses-missing
@@ -15,8 +15,8 @@
             test-updated-at-preserves-extensions test-pause-preserves-extensions
             test-pause-refuses-missing test-pause-escapes-reason
             test-resume-cron-preserves-extensions test-resume-once-completed
-            test-resume-refuses-invalid-schedule test-update-schedule-preserves-extensions
-            test-update-schedule-refuses-missing]))
+            test-resume-refuses-invalid-schedule test-update-job-preserves-fields
+            test-update-job-refuses-invalid-patch]))
 
 (defn- skip-ws [b :vector-i64 i :i64] :i64
   (if (>= i (vector-count b)) i
@@ -529,55 +529,6 @@
                      (json-string-value next-run-at))]
     (set-object-member-raw with-display "next_run_at" next-value)))
 
-(defn- update-schedule-array [b :vector-i64 array-at :i64 id :string
-                              schedule-json :string display :string next-run-at :string
-                              i :i64 out :string count :i64 found :i64]
-  [:record :itonami.cron-jobs-json/ScheduleScan
-   [[:array :string] [:found :i64]]]
-  (if (>= i (jcs/json-count b array-at))
-    (record-new [:ref :itonami.cron-jobs-json/ScheduleScan]
-                (string-concat out "]") found)
-    (let [job (jcs/json-element b array-at i)
-          match (job-id-matches? b job id)
-          text (if match
-                 (update-schedule-object (raw-value b job) schedule-json display next-run-at)
-                 (raw-value b job))
-          next-out (string-concat out
-                      (string-concat (if (> count 0) "," "") text))]
-      (recur b array-at id schedule-json display next-run-at (inc i) next-out (inc count)
-             (if match 1 found)))))
-
-(defn update-schedule-json [json :string id :string schedule-json :string display :string
-                            next-run-at :string updated-at :string]
-  [:result :string :string]
-  ;; The schedule-only update changes exactly the scheduler-owned fields and
-  ;; preserves every other job/document byte, including future extensions.
-  (let [b (vector-i64-from-bytes (string-to-utf8 json))
-        schedule-b (vector-i64-from-bytes (string-to-utf8 schedule-json))
-        schedule-at (skip-ws schedule-b 0)
-        next-valid (or (= (string-length next-run-at) 0) (timestamp-valid? next-run-at))]
-    (if (< (jobs-array-index b) 0)
-      (result-err-of [:result :string :string] "cron-json/invalid-jobs-document")
-      (let [array-at (jobs-array-index b)]
-        (if (not (all-job-objects? b array-at 0))
-          (result-err-of [:result :string :string] "cron-json/job-entry-must-be-object")
-          (if (or (not (jcs/json-valid? schedule-b))
-                  (not (= (jcs/json-kind schedule-b schedule-at) 1))
-                  (not next-valid)
-                  (not (timestamp-valid? updated-at)))
-            (result-err-of [:result :string :string] "cron-json/invalid-schedule-update")
-            (let [scan (update-schedule-array b array-at id schedule-json display next-run-at
-                                               0 "[" 0 0)
-                  found (record-get [:ref :itonami.cron-jobs-json/ScheduleScan] scan :found)]
-              (if (= found 0)
-                (result-err-of [:result :string :string] "cron-json/job-not-found")
-                (let [changed (replace-jobs-array json
-                                (record-get [:ref :itonami.cron-jobs-json/ScheduleScan] scan :array))]
-                  (if (result-ok?-of [:result :string :string] changed)
-                    (set-updated-at-json
-                      (result-value-of [:result :string :string] changed "") updated-at)
-                    (result-err-of [:result :string :string] "cron-json/schedule-replacement-failed")))))))))))
-
 (defn test-resume-cron-preserves-extensions [] :bool
   (let [source "{\"jobs\":[{\"id\":\"resume\",\"enabled\":false,\"state\":\"paused\",\"paused_at\":\"old\",\"paused_reason\":\"old\",\"schedule\":{\"kind\":\"cron\",\"expr\":\"*/15 * * * *\"},\"next_run_at\":null,\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":{\"x\":true}}"
         result (resume-job-json source "resume" "2026-11-02T03:04:05.000Z"
@@ -601,21 +552,203 @@
           "{\"jobs\":[{\"id\":\"bad\",\"schedule\":{\"kind\":\"cron\",\"expr\":\"* * *\"}}]}"
           "bad" "2026-11-02T03:04:05.000Z" 1793588645000 0))))
 
-(defn test-update-schedule-preserves-extensions [] :bool
-  (let [source "{\"jobs\":[{\"id\":\"change\",\"schedule\":{\"kind\":\"interval\",\"minutes\":5},\"schedule_display\":\"every 5m\",\"next_run_at\":null,\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":true}"
-        result (update-schedule-json source "change" "{\"kind\":\"interval\",\"minutes\":10,\"display\":\"every 10m\"}"
-                                     "every 10m" "2026-11-02T03:14:05.006Z"
-                                     "2026-11-02T03:04:05.006Z")
+(defn- valid-update-string? [b :vector-i64 patch-at :i64 key :string] :bool
+  (let [at (jcs/json-member b patch-at key)]
+    (or (< at 0) (= (jcs/json-kind b at) 3))))
+
+(defn- valid-update-bool? [b :vector-i64 patch-at :i64 key :string] :bool
+  (let [at (jcs/json-member b patch-at key)
+        kind (if (< at 0) 0 (jcs/json-kind b at))]
+    (or (< at 0) (or (= kind 5) (= kind 6)))))
+
+(defn- valid-update-array-items? [b :vector-i64 at :i64 i :i64] :bool
+  (if (>= i (jcs/json-count b at)) true
+    (let [item (jcs/json-element b at i)]
+      (and (= (jcs/json-kind b item) 3)
+           (valid-update-array-items? b at (inc i))))))
+
+(defn- valid-update-array? [b :vector-i64 patch-at :i64 key :string] :bool
+  (let [at (jcs/json-member b patch-at key)]
+    (or (< at 0) (and (= (jcs/json-kind b at) 2) (valid-update-array-items? b at 0)))))
+
+(defn- valid-update-patch? [b :vector-i64 at :i64] :bool
+  (and (jcs/json-valid? b) (= (jcs/json-kind b at) 1)
+       (= (jcs/json-count b at)
+          (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+ (+
+            (if (>= (jcs/json-member b at "prompt") 0) 1 0)
+            (if (>= (jcs/json-member b at "name") 0) 1 0))
+            (if (>= (jcs/json-member b at "deliver") 0) 1 0))
+            (if (>= (jcs/json-member b at "failure_deliver") 0) 1 0))
+            (if (>= (jcs/json-member b at "script") 0) 1 0))
+            (if (>= (jcs/json-member b at "monitor_script") 0) 1 0))
+            (if (>= (jcs/json-member b at "monitor_url") 0) 1 0))
+            (if (>= (jcs/json-member b at "context_from") 0) 1 0))
+            (if (>= (jcs/json-member b at "continuity") 0) 1 0))
+            (if (>= (jcs/json-member b at "enabled_toolsets") 0) 1 0))
+            (if (>= (jcs/json-member b at "workdir") 0) 1 0))
+            (if (>= (jcs/json-member b at "no_agent") 0) 1 0))
+            (if (>= (jcs/json-member b at "skills") 0) 1 0))
+            (if (>= (jcs/json-member b at "repeat") 0) 1 0))
+            (if (>= (jcs/json-member b at "schedule") 0) 1 0)))
+       (valid-update-string? b at "prompt")
+       (valid-update-string? b at "name")
+       (valid-update-string? b at "deliver")
+       (valid-update-string? b at "failure_deliver")
+       (valid-update-string? b at "script")
+       (valid-update-string? b at "monitor_script")
+       (valid-update-string? b at "monitor_url")
+       (valid-update-array? b at "context_from")
+       (valid-update-bool? b at "continuity")
+       (valid-update-array? b at "enabled_toolsets")
+       (valid-update-string? b at "workdir")
+       (valid-update-bool? b at "no_agent")
+       (valid-update-array? b at "skills")
+       (valid-update-string? b at "schedule")
+       (let [repeat-at (jcs/json-member b at "repeat")]
+         (or (< repeat-at 0) (and (jcs/json-int-ok? b repeat-at) (> (jcs/json-int b repeat-at) 0))))))
+
+(defn- patch-field [object-json :string b :vector-i64 patch-at :i64 key :string] :string
+  (let [at (jcs/json-member b patch-at key)]
+    (if (< at 0) object-json
+      (set-object-member-raw object-json key (raw-value b at)))))
+
+(defn- patch-skill-alias [object-json :string b :vector-i64 patch-at :i64] :string
+  (let [skills-at (jcs/json-member b patch-at "skills")]
+    (if (< skills-at 0) object-json
+      (let [first-at (jcs/json-element b skills-at 0)]
+        (set-object-member-raw object-json "skill"
+          (if (< first-at 0) "null" (json-string-value (jcs/json-string b first-at))))))))
+
+(defn- patch-repeat [object-json :string b :vector-i64 patch-at :i64] :string
+  (let [times-at (jcs/json-member b patch-at "repeat")]
+    (if (< times-at 0) object-json
+      (let [obj (vector-i64-from-bytes (string-to-utf8 object-json))
+            root (skip-ws obj 0)
+            repeat-at (jcs/json-member obj root "repeat")
+            repeat-json (if (< repeat-at 0) "{\"completed\":0}"
+                          (if (= (jcs/json-kind obj repeat-at) 1) (raw-value obj repeat-at) ""))]
+        (if (= (string-length repeat-json) 0) ""
+          (set-object-member-raw object-json "repeat"
+            (set-object-member-raw repeat-json "times" (raw-value b times-at))))))))
+
+(defn- update-job-object [job-json :string b :vector-i64 patch-at :i64
+                          schedule-json :string display :string next-run-at :string] :string
+  (let [a (patch-field job-json b patch-at "prompt")
+        b1 (patch-field a b patch-at "name")
+        c (patch-field b1 b patch-at "deliver")
+        d (patch-field c b patch-at "failure_deliver")
+        e (patch-field d b patch-at "script")
+        f (patch-field e b patch-at "monitor_script")
+        g (patch-field f b patch-at "monitor_url")
+        h (patch-field g b patch-at "context_from")
+        i (patch-field h b patch-at "continuity")
+        j (patch-field i b patch-at "enabled_toolsets")
+        k (patch-field j b patch-at "workdir")
+        l (patch-field k b patch-at "no_agent")
+        m (patch-field l b patch-at "skills")
+        n (patch-skill-alias m b patch-at)
+        o (patch-repeat n b patch-at)]
+    (if (= (string-length schedule-json) 0) o
+      (update-schedule-object o schedule-json display next-run-at))))
+
+(defn- update-job-array [b :vector-i64 array-at :i64 target :string patch-at :i64
+                         schedule-json :string display :string next-run-at :string
+                         i :i64 out :string count :i64 found :i64]
+  [:record :itonami.cron-jobs-json/UpdateScan [[:array :string] [:found :i64]]]
+  (if (>= i (jcs/json-count b array-at))
+    (record-new [:ref :itonami.cron-jobs-json/UpdateScan] (string-concat out "]") found)
+    (let [job (jcs/json-element b array-at i)
+          id-match (job-id-matches? b job target)
+          name-at (jcs/json-member b job "name")
+          name-match (and (not id-match) (>= name-at 0)
+                          (= (jcs/json-kind b name-at) 3)
+                          (= (jcs/json-string b name-at) target))
+          match (and (= found 0) (or id-match name-match))
+          value (if match (update-job-object (raw-value b job) patch-at schedule-json display next-run-at)
+                  (raw-value b job))
+          next-out (string-concat out (string-concat (if (> count 0) "," "") value))]
+      (recur b array-at target patch-at schedule-json display next-run-at (inc i)
+             next-out (inc count) (if match 1 found)))))
+
+(defn update-job-json [json :string id-or-name :string patch-json :string
+                       updated-at :string now-ms :i64 offset-text :string]
+  [:result :string :string]
+  ;; Implements cronjob_manage update fields except profile-configured model pinning.
+  (let [b (vector-i64-from-bytes (string-to-utf8 json))
+        patch (vector-i64-from-bytes (string-to-utf8 patch-json))
+        patch-at (skip-ws patch 0)
+        schedule-at (if (and (jcs/json-valid? patch) (= (jcs/json-kind patch patch-at) 1))
+                      (jcs/json-member patch patch-at "schedule") -1)
+        schedule-text (if (and (>= schedule-at 0) (= (jcs/json-kind patch schedule-at) 3))
+                        (jcs/json-string patch schedule-at) "")
+        form (if (>= schedule-at 0) (schedule/parse-schedule-form schedule-text) "")
+        split (string-index-of form "\n")
+        kind (if (< split 0) "" (string-substring form 0 split))
+        value (if (< split 0) "" (string-substring form (inc split) (string-length form)))
+        offset (offset-minutes offset-text)
+        cron-offset (if (string=? kind "cron") offset 0)
+        next-ms (cond
+          (or (string=? kind "interval") (string=? kind "once-after"))
+            (schedule/next-interval-ms now-ms (parse-epoch-digits value 0 0))
+          (string=? kind "once-at") (schedule/next-once-ms (parse-epoch-digits value 0 0) now-ms)
+          (string=? kind "cron") (schedule/next-cron-ms value now-ms cron-offset)
+          :else -1)
+        next-run-at (if (< next-ms 0) "" (schedule/epoch-ms->iso-utc next-ms))
+        display (if (or (string=? kind "interval") (string=? kind "once-after"))
+                  (string-concat (if (string=? kind "interval") "every " "once in ")
+                    (string-concat value "m")) schedule-text)
+        made (if (>= schedule-at 0)
+               (created-schedule-json kind value display now-ms cron-offset)
+               (result-ok-of [:result :string :string] ""))
+        schedule-json (if (result-ok?-of [:result :string :string] made)
+                        (result-value-of [:result :string :string] made "") "")
+        array-at (jobs-array-index b)]
+    (if (or (< array-at 0) (not (all-job-objects? b array-at 0)))
+      (result-err-of [:result :string :string] "cron-json/invalid-jobs-document")
+      (if (or (= (string-length id-or-name) 0) (< now-ms 0)
+              (not (timestamp-valid? updated-at)) (< offset -9999)
+              (not (valid-update-patch? patch patch-at))
+              (and (>= schedule-at 0)
+                   (or (not (result-ok?-of [:result :string :string] made))
+                       (and (string=? kind "cron") (or (< offset -840) (> offset 840))))))
+        (result-err-of [:result :string :string] "cron-json/invalid-update")
+        (let [scan (update-job-array b array-at id-or-name patch-at schedule-json display
+                                     next-run-at 0 "[" 0 0)
+              found (record-get [:ref :itonami.cron-jobs-json/UpdateScan] scan :found)]
+          (if (= found 0)
+            (result-err-of [:result :string :string] "cron-json/job-not-found")
+            (let [changed (replace-jobs-array json
+                            (record-get [:ref :itonami.cron-jobs-json/UpdateScan] scan :array))]
+              (if (result-ok?-of [:result :string :string] changed)
+                (set-updated-at-json (result-value-of [:result :string :string] changed "") updated-at)
+                (result-err-of [:result :string :string] "cron-json/update-replacement-failed")))))))))
+
+(defn test-update-job-preserves-fields [] :bool
+  (let [source "{\"jobs\":[{\"id\":\"update\",\"name\":\"old\",\"prompt\":\"old prompt\",\"continuity\":true,\"skills\":[\"old\"],\"skill\":\"old\",\"repeat\":{\"times\":1,\"completed\":2},\"schedule\":{\"kind\":\"interval\",\"minutes\":5},\"next_run_at\":null,\"future\":1.25e+7},{\"id\":\"stay\"}],\"extension\":true}"
+        patch "{\"prompt\":\"\",\"name\":\"new\",\"continuity\":false,\"context_from\":[],\"skills\":[],\"repeat\":2,\"schedule\":\"every 10m\"}"
+        result (update-job-json source "update" patch "2026-11-02T03:04:05.006Z"
+                                1793588645006 "+0000")
         output (result-value-of [:result :string :string] result "")]
     (and (result-ok?-of [:result :string :string] result)
-         (string=? output "{\"jobs\":[{\"id\":\"change\",\"schedule\":{\"kind\":\"interval\",\"minutes\":10,\"display\":\"every 10m\"},\"schedule_display\":\"every 10m\",\"next_run_at\":\"2026-11-02T03:14:05.006Z\",\"future\":1.25e+7},{\"id\":\"stay\",\"future\":-0.0001}],\"extension\":true,\"updated_at\":\"2026-11-02T03:04:05.006Z\"}"))))
+         (>= (string-index-of output "\"prompt\":\"\"") 0)
+         (>= (string-index-of output "\"name\":\"new\"") 0)
+         (>= (string-index-of output "\"continuity\":false") 0)
+         (>= (string-index-of output "\"context_from\":[]") 0)
+         (>= (string-index-of output "\"skills\":[]") 0)
+         (>= (string-index-of output "\"skill\":null") 0)
+         (>= (string-index-of output "\"repeat\":{\"times\":2,\"completed\":2}") 0)
+         (>= (string-index-of output "\"minutes\":10") 0)
+         (>= (string-index-of output "\"future\":1.25e+7") 0)
+         (>= (string-index-of output "\"extension\":true") 0))))
 
-(defn test-update-schedule-refuses-missing [] :bool
-  (not (result-ok?-of [:result :string :string]
-        (update-schedule-json "{\"jobs\":[{\"id\":\"stay\"}]}" "missing"
-                              "{\"kind\":\"interval\",\"minutes\":5}"
-                              "every 5m" "2026-11-02T03:09:05.006Z"
-                              "2026-11-02T03:04:05.006Z"))))
+(defn test-update-job-refuses-invalid-patch [] :bool
+  (let [source "{\"jobs\":[{\"id\":\"update\",\"prompt\":\"old\"}]}"
+        unknown (update-job-json source "update" "{\"unexpected\":1}"
+                                 "2026-11-02T03:04:05.006Z" 1793588645006 "+0000")
+        invalid (update-job-json source "update" "{\"continuity\":\"false\"}"
+                                 "2026-11-02T03:04:05.006Z" 1793588645006 "+0000")]
+    (and (not (result-ok?-of [:result :string :string] unknown))
+         (not (result-ok?-of [:result :string :string] invalid)))))
 
 
 (defn test-list-projects-hermes-fields [] :bool
