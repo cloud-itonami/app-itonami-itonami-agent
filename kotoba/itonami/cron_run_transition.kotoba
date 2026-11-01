@@ -4,11 +4,15 @@
 ;; 3=removed. Status: 0=ok, 1=delivery_failed, 2=error. Action: 0=keep,
 ;; 1=error, 2=completed.
 (ns itonami.cron-run-transition
-  (:export [cron-job-active? cron-run-terminal? cron-run-next-error? cron-run-status
-            cron-run-state-action cron-run-failure-streak]))
+  (:require [itonami.schedule :as schedule])
+  (:export [cron-job-active? cron-job-due? cron-run-terminal? cron-run-next-error?
+            cron-run-status cron-run-state-action cron-run-failure-streak]))
 
 (defn cron-job-active? [enabled :bool state :i64] :bool
   (and enabled (not (= state 1)) (not (= state 2)) (not (= state 3))))
+
+(defn cron-job-due? [enabled :bool state :i64 next-ms :i64 now-ms :i64] :bool
+  (schedule/due? (cron-job-active? enabled state) next-ms now-ms))
 
 (defn cron-run-terminal? [kind :i64 repeat-times :i64 completed-next :i64
                           has-next :bool] :bool
