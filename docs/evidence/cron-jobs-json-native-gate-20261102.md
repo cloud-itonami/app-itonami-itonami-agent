@@ -41,7 +41,8 @@ replacing Hermes-style `updated_at`, and the Kotoba UTC formatter (epoch,
 leap-day with milliseconds, and negative-time refusal). A Kotoba store module
 compiles against the canonical Hata `store-io` interface and uses the Kotoba
 clock capability for timestamps. Latest receipt:
-`/Users/junkawasaki/github/workspaces/codex/awai-60-cron-jobs-json-native-gate-20261102-r17/build-receipt.txt`.
+`/Users/junkawasaki/github/workspaces/codex/awai-60-cron-jobs-json-native-gate-20261102-r18/build-receipt.txt`
+(exact-head source revision `786839521d4d02983ffb865d986accfd7a50734b`).
 
 The store's filesystem calls are compiled but not executed by this gate. Full
 create/update CRUD, a filesystem runtime gate, and launcher dispatch remain
