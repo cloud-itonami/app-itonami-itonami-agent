@@ -119,8 +119,9 @@
               others (other-bytes base skip)]
           (if (> (+ others entry) max-job-total-bytes)
             0
-            (let [r (wire-write p (core/entry-encode key value))]
-              1)))))))
+            (let [encoded (core/entry-encode key value)]
+              (let [written (wire-write p encoded)]
+                (if (string=? written encoded) 1 0)))))))))
 
 (defn notepad-get [base :string key :string] :string
   (let [p (note-path base key)]

@@ -151,7 +151,8 @@ def main():
         "--output", runner, "--format", "kx64-runner"], out, env, calls)
     runner.chmod(0o700)
 
-    def execute(name, root, args, allowed=WIRES, browse_root=None, app_root=None):
+    def execute(name, root, args, allowed=WIRES, browse_root=None, app_root=None,
+                expected_result=None):
         root.mkdir(parents=True, exist_ok=True)
         env2 = {"PATH": "/nonexistent", "KEXE_ALLOW": allowed,
                 "KEXE_CAP_RESOURCES_34": str(browse_root or root),
@@ -166,35 +167,49 @@ def main():
                       "stdout_sha256": sha(result.stdout), "stderr_sha256": sha(result.stderr)})
         (out / f"{name}.stdout").write_bytes(result.stdout)
         (out / f"{name}.stderr").write_bytes(result.stderr)
+        if result.returncode != 0:
+            raise RuntimeError(f"{name} trapped: exit={result.returncode} "
+                               f"stdout={result.stdout!r} stderr={result.stderr!r}")
+        if expected_result is not None and not re.search(
+                rb":result " + str(expected_result).encode() + rb"\b", result.stdout):
+            raise RuntimeError(f"{name} returned unexpected guest status: {result.stdout!r}")
         return result
 
     scope = out / "job-scope"
     scope.mkdir()
-    positive = execute("set-positive", scope, ["set", str(scope), "alpha", "one"])
-    expected_file = scope / f"n{hashlib.sha256(b'alpha').hexdigest()}.txt"
+    positive = execute("set-positive", scope, ["set", str(scope), "alpha", "one"],
+                       expected_result=0)
+    digest_hex = hashlib.sha256(b"alpha").hexdigest().encode("ascii")
+    encoded_digest = "".join(f"{byte:02x}" for byte in digest_hex)
+    expected_file = scope / f"n{encoded_digest}.txt"
     if b"alpha = one" not in positive.stdout or expected_file.read_text() != "alpha\none":
         raise RuntimeError(f"set-positive mismatch: {positive.stdout!r}")
-    got = execute("get-positive", scope, ["get", str(scope), "alpha"])
+    got = execute("get-positive", scope, ["get", str(scope), "alpha"], expected_result=0)
     if b"one" not in got.stdout:
         raise RuntimeError(f"get-positive mismatch: {got.stdout!r}")
-    execute("set-second-positive", scope, ["set", str(scope), "beta", "two"])
-    listed = execute("list-positive", scope, ["list", str(scope), "", ""])
+    execute("set-second-positive", scope, ["set", str(scope), "beta", "two"],
+            expected_result=0)
+    listed = execute("list-positive", scope, ["list", str(scope), "", ""],
+                     expected_result=0)
     if b"alpha = one" not in listed.stdout or b"beta = two" not in listed.stdout:
         raise RuntimeError(f"list-positive mismatch: {listed.stdout!r}")
 
     oversized = "x" * 16385
     before = {p.name: sha(p.read_bytes()) for p in scope.iterdir() if p.is_file()}
-    too_large = execute("oversize-refusal", scope, ["set", str(scope), "large", oversized])
+    too_large = execute("oversize-refusal", scope, ["set", str(scope), "large", oversized],
+                        expected_result=2)
     after = {p.name: sha(p.read_bytes()) for p in scope.iterdir() if p.is_file()}
     if before != after or b"large =" in too_large.stdout:
         raise RuntimeError("oversize refusal changed the notepad files")
-    long_key = execute("long-key-refusal", scope, ["set", str(scope), "k" * 129, "v"])
+    long_key = execute("long-key-refusal", scope, ["set", str(scope), "k" * 129, "v"],
+                       expected_result=2)
     if b"k" * 129 + b" =" in long_key.stdout:
         raise RuntimeError("long-key refusal produced a successful set response")
 
     outside = out / "outside-scope"
     outside.mkdir()
-    escaped = execute("outside-scope-refusal", scope, ["set", str(outside), "escape", "value"])
+    escaped = execute("outside-scope-refusal", scope,
+                       ["set", str(outside), "escape", "value"], expected_result=2)
     if any(outside.iterdir()) or b"escape = value" in escaped.stdout:
         raise RuntimeError("outside-scope operation was not refused")
 
