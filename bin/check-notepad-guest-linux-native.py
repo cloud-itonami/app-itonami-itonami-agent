@@ -154,6 +154,9 @@ def main():
     def execute(name, root, args, allowed=WIRES, browse_root=None, app_root=None,
                 expected_result=None, expected_trap=False):
         root.mkdir(parents=True, exist_ok=True)
+        args = list(args)
+        if args and args[0] == "set":
+            args.append("2026-11-03T00:00:00Z")
         env2 = {"PATH": "/nonexistent", "KEXE_ALLOW": allowed,
                 "KEXE_CAP_RESOURCES_34": str(browse_root or root),
                 "KEXE_CAP_RESOURCES_35": str(app_root or root),
@@ -190,7 +193,10 @@ def main():
     digest_hex = hashlib.sha256(b"alpha").hexdigest().encode("ascii")
     encoded_digest = "".join(f"{byte:02x}" for byte in digest_hex)
     expected_file = scope / f"n{encoded_digest}.txt"
-    if b"alpha = one" not in positive.stdout or expected_file.read_text() != "alpha\none":
+    entry = expected_file.read_text().split("\n", 3)
+    if (b"alpha = one" not in positive.stdout or len(entry) != 4
+            or entry[:3] != ["KNP1", "2026-11-03T00:00:00Z", "alpha"]
+            or entry[3] != "one"):
         raise RuntimeError(f"set-positive mismatch: {positive.stdout!r}")
     got = execute("get-positive", scope, ["get", str(scope), "alpha"], expected_result=0)
     if b"one" not in got.stdout:
@@ -283,8 +289,12 @@ def main():
     launcher_digest = hashlib.sha256(b"alpha").hexdigest().encode("ascii")
     launcher_encoded_digest = "".join(f"{byte:02x}" for byte in launcher_digest)
     launcher_file = launcher_scope / f"n{launcher_encoded_digest}.txt"
+    launcher_entry = launcher_file.read_text().split("\n", 3)
     if (b":status :ok :result 0 " not in launcher_positive.stdout
-            or launcher_file.read_text() != "alpha\none"):
+            or len(launcher_entry) != 4 or launcher_entry[0] != "KNP1"
+            or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z",
+                                launcher_entry[1])
+            or launcher_entry[2:] != ["alpha", "one"]):
         raise RuntimeError("launcher set did not persist the expected note under the scoped root")
     launcher_empty_set = execute_launcher(
         "launcher-empty-value-set-positive", launcher_scope,

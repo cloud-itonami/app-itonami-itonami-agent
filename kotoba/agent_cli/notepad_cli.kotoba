@@ -59,11 +59,12 @@
     0))
 
 (defn notepad-cli [] :i64
-  (let [verb (wire-arg 0) base (wire-arg 1) key (wire-arg 2) value (wire-arg 3)]
+  (let [verb (wire-arg 0) base (wire-arg 1) key (wire-arg 2) value (wire-arg 3)
+        updated-at (wire-arg 4)]
     (if (string=? verb "set")
       (if (= 0 (string-length key))
         (fail usage)
-        (if (= 1 (np/notepad-set base key value))
+        (if (= 1 (np/notepad-set-at base key value updated-at))
           (ok (string-concat key (string-concat " = " value)))
           (fail usage)))
       (if (string=? verb "get")

@@ -182,6 +182,15 @@ run_notepad_linux() {
       exit 78
       ;;
   esac
+  updated_at=""
+  if [ "$verb" = set ]; then
+    updated_at=$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ' 2>/dev/null) \
+      || blocked "cron notepad set (UTC clock unavailable)"
+    case "$updated_at" in
+      ????-??-??T??:??:??.???Z) ;;
+      *) blocked "cron notepad set (invalid UTC timestamp)" ;;
+    esac
+  fi
   runner=${ITONAMI_NOTEPAD_RUNNER:-$HERE/notepad-runner}
   payload=${ITONAMI_NOTEPAD_PAYLOAD:-$HERE/notepad.payload}
   if [ ! -x "$runner" ] || [ ! -f "$payload" ]; then
@@ -193,7 +202,7 @@ run_notepad_linux() {
     KEXE_CAP_RESOURCES_35="$base" \
     KEXE_STACK_BYTES=8388608 \
     KEXE_STRUCTURED_REPORT=1 \
-    "$runner" "$payload" 0 0 x86_64 "$capabilities" -- "$verb" "$base" "$key" "$value"); then
+    "$runner" "$payload" 0 0 x86_64 "$capabilities" -- "$verb" "$base" "$key" "$value" "$updated_at"); then
     host_status=0
   else
     host_status=$?
