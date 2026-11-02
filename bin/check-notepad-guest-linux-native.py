@@ -283,6 +283,13 @@ def main():
 
     launcher_scope = out / "launcher-job-scope"
     launcher_scope.mkdir()
+    unmarked_parent = out / "unmarked-store"
+    unmarked_scope = unmarked_parent / "job"
+    unmarked_scope.mkdir(parents=True)
+    execute_launcher("launcher-unconverted-store-refusal", unmarked_scope,
+                     ["list"], 78,
+                     expected_stderr=b"store is not converted to kotoba-notepad-v1")
+    (out / ".store-format").write_text("kotoba-notepad-v1\n", encoding="ascii")
     launcher_positive = execute_launcher(
         "launcher-set-positive", launcher_scope, ["set", "alpha", "one"], 0,
         expected_stdout=b"alpha = one",)

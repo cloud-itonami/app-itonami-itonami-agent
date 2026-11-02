@@ -152,6 +152,16 @@ run_notepad_linux() {
     printf '%s\n' "itonami-agent: cron notepad job directory does not exist" >&2
     exit 2
   fi
+  store_root=${base%/*}
+  if [ "$store_root" = "$base" ]; then store_root=/; fi
+  store_format=""
+  if [ -f "$store_root/.store-format" ]; then
+    store_format=$(cat "$store_root/.store-format") || store_format=""
+  fi
+  if [ "$store_format" != kotoba-notepad-v1 ]; then
+    printf '%s\n' "itonami-agent: cron notepad store is not converted to kotoba-notepad-v1" >&2
+    exit 78
+  fi
   case "$verb" in
     set)
       if [ "$argument_count" -ne 4 ]; then
