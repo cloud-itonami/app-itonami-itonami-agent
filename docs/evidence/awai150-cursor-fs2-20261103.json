@@ -1,0 +1,15 @@
+{
+  "date": "2026-11-03",
+  "scope": "Extracted actual cursor and checkpoint source functions; FS2 on disposable ARM64 Linux/XFS VM, 1 CPU, 2 GiB.",
+  "source_sha256": "c9f32fd512f3431ce0ff0db07be03c3ed8d77308c4c8683da661b9eae31a1d78",
+  "fixture": "test/native/awai150-cursor-fs2-fixture.kotoba",
+  "fixture_sha256": "40065343e78ca722a0ac565641e6ac5ee1a5e5e50ed4f7743a15c47f06d9496c",
+  "fixture_static_image_sha256": "5cafb692b8b278f68486a6e0bc4e16c5f0e26b9884aba0aa4761f3250b5df937",
+  "compiler_sha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "results": [
+    "successful rename and parent sync",
+    "changed original rejected and pending retained",
+    "existing pending rejected and retained"
+  ],
+  "limits": "A source-closure fixture, not full orchestration, Darwin, power-loss, or concurrent-writer qualification. Caller must serialize and reconcile unknown pending state."
+}

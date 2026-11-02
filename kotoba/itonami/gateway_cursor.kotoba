@@ -54,8 +54,8 @@
     (cond (cp-exists? tmp) "cursor/pending-unknown"
           (not (cp-write tmp (cc-cursor pin slot))) "cursor/write-unknown"
           (not (= (cp-cid (cp-read path)) (cp-cid original))) "cursor/changed"
-          (not (= (cp-fs (str tmp "RENAME_SEP" path)) "1")) "cursor/rename-unknown"
-          (not (= (cp-fs (str (cp-parent-dir path) "FSYNC_SEP")) "1")) "cursor/fsync-unknown"
+          (not (= (cp-fs "L" tmp path) "1")) "cursor/rename-unknown"
+          (not (= (cp-fs "M" (cp-parent-dir path) "") "1")) "cursor/fsync-unknown"
           :else "cursor/advanced")))
 
 (defn cron-cursor-main [] :i64
