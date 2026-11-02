@@ -70,7 +70,7 @@
               (count-run base q (+ i 1) n wanted (+ acc add)))))))))
 
 (defn- claim-with-at [base :string job :string id :string source :string at :string] :i64
-  (if (= 0 (string-length id))
+  (if (= 0 (jc/entry-ok id))
     0
     (let [q (jpath base job)]
       (let [n (j/journal-count q)]
