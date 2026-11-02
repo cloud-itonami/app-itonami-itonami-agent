@@ -1,0 +1,29 @@
+;; Compose after the exact schedule, Murakumo agent-step and gateway sources.
+;; Expected CIDs and job hashes were generated independently from UTF-8 JSON.
+(defn main [] :i64
+  (let [source "bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey"
+        schedule "bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq"
+        profile "sha256:6e5ac5ef12cd31e4889ec39bc8944e41cbca613829e5dad43c2eb401239c9ea8"
+        a 1792638000000 b 1792638060000
+        input (trigger-input true a a schedule source profile schedule "murakumo")
+        cid (trigger-input-cid true a a schedule source profile schedule "murakumo")
+        job (trigger-job true a a schedule source profile schedule "murakumo")
+        id (trigger-job-id true a a schedule source profile schedule "murakumo")]
+    (if (and (= (trigger-problem true a a schedule source profile schedule "murakumo") "trigger/ok")
+             (json-canonical? (gt-bytes input)) (json-canonical? (gt-bytes job))
+             (= cid "bafkreifmncfrhksedzb553i4gipebvykhhh2iueonff6ho4fexr5p3rgq4")
+             (= id "c1102c0d0c74a2c952990e15f12a5a2bc1645877e8f9f236b082ceb398996588")
+             (= id (trigger-job-id true (+ a 30000) a schedule source profile schedule "murakumo"))
+             (= (trigger-job-id true b b schedule source profile schedule "murakumo")
+                "7c3ad396a32f1103ecd76c70ccc9b8ac4392b950b2a94b8497dabece09c2e377")
+             (not (= id (trigger-job-id true b b schedule source profile schedule "murakumo")))
+             (= (trigger-problem false a a schedule source profile schedule "murakumo") "trigger/not-due")
+             (= (trigger-problem true a b schedule source profile schedule "murakumo") "trigger/not-due")
+             (= (trigger-problem true a -1 schedule source profile schedule "murakumo") "trigger/invalid-time")
+             (= (trigger-problem true a a "bad" source profile schedule "murakumo") "trigger/bad-schedule-cid")
+             (= (trigger-problem true a a schedule "bad" profile schedule "murakumo") "trigger/bad-job")
+             (= (trigger-problem true a a schedule source "sha256:bad" schedule "murakumo") "trigger/bad-job")
+             (= (trigger-problem true a a schedule source profile "bad" "murakumo") "trigger/bad-job")
+             (= (trigger-problem true a a schedule source profile schedule "openrouter") "trigger/bad-job")
+             (= (trigger-job-id true a b schedule source profile schedule "murakumo") ""))
+      0 1)))
