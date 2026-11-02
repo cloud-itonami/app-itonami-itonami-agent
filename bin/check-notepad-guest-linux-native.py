@@ -101,8 +101,10 @@ def main():
     project_source = out / "amu-project.kotoba"
     with project_source.open("wb") as f:
         for module in modules:
-            source = AMU_PROFILE if module == "seed/98-x86_64-project.kotoba" else module
-            f.write(git_blob(amu_repo, AMU_COMMIT, source) + b"\n")
+            if module == "seed/98-x86_64-project.kotoba":
+                f.write(profile + b"\n")
+            else:
+                f.write(git_blob(amu_repo, AMU_COMMIT, module) + b"\n")
 
     compiler_path = out / "amu-linux-x86_64"
     compiler_path.write_bytes(binary)
