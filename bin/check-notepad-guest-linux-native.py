@@ -201,6 +201,16 @@ def main():
                      expected_result=0)
     if b"alpha = one" not in listed.stdout or b"beta = two" not in listed.stdout:
         raise RuntimeError(f"list-positive mismatch: {listed.stdout!r}")
+    execute("set-empty-value-positive", scope,
+            ["set", str(scope), "empty", ""], expected_result=0)
+    empty_get = execute("get-empty-value-positive", scope,
+                        ["get", str(scope), "empty"], expected_result=0)
+    if b"is not set" in empty_get.stdout:
+        raise RuntimeError(f"empty value was confused with a missing key: {empty_get.stdout!r}")
+    empty_list = execute("list-empty-value-positive", scope,
+                         ["list", str(scope), "", ""], expected_result=0)
+    if b"empty =" not in empty_list.stdout:
+        raise RuntimeError(f"list omitted an empty-valued key: {empty_list.stdout!r}")
 
     oversized = "x" * 16385
     before = {p.name: sha(p.read_bytes()) for p in scope.iterdir() if p.is_file()}
@@ -276,6 +286,21 @@ def main():
     if (b":status :ok :result 0 " not in launcher_positive.stdout
             or launcher_file.read_text() != "alpha\none"):
         raise RuntimeError("launcher set did not persist the expected note under the scoped root")
+    launcher_empty_set = execute_launcher(
+        "launcher-empty-value-set-positive", launcher_scope,
+        ["set", "empty", ""], 0, expected_stdout=b"empty =")
+    launcher_empty_get = execute_launcher(
+        "launcher-empty-value-get-positive", launcher_scope,
+        ["get", "empty"], 0)
+    if (b":status :ok :result 0 " not in launcher_empty_set.stdout
+            or b":status :ok :result 0 " not in launcher_empty_get.stdout
+            or b"is not set" in launcher_empty_get.stdout):
+        raise RuntimeError("launcher did not preserve an empty stored value")
+    launcher_empty_list = execute_launcher(
+        "launcher-empty-value-list-positive", launcher_scope,
+        ["list"], 0, expected_stdout=b"empty =")
+    if b":status :ok :result 0 " not in launcher_empty_list.stdout:
+        raise RuntimeError("launcher list omitted native success report for empty value")
     launcher_get = execute_launcher(
         "launcher-get-positive", launcher_scope, ["get", "alpha"], 0,
         expected_stdout=b"one")

@@ -23,7 +23,7 @@
   (:require [itonami.notepad-core :as core]
             [itonami.journal-core :as jc])
   (:export [note-path note-stored-key notepad-set notepad-get notepad-delete
-            notepad-clear])
+            notepad-clear notepad-has])
   (:capabilities #{:fs/app-data :hash/sha256 :fs/browse}))
 
 (def max-job-total-bytes 65536)
@@ -136,6 +136,11 @@
               (if (string=? stored key)
                 (string-substring content (+ i 1) (string-length content))
                 ""))))))))
+
+(defn notepad-has [base :string key :string] :i64
+  ;; Preserve the legacy distinction between an empty stored value and a
+  ;; missing key. Callers that need the value use notepad-get separately.
+  (exists? (note-path base key)))
 
 (defn- clear-run [base :string listing :string i :i64 n :i64 acc :i64] :i64
   ;; every key file unlinked -- the job reset cron performs between runs.
