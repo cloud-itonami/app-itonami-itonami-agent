@@ -32,8 +32,16 @@ offsets are -840 to +840 minutes; epoch milliseconds are limited to 1970 through
 2100-01-01 inclusive. Fixed offsets do not implement daylight-saving zones.
 
 The caller must persist and verify the resulting input bytes by CID and make
-them available to a compatible agent-step consumer. This module does not prove
-the host's pinned definition or previous cursor was authorized. It does not claim a slot,
+them available to a compatible agent-step consumer. `cron-consume-problem` and
+`cron-source-bytes` implement its validation boundary: given the host-pinned
+definition and cursor, expected job ID, canonical job and wrapper, and the
+resolved source bytes, they recheck the slot, exact job and wrapper, and the
+raw SHA-256 source CID before returning the source bytes. Source bytes must be
+nonempty, at most 8 KiB, and named by a raw CIDv1/sha2-256 CID. This is a
+callable component; no existing OCI guest or host has been wired to call it.
+
+The module does not prove the host's pinned definition or previous cursor was
+authorized. It does not claim a slot,
 create a reservation, perform I/O, submit a job, reconcile an unknown outcome,
 enforce a lease/fence, or grant tools and network access. Unknown outcomes must
 be reconciled under the same ID, not turned into a new slot or a blind retry.
@@ -45,10 +53,11 @@ same-slot stability, distinct slots, invalid inputs and due gating. The checked
 Murakumo source was `fleet_agent_step.kotoba` at main
 `1a6cd277b65441d647cdc6a54cb4862cae96cd82` (SHA-256
 `8e61e145c6c6dd1269a0cc33a44c88d5e34782cee7ca831c0872632863c6258d`);
-the build used its actual job text, ID and validation functions. A native
+the build used its actual job text, ID and validation functions. Native
 negative controls that removed the slot from the identity or skipped the
 next-slot comparison failed. The tests also cover a Vixie day-of-month/day-of-week
-case, wrong definition CID, impossible dates, an invalid zone and a skipped slot.
-The input
-wrapper is new and requires an agent-step consumer that understands it; this
-test does not demonstrate a live queue, consumer, gateway or job dispatch.
+case, wrong definition CID, impossible dates, an invalid zone and a skipped
+slot. Consumer tests also reject altered source, wrapper and job, and a wrong
+job ID; removing the source-CID check makes the native gate fail. The input
+wrapper still requires integration in an agent-step consumer; this test does
+not demonstrate a live queue, gateway or job dispatch.

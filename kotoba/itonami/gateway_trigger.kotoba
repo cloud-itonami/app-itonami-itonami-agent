@@ -4,10 +4,13 @@
 ;; dispatch. It does not reserve, submit, run or retry a job.
 (ns itonami.gateway-trigger
   (:export [verified-cron-problem verified-cron-input verified-cron-input-cid
-            verified-cron-job verified-cron-job-id]))
+            verified-cron-job verified-cron-job-id cron-consume-problem cron-source-bytes]))
 
 (defn- gt-bytes [s :string] :vector-i64
   (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- gt-text [b :vector-i64] :string
+  (string-from-utf8 (bytes-from-vector-i64 b)))
 
 (defn- trigger-problem [active :bool now :i64 slot :i64 schedule :string source :string
                        profile :string policy :string rail :string] :string
@@ -114,3 +117,33 @@
   (if (= (verified-cron-problem active now previous slot expected definition) "trigger/ok")
     (trigger-job-id active now slot expected (gt-str definition "input") (gt-str definition "profile")
                     (gt-str definition "policy") (gt-str definition "rail")) ""))
+
+;; Validate the complete envelope and raw source before exposing any source
+;; bytes to a compatible consumer. Host-supplied definition, cursor, job pin,
+;; active flag and clock must come from independent authority/admission.
+;; This checks identity and bytes, not a lease, execution permit or I/O.
+(defn cron-consume-problem [active :bool now :i64 previous :i64 schedule :string
+                           definition :vector-i64 job-id-pin :string job :vector-i64
+                           wrapper :vector-i64 source :vector-i64] :string
+  (cond (or (> (vector-count wrapper) 8192) (not (json-canonical? wrapper))
+            (not (= (json-kind wrapper 0) 1)) (not (= (json-count wrapper 0) 4))
+            (not (gt-integer? wrapper "scheduledAt"))) "consume/wrapper"
+        (or (> (vector-count job) 8192) (not (json-canonical? job))
+            (not (= (json-kind job 0) 1))) "consume/job"
+        (or (= (vector-count source) 0) (> (vector-count source) 8192)) "consume/source-size"
+        :else
+        (let [slot (gt-num wrapper "scheduledAt")
+              problem (verified-cron-problem active now previous slot schedule definition)]
+          (cond (not (= problem "trigger/ok")) problem
+                (not (= (gt-text wrapper) (verified-cron-input active now previous slot schedule definition))) "consume/wrapper-mismatch"
+                (not (= (gt-text job) (verified-cron-job active now previous slot schedule definition))) "consume/job-mismatch"
+                (or (= job-id-pin "")
+                    (not (= job-id-pin (verified-cron-job-id active now previous slot schedule definition)))) "consume/job-id"
+                (not (= (digest-cid (str "sha256:" (sha256-hex source)) 85) (gt-str definition "input"))) "consume/source-cid"
+                :else "consume/ok"))))
+
+(defn cron-source-bytes [active :bool now :i64 previous :i64 schedule :string
+                        definition :vector-i64 job-id-pin :string job :vector-i64
+                        wrapper :vector-i64 source :vector-i64] :vector-i64
+  (if (= (cron-consume-problem active now previous schedule definition job-id-pin job wrapper source) "consume/ok")
+    source (vector-alloc 0)))
