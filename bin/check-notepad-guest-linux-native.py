@@ -24,7 +24,8 @@ AMU_BINARY_SHA256 = "925fa6999fff4e48759fd1c355b32bf613e67d1497e8e8ab610c3890620
 AMU_RUNNER_SOURCE = "seed/x86_64-kx64-runner.kotoba"
 AMU_RUNNER_SHA256 = "c9f1fe1b5c1748450fb11b233cbdc9d9234880a60dc480c0387b173f60d905be"
 AMU_PROFILE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
-AMU_PROFILE_SHA256 = "07776b80a479f551725cd48101cfdb9e120c67454164e881ebc476a25bddef52"
+AMU_PROFILE_COMMIT = "c7df2408be2386e8d837e9e1dbfd90c2c88e2e67"
+AMU_PROFILE_SHA256 = "008f212f1aa14e9551ba5251047174525f3dbb364ada330dc1379d23fa9e2e1a"
 WIRES = "3,34,35,37,38,39"
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -75,10 +76,12 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     amu_repo = out / "inputs/amu"
     fetch(args.amu_url, AMU_COMMIT, amu_repo)
+    amu_profile_repo = out / "inputs/amu-profile"
+    fetch(args.amu_url, AMU_PROFILE_COMMIT, amu_profile_repo)
 
     binary = git_blob(amu_repo, AMU_COMMIT, AMU_BINARY)
     runner_source = git_blob(amu_repo, AMU_COMMIT, AMU_RUNNER_SOURCE)
-    profile = git_blob(amu_repo, AMU_COMMIT, AMU_PROFILE)
+    profile = git_blob(amu_profile_repo, AMU_PROFILE_COMMIT, AMU_PROFILE)
     if sha(binary) != AMU_BINARY_SHA256 or sha(runner_source) != AMU_RUNNER_SHA256:
         raise RuntimeError("pinned Amu compiler or runner source digest mismatch")
     if sha(profile) != AMU_PROFILE_SHA256:
@@ -409,6 +412,7 @@ def main():
         "target": "x86_64-linux",
         "itonami_source_revision": subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).decode().strip(),
         "amu_source_commit": AMU_COMMIT,
+        "amu_profile_source_commit": AMU_PROFILE_COMMIT,
         "amu_binary_sha256": AMU_BINARY_SHA256,
         "amu_profile_sha256": AMU_PROFILE_SHA256,
         "amu_project_source_sha256": sha(project_source.read_bytes()),
