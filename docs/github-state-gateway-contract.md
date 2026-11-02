@@ -11,7 +11,13 @@ how to reconcile that request with the existing Cell, placement and lease
 authorities; it does not silently rewrite earlier Yataverse assumptions or
 claim that either integration already exists. The private `itonami-state` repo
 contains a frozen application snapshot, not a current bot database. Do not
-overwrite, reset, import, or treat that snapshot as the bot store.
+write to that repository, including adding test branches, tags, or other refs;
+do not overwrite, reset, import, or treat that snapshot as the bot store.
+Five test archive refs were added there during the 2026-11-02 experiment and
+are retained pending a separate decision. They are historical test artifacts,
+not authorization to continue using that repository as a checkpoint sink.
+The current `main` points to the historical 2026-09-28 commit; this does not
+establish that every other repository setting or reference is unchanged.
 
 ## Boundaries
 
@@ -69,7 +75,10 @@ revives an old approval or lease: the destination obtains fresh admission.
    not atomically validate a separate lease. Before integration, establish a
    host/provider enforcement protocol that rejects a stale writer at the
    actual commit boundary. Until that is proven, distributed writes are
-   blocked.
+   blocked. Reuse the existing effect-broker and sink work rather than
+   treating a local lock as a distributed fence: the bounded broker profile
+   in AWAI-98 does not establish general external-sink enforcement, which is
+   tracked by AWAI-105. Native transport remains tracked by AWAI-102.
 4. Read back the remote ref, commit and object digests. A lost acknowledgement
    is UNKNOWN until readback resolves it. Only then record the checkpoint as
    persisted. Restart reconciles remote commit, verified head, lease and job
@@ -120,3 +129,10 @@ verified identity, model, MTP mode or admission is ineligible, not a fallback.
   another node only after the single-node evidence and independent failure
   domain checks pass. Publication, external messaging and payments remain
   separate operations with their existing authorization boundaries.
+
+The complete native cron, archive and recovery integration is tracked by
+[AWAI-150](https://linear.app/kotobalabs/issue/AWAI-150). Fleet admission and
+resource-governor qualification are tracked by
+[AWAI-151](https://linear.app/kotobalabs/issue/AWAI-151). A previous multi-Mac
+experiment used sampled pressure watchdogs, not a qualified native resource
+governor; it does not authorize further high-load work or production use.
