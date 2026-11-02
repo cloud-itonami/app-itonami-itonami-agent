@@ -75,7 +75,7 @@
 
 (defn verified-cron-problem [active :bool now :i64 previous :i64 slot :i64
                             expected :string definition :vector-i64] :string
-  (cond (or (> (vector-count definition) 8192) (not (json-canonical? definition))
+  (cond (or (> (vector-count definition) 8192) (not (json-valid? definition)) (not (json-canonical? definition))
             (not (= (json-kind definition 0) 1)) (not (= (json-count definition 0) 8))) "trigger/definition"
         (or (= (cid-digest expected) "")
             (not (= (digest-cid (str "sha256:" (sha256-hex definition)) 85) expected))) "trigger/definition-cid"
@@ -125,10 +125,10 @@
 (defn cron-consume-problem [active :bool now :i64 previous :i64 schedule :string
                            definition :vector-i64 job-id-pin :string job :vector-i64
                            wrapper :vector-i64 source :vector-i64] :string
-  (cond (or (> (vector-count wrapper) 8192) (not (json-canonical? wrapper))
+  (cond (or (> (vector-count wrapper) 8192) (not (json-valid? wrapper)) (not (json-canonical? wrapper))
             (not (= (json-kind wrapper 0) 1)) (not (= (json-count wrapper 0) 4))
             (not (gt-integer? wrapper "scheduledAt"))) "consume/wrapper"
-        (or (> (vector-count job) 8192) (not (json-canonical? job))
+        (or (> (vector-count job) 8192) (not (json-valid? job)) (not (json-canonical? job))
             (not (= (json-kind job 0) 1))) "consume/job"
         (or (= (vector-count source) 0) (> (vector-count source) 8192)) "consume/source-size"
         :else

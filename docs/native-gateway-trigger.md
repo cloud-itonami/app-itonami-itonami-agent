@@ -24,7 +24,8 @@ with exactly `cron`, `id`, `input`, `kind`, `offsetMinutes`, `policy`,
 `id` must uniquely identify the logical schedule and is part of its CID. The
 caller supplies an independently trusted definition CID and a durable,
 authoritatively admitted previous-slot cursor. The module checks the bytes
-against that CID, validates the definition and job fields, verifies the candidate
+for valid JSON before canonicality and navigation, checks them against that
+CID, validates the definition and job fields, verifies the candidate
 matches the cron expression, and requires it to be the first slot strictly after
 the supplied cursor. It then requires the slot to be due. Reusing an identity
 or supplying an untrusted/stale cursor defeats this guarantee. Supported UTC
@@ -39,6 +40,7 @@ resolved source bytes, they recheck the slot, exact job and wrapper, and the
 raw SHA-256 source CID before returning the source bytes. Source bytes must be
 nonempty, at most 8 KiB, and named by a raw CIDv1/sha2-256 CID. This is a
 callable component; no existing OCI guest or host has been wired to call it.
+Malformed definition, wrapper and job JSON is refused before navigation.
 
 The module does not prove the host's pinned definition or previous cursor was
 authorized. It does not claim a slot,
