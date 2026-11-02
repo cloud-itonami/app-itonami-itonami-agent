@@ -1,11 +1,35 @@
 ;; Compose after the exact schedule, Murakumo agent-step and gateway sources.
 ;; Expected CIDs and job hashes were generated independently from UTF-8 JSON.
-(defn- test-definition [cron :string id :string offset :i64] :vector-i64
+(defn- test-definition-source [cron :string id :string offset :i64 source :string] :vector-i64
   (gt-bytes (str "{\"cron\":\"" cron "\",\"id\":\"" id
-    "\",\"input\":\"bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey\",\"kind\":\"itonami.cron-schedule/1\",\"offsetMinutes\":" offset
+    "\",\"input\":\"" source "\",\"kind\":\"itonami.cron-schedule/1\",\"offsetMinutes\":" offset
     ",\"policy\":\"bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq\",\"profile\":\"sha256:6e5ac5ef12cd31e4889ec39bc8944e41cbca613829e5dad43c2eb401239c9ea8\",\"rail\":\"murakumo\"}")))
 
+(defn- test-definition [cron :string id :string offset :i64] :vector-i64
+  (test-definition-source cron id offset "bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey"))
+
 (defn- test-pin [b :vector-i64] :string (digest-cid (str "sha256:" (sha256-hex b)) 85))
+
+(defn- test-consume [] :bool
+  (let [source (gt-bytes "bounded source") wrong (gt-bytes "different source")
+        definition (test-definition-source "* * * * *" "consumer-test" 540 (test-pin source))
+        schedule (test-pin definition) slot 1792638000000 previous (- slot 60000)
+        wrapper (gt-bytes (verified-cron-input true slot previous slot schedule definition))
+        job (gt-bytes (verified-cron-job true slot previous slot schedule definition))
+        job-id (verified-cron-job-id true slot previous slot schedule definition)
+        changed (gt-bytes (str (gt-text wrapper) " "))
+        changed-canonical (gt-bytes (gt-input slot schedule (test-pin wrong)))]
+    (and (= (cron-consume-problem true slot previous schedule definition job-id job wrapper source) "consume/ok")
+         (= (gt-text (cron-source-bytes true slot previous schedule definition job-id job wrapper source)) "bounded source")
+         (= (cron-consume-problem true slot previous schedule definition job-id job wrapper wrong) "consume/source-cid")
+         (= (vector-count (cron-source-bytes true slot previous schedule definition job-id job wrapper wrong)) 0)
+         (= (cron-consume-problem true slot previous schedule definition job-id job changed source) "consume/wrapper")
+         (= (cron-consume-problem true slot previous schedule definition job-id job changed-canonical source) "consume/wrapper-mismatch")
+         (= (cron-consume-problem true slot previous schedule definition "bad" job wrapper source) "consume/job-id")
+         (= (cron-consume-problem true slot previous schedule definition job-id (gt-bytes "{}") wrapper source) "consume/job-mismatch")
+         (= (cron-consume-problem true slot previous schedule definition job-id job wrapper (vector-alloc 0)) "consume/source-size")
+         (= (cron-consume-problem false slot previous schedule definition job-id job wrapper source) "trigger/not-due")
+         (= (cron-consume-problem true slot slot schedule definition job-id job wrapper source) "trigger/invalid-time"))))
 
 (defn- test-verified-cron [] :bool
   (let [definition (gt-bytes "{\"cron\":\"* * * * *\",\"id\":\"test-schedule\",\"input\":\"bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey\",\"kind\":\"itonami.cron-schedule/1\",\"offsetMinutes\":540,\"policy\":\"bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq\",\"profile\":\"sha256:6e5ac5ef12cd31e4889ec39bc8944e41cbca613829e5dad43c2eb401239c9ea8\",\"rail\":\"murakumo\"}")
@@ -47,7 +71,7 @@
         cid (trigger-input-cid true a a schedule source profile schedule "murakumo")
         job (trigger-job true a a schedule source profile schedule "murakumo")
         id (trigger-job-id true a a schedule source profile schedule "murakumo")]
-    (if (and (test-verified-cron)
+    (if (and (test-verified-cron) (test-consume)
              (= (trigger-problem true a a schedule source profile schedule "murakumo") "trigger/ok")
              (json-canonical? (gt-bytes input)) (json-canonical? (gt-bytes job))
              (= cid "bafkreifmncfrhksedzb553i4gipebvykhhh2iueonff6ho4fexr5p3rgq4")
