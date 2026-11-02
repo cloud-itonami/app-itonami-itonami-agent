@@ -15,8 +15,8 @@ lease, durable attempt marker and receipt still bind to the wrapper. The
 node re-reads the wrapper and verifies its CID before acquiring the lease.
 Normal `job-node-main run` continues to pass the original input unchanged.
 
-Build by composing the pinned Murakumo `fleet_job_node` source from
-`codex/awai-147-cron-job-node`, the pinned `itonami.schedule`,
+Build by composing the pinned Murakumo `fleet_job_node` source at commit
+`1bf2127` ([PR #565](https://github.com/kotoba-lang/murakumo/pull/565)), the pinned `itonami.schedule`,
 `gateway_trigger`, and `gateway_job_node` with the normal job-node dependency
 closure. The current selfhost source-unity build also renames schedule's
 private `digit?` to avoid a flattened-name collision. This is not a standalone
