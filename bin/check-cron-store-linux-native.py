@@ -125,11 +125,13 @@ def locked_project(out, kotoba_repo):
     jobs = sources / "itonami/cron_jobs_json.kotoba"
     store = sources / "itonami/cron_jobs_store.kotoba"
     schedule = sources / "itonami/schedule.kotoba"
+    pause_marker = sources / "itonami/pause_marker.kotoba"
     jcs = sources / "jcs/reader.kotoba"
     shutil.copy2(ROOT / "kotoba/agent_cli/cron_jobs_store_cli.kotoba", cli)
     shutil.copy2(ROOT / "kotoba/itonami/cron_jobs_json.kotoba", jobs)
     shutil.copy2(ROOT / "kotoba/itonami/cron_jobs_store.kotoba", store)
     shutil.copy2(ROOT / "kotoba/itonami/schedule.kotoba", schedule)
+    shutil.copy2(ROOT / "kotoba/itonami/pause_marker.kotoba", pause_marker)
     write(jcs, git_blob(kotoba_repo, KOTOBA_COMMIT, KOTOBA_JCS_PATH))
     write(store_io, git_blob(kotoba_repo, KOTOBA_COMMIT, KOTOBA_STORE_IO_PATH))
 
@@ -137,12 +139,13 @@ def locked_project(out, kotoba_repo):
         ("hata.store-io", store_io),
         ("itonami.cron-jobs-json", jobs),
         ("itonami.cron-jobs-store", store),
+        ("itonami.pause-marker", pause_marker),
         ("agent-cli-cron-jobs-store", cli),
         ("itonami.schedule", schedule),
         ("jcs.reader", jcs),
     ]
     modules.sort(key=lambda row: row[0])
-    files = sorted([cli, store_io, jobs, store, schedule, jcs], key=lambda p: str(p))
+    files = sorted([cli, store_io, jobs, store, pause_marker, schedule, jcs], key=lambda p: str(p))
     lock_lines = ["KSL2", f"entry {cli}"]
     lock_lines.extend(f"module {name} {path}" for name, path in modules)
     lock_lines.extend(f"file {sha(path.read_bytes())} {path}" for path in files)
@@ -264,6 +267,36 @@ def main():
     if sha(runner.read_bytes()) != AMU_CANDIDATE_RUNNER_SHA256:
         raise RuntimeError("derived Amu candidate KX64 runner digest mismatch")
     runner.chmod(0o700)
+
+    pause_scope = out / "pause-marker-scope"
+    (pause_scope / "d").mkdir(parents=True)
+    pause_stamp = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    pause_reason = "operator request"
+    execute("runtime-global-pause-positive", runner, payload, pause_scope,
+            "pause-global", pause_stamp, pause_reason, 0, out, calls)
+    marker = pause_scope / "d/paused"
+    expected_pause = f"{pause_stamp} {pause_reason}\n"
+    if marker.read_text(encoding="utf-8") != expected_pause:
+        raise RuntimeError(f"global pause marker mismatch: {marker.read_text(encoding='utf-8')!r}")
+    status_stdout = execute("runtime-global-pause-status", runner, payload, pause_scope,
+                            "status-global", "", "", 0, out, calls)
+    if b"paused " not in status_stdout or b"operator request" not in status_stdout:
+        raise RuntimeError(f"global pause status did not read the marker: {status_stdout!r}")
+
+    execute("runtime-global-pause-invalid-time", runner, payload, pause_scope,
+            "pause-global", "not-an-iso-time", pause_reason, 2, out, calls,
+            allow_stderr=True)
+    if marker.read_text(encoding="utf-8") != expected_pause:
+        raise RuntimeError("invalid global pause timestamp changed the existing marker")
+
+    resume_stdout = execute("runtime-global-resume-positive", runner, payload, pause_scope,
+                            "resume-global", "", "", 0, out, calls)
+    if marker.exists():
+        raise RuntimeError("global resume left the pause marker in place")
+    resume_absent_stdout = execute("runtime-global-resume-absent", runner, payload, pause_scope,
+                                   "resume-global", "", "", 0, out, calls)
+    if b"nothing to resume" not in resume_absent_stdout:
+        raise RuntimeError(f"idempotent global resume did not report the absent marker: {resume_absent_stdout!r}")
 
     source_revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).decode().strip()
     package = out / "package"
@@ -785,6 +818,11 @@ def main():
         "list_active_only_launcher": "PASS",
         "list_invalid_job_refusal": "PASS",
         "pause_runtime": "PASS",
+        "global_pause_runtime": "PASS",
+        "global_pause_invalid_timestamp_refusal": "PASS",
+        "global_pause_status_runtime": "PASS",
+        "global_resume_runtime": "PASS",
+        "global_resume_idempotent_runtime": "PASS",
         "pause_missing_id_refusal_runtime": "PASS",
         "pause_launcher_runtime": "PASS",
         "pause_missing_id_refusal_launcher": "PASS",
@@ -823,7 +861,7 @@ def main():
                           "pause": sha(pause_stdout), "launcher_pause": sha(launcher_pause_stdout),
                           "resume": sha(resume_stdout), "launcher_resume": sha(launcher_resume_stdout),
                           "launcher_create": sha(launcher_create_stdout)},
-        "scope": "standalone Linux x86_64 native cron jobs create/list/pause/resume/remove CLI with scoped FS35, route-specific entropy, positive/refusal controls, and packaged launcher; macOS runtime qualification remains open",
+        "scope": "standalone Linux x86_64 native cron jobs and global pause-marker Kotoba CLI candidate with scoped FS35, route-specific entropy, positive/refusal controls; cron launcher remains packaged candidate and global pause-marker is not wired to launcher; macOS runtime qualification remains open",
     }
     receipt_path = out / "build-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")

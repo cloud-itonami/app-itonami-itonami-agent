@@ -1,0 +1,46 @@
+;; itonami.pause-marker — the global emergency-stop marker shared with Hermes.
+;;
+;; The host supplies the Itonami data root and local ISO-8601 timestamp. All
+;; reads/writes/removal stay under the Amu-granted :fs/app-data root.
+(ns itonami.pause-marker
+  (:require [hata.store-io :as fs]
+            [itonami.schedule :as schedule])
+  (:export [pause-at resume active? since])
+  (:capabilities [:fs/app-data]))
+
+(defn- marker-path [root :string] :string
+  (let [n (string-length root)]
+    (if (= n 0) ""
+      (if (= (string-code-point-at root (dec n)) 47)
+        (string-concat root "paused")
+        (string-concat root "/paused")))))
+
+(defn- unlink-marker [path :string] :bool
+  (= (typed-cap-call :fs/app-data :string :string
+       (string-concat path "UNLINK_SEP")) "1"))
+
+(defn pause-at [root :string timestamp :string reason :string] :i64
+  ;; 0 = written; 2 = invalid input; 1 = filesystem refusal.
+  (let [path (marker-path root)
+        valid-time (schedule/iso-time-epoch-ms timestamp)]
+    (if (or (= (string-length path) 0) (< valid-time 0)) 2
+      (let [body (string-concat timestamp
+                   (string-concat (if (= (string-length reason) 0) ""
+                                    (string-concat " " reason)) "\n"))]
+        (if (and (fs/write path body) (fs/sync path)) 0 1)))))
+
+(defn resume [root :string] :i64
+  ;; 0 = removed; 1 = already absent; 2 = filesystem refusal.
+  (let [path (marker-path root)]
+    (if (= (string-length path) 0) 2
+      (if (not (fs/exists? path)) 1
+        (if (unlink-marker path) 0 2)))))
+
+(defn active? [root :string] :bool
+  (let [path (marker-path root)]
+    (if (= (string-length path) 0) false (fs/exists? path))))
+
+(defn since [root :string] :string
+  (let [path (marker-path root)]
+    (if (and (> (string-length path) 0) (fs/exists? path))
+      (fs/read path) "")))

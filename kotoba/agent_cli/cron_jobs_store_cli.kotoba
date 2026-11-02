@@ -1,7 +1,8 @@
 (ns agent-cli-cron-jobs-store
   "Create and mutate cron jobs in an Itonami app-data directory using Kotoba
   and the scoped Hata store adapter."
-  (:require [itonami.cron-jobs-store :as store])
+  (:require [itonami.cron-jobs-store :as store]
+            [itonami.pause-marker :as pause])
   (:export [main])
   (:capabilities #{:cli/args :clock/now :entropy/draw :fs/app-data :io/write :io/write-error}))
 
@@ -51,6 +52,24 @@
       0
       (fail (result-error-of [:result :string :string] result "cron-store/update-failed")))))
 
+(defn- pause-global-command [directory :string timestamp :string reason :string] :i64
+  (let [result (pause/pause-at directory timestamp reason)]
+    (if (= result 0)
+      (say (string-concat "paused" (if (= (string-length reason) 0) ""
+                           (string-concat " (" (string-concat reason ")")))))
+      (fail (if (= result 2) "invalid root or timestamp" "marker write refused")))))
+
+(defn- resume-global-command [directory :string] :i64
+  (let [result (pause/resume directory)]
+    (cond (= result 0) (say "resumed")
+          (= result 1) (say "nothing to resume")
+          :else (fail "marker removal refused"))))
+
+(defn- global-status-command [directory :string] :i64
+  (if (pause/active? directory)
+    (say (string-concat "paused " (pause/since directory)))
+    (say "not paused")))
+
 (defn main [] :i64
   (let [action (arg 0)
         directory (arg 1)]
@@ -69,4 +88,10 @@
         (let [job-id (arg 2)
               result (store/remove-job directory job-id)]
           (if (result-ok?-of [:result :string :string] result) 0 1))
+      (string=? action "pause-global")
+        (pause-global-command directory (arg 2) (arg 3))
+      (string=? action "resume-global")
+        (resume-global-command directory)
+      (string=? action "status-global")
+        (global-status-command directory)
       :else (fail "usage: itonami-agent cron jobs list <absolute-app-data-dir> [false] | pause <absolute-app-data-dir> <job-id> [reason] | resume <absolute-app-data-dir> <job-id> | remove <absolute-app-data-dir> <job-id> | create <absolute-app-data-dir> <schedule> <prompt> [name] <utc-offset> | update <absolute-app-data-dir> <job-id-or-name> <patch-json> <utc-offset>"))))
