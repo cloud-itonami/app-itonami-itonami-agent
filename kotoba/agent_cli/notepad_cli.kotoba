@@ -72,9 +72,12 @@
           (ok (np/notepad-get base key))
           (ok (string-concat key " is not set")))
         (if (string=? verb "delete")
-          (if (= 1 (np/notepad-delete base key))
-            (ok "deleted")
-            (ok (string-concat key " is not set")))
+          (let [deleted (np/notepad-delete base key)]
+            (if (= deleted 1)
+              (ok "deleted")
+              (if (= deleted 0)
+                (ok (string-concat key " is not set"))
+                (fail "cron notepad delete refused"))))
           (if (string=? verb "list")
             (let [keys (nr/note-keys base)]
               (if (= 0 (string-length keys))
@@ -83,7 +86,9 @@
 ") ""))))
             (if (string=? verb "clear")
               (let [n (np/notepad-clear base)]
-                (ok "cleared"))
+                (if (< n 0)
+                  (fail "cron notepad clear refused")
+                  (ok "cleared")))
               (fail usage))))))))
 
 (defn main [] :i64

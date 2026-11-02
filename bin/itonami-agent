@@ -186,12 +186,6 @@ run_notepad_linux() {
       exit 2
       ;;
   esac
-  case "$verb" in
-    delete|clear)
-      printf '%s\n' "itonami-agent: cron notepad $verb is blocked pending native unlink qualification" >&2
-      exit 78
-      ;;
-  esac
   updated_at=""
   if [ "$verb" = set ]; then
     updated_at=$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ' 2>/dev/null) \

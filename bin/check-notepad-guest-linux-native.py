@@ -18,13 +18,13 @@ import time
 from pathlib import Path
 
 
-AMU_COMMIT = "c7df2408be2386e8d837e9e1dbfd90c2c88e2e67"
+AMU_COMMIT = "a73bd0350ecdb73abde7548f7fbb101e72b73d64"
 AMU_BINARY = "bin/amu-linux-x86_64"
-AMU_BINARY_SHA256 = "a91b2585fff847651033ce57f5421a49d0a3efadf88b3f08b92ad25fc7521913"
+AMU_BINARY_SHA256 = "925fa6999fff4e48759fd1c355b32bf613e67d1497e8e8ab610c3890620f197b"
 AMU_RUNNER_SOURCE = "seed/x86_64-kx64-runner.kotoba"
 AMU_RUNNER_SHA256 = "c9f1fe1b5c1748450fb11b233cbdc9d9234880a60dc480c0387b173f60d905be"
 AMU_PROFILE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
-AMU_PROFILE_SHA256 = "008f212f1aa14e9551ba5251047174525f3dbb364ada330dc1379d23fa9e2e1a"
+AMU_PROFILE_SHA256 = "07776b80a479f551725cd48101cfdb9e120c67454164e881ebc476a25bddef52"
 WIRES = "3,34,35,37,38,39"
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -217,6 +217,23 @@ def main():
                          ["list", str(scope), "", ""], expected_result=0)
     if b"empty =" not in empty_list.stdout:
         raise RuntimeError(f"list omitted an empty-valued key: {empty_list.stdout!r}")
+    deleted = execute("delete-positive", scope, ["delete", str(scope), "alpha"],
+                      expected_result=0)
+    if b"deleted" not in deleted.stdout or expected_file.exists():
+        raise RuntimeError("delete-positive did not remove the selected note")
+    missing_delete = execute("delete-missing", scope,
+                             ["delete", str(scope), "alpha"], expected_result=0)
+    if b"alpha is not set" not in missing_delete.stdout:
+        raise RuntimeError("missing delete did not preserve the not-set response")
+    execute("set-clear-target", scope, ["set", str(scope), "clear-me", "value"],
+            expected_result=0)
+    (scope / "keep.md").write_text("unrelated", encoding="ascii")
+    cleared = execute("clear-positive", scope, ["clear", str(scope), "", ""],
+                      expected_result=0)
+    if b"cleared" not in cleared.stdout or (scope / "keep.md").read_text() != "unrelated":
+        raise RuntimeError("clear-positive did not preserve unrelated job files")
+    if any(p.name.startswith("n") and p.suffix == ".txt" for p in scope.iterdir()):
+        raise RuntimeError("clear-positive left notepad note files behind")
 
     oversized = "x" * 16385
     before = {p.name: sha(p.read_bytes()) for p in scope.iterdir() if p.is_file()}
@@ -337,10 +354,29 @@ def main():
     launcher_after = {p.name: sha(p.read_bytes()) for p in launcher_scope.iterdir() if p.is_file()}
     if launcher_before != launcher_after:
         raise RuntimeError("launcher validation refusal changed native notepad files")
-    execute_launcher("launcher-delete-blocked", launcher_scope, ["delete", "alpha"], 78,
-                     expected_stderr=b"blocked pending native unlink qualification")
-    if launcher_before != {p.name: sha(p.read_bytes()) for p in launcher_scope.iterdir() if p.is_file()}:
-        raise RuntimeError("blocked launcher delete changed native notepad files")
+    launcher_delete = execute_launcher(
+        "launcher-delete-positive", launcher_scope, ["delete", "alpha"], 0,
+        expected_stdout=b"deleted")
+    if b":status :ok :result 0 " not in launcher_delete.stdout or launcher_file.exists():
+        raise RuntimeError("launcher delete did not remove the selected note")
+    launcher_missing_delete = execute_launcher(
+        "launcher-delete-missing", launcher_scope, ["delete", "alpha"], 0,
+        expected_stdout=b"alpha is not set")
+    if b":status :ok :result 0 " not in launcher_missing_delete.stdout:
+        raise RuntimeError("launcher missing delete omitted native success report")
+    launcher_clear_target = execute_launcher(
+        "launcher-clear-target-set", launcher_scope, ["set", "clear-me", "value"], 0)
+    if b":status :ok :result 0 " not in launcher_clear_target.stdout:
+        raise RuntimeError("launcher clear setup failed")
+    (launcher_scope / "keep.md").write_text("unrelated", encoding="ascii")
+    launcher_clear = execute_launcher(
+        "launcher-clear-positive", launcher_scope, ["clear"], 0,
+        expected_stdout=b"cleared")
+    if (b":status :ok :result 0 " not in launcher_clear.stdout
+            or (launcher_scope / "keep.md").read_text() != "unrelated"
+            or any(p.name.startswith("n") and p.suffix == ".txt"
+                   for p in launcher_scope.iterdir())):
+        raise RuntimeError("launcher clear did not remove notes while preserving job files")
 
     trap_root = out / "launcher-trap-root"
     trap_root.mkdir()

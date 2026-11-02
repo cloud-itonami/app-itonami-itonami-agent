@@ -145,11 +145,12 @@
   (if (>= i n)
     acc
     (let [name (entry-name (jc/piece listing "\n" i))]
-      (let [acc2 (if (= 1 (note-file? name))
-                   (let [u (wire-unlink (string-concat base (string-concat "/" name)))]
-                     (+ acc 1))
-                   acc)]
-        (clear-run base listing (+ i 1) n acc2)))))
+      (if (= 1 (note-file? name))
+        (let [removed (wire-unlink (string-concat base (string-concat "/" name)))]
+          (if (string=? removed "1")
+            (clear-run base listing (+ i 1) n (+ acc 1))
+            -1))
+        (clear-run base listing (+ i 1) n acc)))))
 
 (defn notepad-clear [base :string] :i64
   (let [listing (wire-browse base)]
@@ -162,4 +163,4 @@
     (if (= 0 (exists? p))
       0
       (let [r (wire-unlink p)]
-        1))))
+        (if (string=? r "1") 1 -1)))))
