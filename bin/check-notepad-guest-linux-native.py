@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Build and qualify the standalone Itonami notepad guest through Amu selfhost.
+"""Build and qualify the Itonami notepad package and launcher through Amu selfhost.
 
 This runner orchestrates pinned source/compiler inputs. Notepad behavior executes
-only inside the Amu-produced Kotoba KX64 artifact; it is not launcher or package
-qualification.
+inside the Amu-produced Kotoba KX64 artifact. It also invokes the candidate
+package's product launcher with no legacy loader artifacts present.
 """
 
 import argparse
@@ -221,9 +221,113 @@ def main():
     if any(outside.iterdir()) or b"escape = value" in escaped.stdout:
         raise RuntimeError("outside-scope operation was not refused")
 
+    package_bin = out / "candidate-package/bin"
+    package_bin.mkdir(parents=True)
+    package_launcher = package_bin / "itonami-agent"
+    package_runner = package_bin / "notepad-runner"
+    package_payload = package_bin / "notepad.payload"
+    shutil.copy2(ROOT / "bin/itonami-agent", package_launcher)
+    shutil.copy2(runner, package_runner)
+    shutil.copy2(payload, package_payload)
+    package_launcher.chmod(0o700)
+    package_runner.chmod(0o700)
+    if (package_bin / "kexe-loader").exists() or (package_bin / "guests").exists():
+        raise RuntimeError("candidate package unexpectedly contains legacy loader artifacts")
+
+    def execute_launcher(name, scope, args, expected_exit, expected_stdout=b"",
+                         expected_stderr=b"", env_overrides=None):
+        env3 = dict(os.environ)
+        for key_name in ("ITONAMI_NOTEPAD_RUNNER", "ITONAMI_NOTEPAD_PAYLOAD",
+                         "ITONAMI_NOTEPAD_REAL_RUNNER", "ITONAMI_NOTEPAD_TRAP_ROOT",
+                         "KEXE_LOADER", "KEXE_GUESTS", "KEXE_ALLOW",
+                         "KEXE_CAP_RESOURCES_34", "KEXE_CAP_RESOURCES_35",
+                         "KEXE_STRUCTURED_REPORT", "KEXE_STACK_BYTES"):
+            env3.pop(key_name, None)
+        env3["PATH"] = "/usr/bin:/bin"
+        env3["ITONAMI_NOTEPAD_RUNNER"] = str(package_runner)
+        env3["ITONAMI_NOTEPAD_PAYLOAD"] = str(package_payload)
+        if env_overrides:
+            env3.update(env_overrides)
+        started = time.monotonic()
+        result = subprocess.run([str(package_launcher), "cron", "notepad", str(scope), *args],
+                                cwd=out, env=env3, capture_output=True, timeout=60)
+        calls.append({"name": name, "exit": result.returncode,
+                      "seconds": round(time.monotonic() - started, 3),
+                      "stdout_sha256": sha(result.stdout), "stderr_sha256": sha(result.stderr)})
+        (out / f"{name}.stdout").write_bytes(result.stdout)
+        (out / f"{name}.stderr").write_bytes(result.stderr)
+        if result.returncode != expected_exit:
+            raise RuntimeError(f"{name} launcher exit {result.returncode}, expected {expected_exit}: "
+                               f"stdout={result.stdout!r} stderr={result.stderr!r}")
+        if expected_stdout and expected_stdout not in result.stdout:
+            raise RuntimeError(f"{name} launcher stdout mismatch: {result.stdout!r}")
+        if expected_stderr and expected_stderr not in result.stderr:
+            raise RuntimeError(f"{name} launcher stderr mismatch: {result.stderr!r}")
+        return result
+
+    launcher_scope = out / "launcher-job-scope"
+    launcher_scope.mkdir()
+    launcher_positive = execute_launcher(
+        "launcher-set-positive", launcher_scope, ["set", "alpha", "one"], 0,
+        expected_stdout=b"alpha = one",)
+    launcher_digest = hashlib.sha256(b"alpha").hexdigest().encode("ascii")
+    launcher_encoded_digest = "".join(f"{byte:02x}" for byte in launcher_digest)
+    launcher_file = launcher_scope / f"n{launcher_encoded_digest}.txt"
+    if (b":status :ok :result 0 " not in launcher_positive.stdout
+            or launcher_file.read_text() != "alpha\none"):
+        raise RuntimeError("launcher set did not persist the expected note under the scoped root")
+    launcher_get = execute_launcher(
+        "launcher-get-positive", launcher_scope, ["get", "alpha"], 0,
+        expected_stdout=b"one")
+    if b":status :ok :result 0 " not in launcher_get.stdout:
+        raise RuntimeError("launcher get omitted native success report")
+    launcher_list = execute_launcher(
+        "launcher-list-positive", launcher_scope, ["list"], 0,
+        expected_stdout=b"alpha = one")
+    if b":status :ok :result 0 " not in launcher_list.stdout:
+        raise RuntimeError("launcher list omitted native success report")
+    launcher_before = {p.name: sha(p.read_bytes()) for p in launcher_scope.iterdir() if p.is_file()}
+    launcher_refusal = execute_launcher(
+        "launcher-oversize-refusal", launcher_scope,
+        ["set", "large", "x" * 16385], 2,
+        expected_stdout=b":status :ok :result 2 ",
+        expected_stderr=b"cron notepad set refused")
+    launcher_after = {p.name: sha(p.read_bytes()) for p in launcher_scope.iterdir() if p.is_file()}
+    if launcher_before != launcher_after:
+        raise RuntimeError("launcher validation refusal changed native notepad files")
+    execute_launcher("launcher-delete-blocked", launcher_scope, ["delete", "alpha"], 78,
+                     expected_stderr=b"blocked pending native unlink qualification")
+    if launcher_before != {p.name: sha(p.read_bytes()) for p in launcher_scope.iterdir() if p.is_file()}:
+        raise RuntimeError("blocked launcher delete changed native notepad files")
+
+    trap_root = out / "launcher-trap-root"
+    trap_root.mkdir()
+    trap_scope = out / "launcher-trap-target"
+    trap_scope.mkdir()
+    shim = out / "notepad-runner-scope-shim"
+    shim.write_text("#!/bin/sh\n"
+                    "export KEXE_CAP_RESOURCES_34=\"$ITONAMI_NOTEPAD_TRAP_ROOT\"\n"
+                    "export KEXE_CAP_RESOURCES_35=\"$ITONAMI_NOTEPAD_TRAP_ROOT\"\n"
+                    "exec \"$ITONAMI_NOTEPAD_REAL_RUNNER\" \"$@\"\n", encoding="ascii")
+    shim.chmod(0o700)
+    launcher_trap = execute_launcher(
+        "launcher-scope-trap-refusal", trap_scope, ["set", "escape", "value"], 1,
+        expected_stdout=b":status :trap :exit 120",
+        expected_stderr=b"refused by native capability boundary",
+        env_overrides={"ITONAMI_NOTEPAD_RUNNER": str(shim),
+                       "ITONAMI_NOTEPAD_REAL_RUNNER": str(package_runner),
+                       "ITONAMI_NOTEPAD_TRAP_ROOT": str(trap_root)})
+    if (any(trap_scope.iterdir()) or any(trap_root.iterdir())
+            or b"escape = value" in launcher_trap.stdout):
+        raise RuntimeError("launcher trap refusal wrote outside the authorized job root")
+
+    execute_launcher("launcher-missing-artifact-blocked", launcher_scope, ["list"], 78,
+                     expected_stderr=b"route 'cron notepad (native artifact missing)' is blocked",
+                     env_overrides={"ITONAMI_NOTEPAD_RUNNER": str(out / "missing-runner")})
+
     receipt = {
         "format": "itonami.notepad-linux-native-gate.v1",
-        "qualification": "standalone Amu native runtime only; launcher/package not qualified",
+        "qualification": "Linux x86_64 candidate launcher/package route; no live fleet qualification",
         "target": "x86_64-linux",
         "itonami_source_revision": subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).decode().strip(),
         "amu_source_commit": AMU_COMMIT,
@@ -240,6 +344,13 @@ def main():
         "runner_sha256": sha(runner.read_bytes()),
         "capabilities": ["hash/sha256", "fs/browse", "fs/app-data", "io/write", "cli/args", "io/write-error"],
         "scope_refusal": "Amu KX64 runner trap (exit 120) with no outside-scope write",
+        "launcher_package": {
+            "launcher_sha256": sha(package_launcher.read_bytes()),
+            "runner_sha256": sha(package_runner.read_bytes()),
+            "payload_sha256": sha(package_payload.read_bytes()),
+            "legacy_loader_included": False,
+        },
+        "launcher_cases": [c["name"] for c in calls if c["name"].startswith("launcher-")],
         "cases": [c["name"] for c in calls if c["name"].endswith(("positive", "refusal"))],
         "processes": calls,
     }

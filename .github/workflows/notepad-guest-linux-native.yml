@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "bin/check-notepad-guest-linux-native.py"
+      - "bin/itonami-agent"
       - "kotoba/agent_cli/notepad_cli.kotoba"
       - "kotoba/compat/itonami/notepad.kotoba"
       - "kotoba/compat/itonami/notepad_core.kotoba"

@@ -1,17 +1,15 @@
 #!/bin/sh
-# Covered routes run as one-shot kexe guests through the loader. Unported
-# routes fail closed until their Kotoba guest is implemented and qualified.
+# Qualified routes use their Amu native artifacts. Legacy loader guests remain
+# migration inventory and are not a fallback for the native notepad route.
 #
-# Guest manifest (offset/arity/grants per guest -- from the amu build;
-# one offset serves every target of one source build):
-#   notepad-cli        28280 0 3,34,35,37,38,39
+# Legacy loader guest manifest (unqualified migration inventory):
 #   kanban-cli         67512 0 3,7,34,35,37,38   (7 = clock for heartbeat)
 #   session-search-cli 62564 0 3,34,35,37,38
 #   turn-cli            18544 0 3,34,35,37,38,11
 #   turn-loop-cli       61004 0 3,34,35,37,38,11
 #
-# Env: KEXE_LOADER (the loader binary), KEXE_GUESTS (dir with the .raw
-# guests), ITONAMI_ARCH (aarch64|x86_64, default from uname).
+# Native notepad artifacts: ITONAMI_NOTEPAD_RUNNER and
+# ITONAMI_NOTEPAD_PAYLOAD. Other loader routes are migration inventory.
 
 set -e
 HERE=$(dirname "$0")
@@ -137,6 +135,86 @@ run_cron_jobs_linux() {
   esac
 }
 
+run_notepad_linux() {
+  base=$1
+  verb=$2
+  key=$3
+  value=$4
+  if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
+    blocked "cron notepad (native runtime is Linux x86_64 only)"
+  fi
+  case "$base" in
+    /*) ;;
+    *) printf '%s\n' "itonami-agent: cron notepad requires an absolute job directory" >&2; exit 2 ;;
+  esac
+  if [ ! -d "$base" ]; then
+    printf '%s\n' "itonami-agent: cron notepad job directory does not exist" >&2
+    exit 2
+  fi
+  case "$verb" in
+    set)
+      if [ "$#" -ne 4 ]; then
+        printf '%s\n' "usage: itonami-agent cron notepad <job-directory> set <key> <value>" >&2
+        exit 2
+      fi
+      ;;
+    get|delete)
+      if [ "$#" -ne 3 ]; then
+        printf '%s\n' "usage: itonami-agent cron notepad <job-directory> $verb <key>" >&2
+        exit 2
+      fi
+      ;;
+    list|clear)
+      if [ "$#" -ne 2 ]; then
+        printf '%s\n' "usage: itonami-agent cron notepad <job-directory> $verb" >&2
+        exit 2
+      fi
+      ;;
+    *)
+      printf '%s\n' "usage: itonami-agent cron notepad <job-directory> set <key> <value> | get <key> | list" >&2
+      exit 2
+      ;;
+  esac
+  case "$verb" in
+    delete|clear)
+      printf '%s\n' "itonami-agent: cron notepad $verb is blocked pending native unlink qualification" >&2
+      exit 78
+      ;;
+  esac
+  runner=${ITONAMI_NOTEPAD_RUNNER:-$HERE/notepad-runner}
+  payload=${ITONAMI_NOTEPAD_PAYLOAD:-$HERE/notepad.payload}
+  if [ ! -x "$runner" ] || [ ! -f "$payload" ]; then
+    blocked "cron notepad (native artifact missing)"
+  fi
+  capabilities=3,34,35,37,38,39
+  if report=$(KEXE_ALLOW="$capabilities" \
+    KEXE_CAP_RESOURCES_34="$base" \
+    KEXE_CAP_RESOURCES_35="$base" \
+    KEXE_STACK_BYTES=8388608 \
+    KEXE_STRUCTURED_REPORT=1 \
+    "$runner" "$payload" 0 0 x86_64 "$capabilities" -- "$verb" "$base" "$key" "$value"); then
+    host_status=0
+  else
+    host_status=$?
+  fi
+  printf '%s\n' "$report"
+  case "$report" in
+    *":status :ok :result 0 "*)
+      if [ "$host_status" -eq 0 ]; then exit 0; fi
+      ;;
+    *":status :ok :result 2 "*)
+      printf '%s\n' "itonami-agent: cron notepad $verb refused" >&2
+      exit 2
+      ;;
+    *":status :trap :exit 120 "*)
+      printf '%s\n' "itonami-agent: cron notepad $verb refused by native capability boundary" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s\n' "itonami-agent: cron notepad $verb returned an invalid native report (exit $host_status)" >&2
+  exit 78
+}
+
 if [ "$#" -eq 0 ]; then
   usage
   exit 0
@@ -242,9 +320,13 @@ case "$1" in
         ;;
       notepad)
         shift 2
-        # argv: <base> <verb> [key] [value]  (guest order: verb base key value)
-        base=$1; verb=$2; key=$3; value=$4
-        run_guest notepad-cli.raw 28280 3,34,35,37,38,39 "$verb" "$base" "$key" "$value"
+        # argv: <base> <verb> [key] [value] (guest order: verb base key value)
+        if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
+          printf '%s\n' "usage: itonami-agent cron notepad <job-directory> set <key> <value> | get <key> | list" >&2
+          exit 2
+        fi
+        base=$1; verb=$2; key=${3:-}; value=${4:-}
+        run_notepad_linux "$base" "$verb" "$key" "$value"
         ;;
       *)
         blocked "$@"
