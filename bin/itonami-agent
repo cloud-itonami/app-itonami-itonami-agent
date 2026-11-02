@@ -83,6 +83,9 @@ Selfhost routes:
   cron jobs remove <absolute-app-data-dir> <job-id>  (Linux x86_64)
   cron jobs create <absolute-app-data-dir> <schedule> <prompt> [name]  (Linux x86_64)
   cron jobs update <absolute-app-data-dir> <job-id-or-name> <patch-json>  (Linux x86_64)
+  cron jobs pause-global [reason]  (Linux x86_64; ITONAMI_DIR/paused)
+  cron jobs resume-global  (Linux x86_64; ITONAMI_DIR/paused)
+  cron jobs status-global  (Linux x86_64; ITONAMI_DIR/paused)
   cron notepad <base> <verb> [key] [value]
   kanban <base> <verb> [arguments]
   session-search <base> <query> [limit] [after] [before] [detail] [sort] [sid] [pbase]
@@ -166,6 +169,42 @@ case "$1" in
         run_cron_schedule_cli "$schedule_cli" --next-run "$@"
         ;;
       jobs)
+        if [ "$3" = pause-global ] && { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; }; then
+          itonami_dir=${ITONAMI_DIR:-${HOME:-}/.itonami}
+          case "$itonami_dir" in
+            /*) ;;
+            *) printf '%s\n' "itonami-agent: cron jobs pause-global requires an absolute ITONAMI_DIR" >&2; exit 2 ;;
+          esac
+          if [ ! -d "$itonami_dir" ]; then
+            printf '%s\n' "itonami-agent: cron jobs pause-global ITONAMI_DIR does not exist" >&2
+            exit 2
+          fi
+          if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
+            blocked "cron jobs pause-global (native runtime is Linux x86_64 only)"
+          fi
+          pause_stamp=$(date '+%Y-%m-%dT%H:%M:%S%:z' 2>/dev/null) || blocked "cron jobs pause-global (local timestamp unavailable)"
+          case "$pause_stamp" in
+            ????-??-??T??:??:??[+-][0-9][0-9]:[0-9][0-9]) ;;
+            *) blocked "cron jobs pause-global (invalid local timestamp)" ;;
+          esac
+          run_cron_jobs_linux pause-global "$itonami_dir" "$pause_stamp" "${4:-}"
+        fi
+        if [ "$3" = resume-global ] && [ "$#" -eq 3 ]; then
+          itonami_dir=${ITONAMI_DIR:-${HOME:-}/.itonami}
+          case "$itonami_dir" in
+            /*) ;;
+            *) printf '%s\n' "itonami-agent: cron jobs resume-global requires an absolute ITONAMI_DIR" >&2; exit 2 ;;
+          esac
+          run_cron_jobs_linux resume-global "$itonami_dir" "" ""
+        fi
+        if [ "$3" = status-global ] && [ "$#" -eq 3 ]; then
+          itonami_dir=${ITONAMI_DIR:-${HOME:-}/.itonami}
+          case "$itonami_dir" in
+            /*) ;;
+            *) printf '%s\n' "itonami-agent: cron jobs status-global requires an absolute ITONAMI_DIR" >&2; exit 2 ;;
+          esac
+          run_cron_jobs_linux status-global "$itonami_dir" "" ""
+        fi
         if [ "$3" = list ] && { [ "$#" -eq 4 ] || [ "$#" -eq 5 ]; }; then
           run_cron_jobs_linux list "$4" "${5:-}" ""
         fi

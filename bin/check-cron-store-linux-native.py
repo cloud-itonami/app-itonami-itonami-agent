@@ -18,23 +18,23 @@ import time
 from pathlib import Path
 
 
-AMU_COMMIT = "01a2e550f96ac7029b5796cada2e9a00c8e36136"
+AMU_COMMIT = "587e8f63979aa763c3fe4b4fdb7a8e6f97d6bea9"
 AMU_BINARY_PATH = "bin/amu-linux-x86_64"
-AMU_BINARY_SHA256 = "2cbd90970f9766481ae46fd30ae515548e7b3163a9272f7a0497c988258dd654"
+AMU_BINARY_SHA256 = "5524d3b2b7dfd77fb10897f870ffff5090ec9f5600ad5f8db124ac9b1e05e9b6"
 AMU_RUNNER_SOURCE = "seed/x86_64-kx64-runner.kotoba"
 AMU_RUNNER_SHA256 = "c9f1fe1b5c1748450fb11b233cbdc9d9234880a60dc480c0387b173f60d905be"
 AMU_CANDIDATE_SOURCE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
-# Amu PR #1769 adds experimental project-profile admission for entropy wire 23.
-# First standalone runtime gate: F1=F2=F3 at this exact compiler digest. Keep
-# the digest and byte count pinned so subsequent consumer runs prove identity.
-AMU_CANDIDATE_COMPILER_SHA256 = "4e4cbb4a66c47ba8277045489e2dd75c28e781a4ffa8a37ed7d3733b5387fc96"
-AMU_CANDIDATE_COMPILER_BYTES = 10306048
-AMU_CANDIDATE_RUNNER_SHA256 = "27349b7edfea5833f41263cdbf6195e5f26848bfb491e406c2d826987194d3b2"
-KOTOBA_COMMIT = "63e30efc6402320fca6f9c70abd93f113e05d99c"
+# Amu PR #1771 contains the scoped wire-35 unlink and experimental
+# project-profile admission needed by this consumer. The candidate compiler
+# reached F1=F2=F3 at this exact digest; pin it so consumer runs prove identity.
+AMU_CANDIDATE_COMPILER_SHA256 = "ea7cd6c04022c8adf12881ab404285652eb440573fd9829cf11396af4a829421"
+AMU_CANDIDATE_COMPILER_BYTES = 10310144
+AMU_CANDIDATE_RUNNER_SHA256 = "86c0929295446a27b92b44ce90e8e4e445a7b9293fb24e115dc133d93ebd6f92"
+KOTOBA_COMMIT = "14e84d230933e8aa638f3a416c4728d0c305305e"
 KOTOBA_JCS_PATH = "lib/org.ietf.jcs/kotoba/jcs/reader.kotoba"
 KOTOBA_JCS_SHA256 = "f8af2953904bd0a96e7b5c3b9e34151bcae3754e5358669adb8ac289acc0872f"
 KOTOBA_STORE_IO_PATH = "lib/kotoba.hata/src/hata/store_io.kotoba"
-KOTOBA_STORE_IO_SHA256 = "096f6d29d77f374313600a51a18366ee59525c7385456a01218a160904187b10"
+KOTOBA_STORE_IO_SHA256 = "25ee164fbdc54360549376c07a8dfa54413db0b00d43562ae77cc89b0031bc3a"
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -185,15 +185,23 @@ def execute_launcher(name, launcher, scope, action, value, option, expected_exit
     env.pop("ITONAMI_CRON_JOBS_PAYLOAD", None)
     if env_overrides:
         env.update(env_overrides)
-    argv = [launcher, "cron", "jobs", action, scope / "d"]
-    if value != "":
-        argv.append(value)
-    if option != "" or append_empty_option:
-        argv.append(option)
-    if extra1 != "":
-        argv.append(extra1)
-    if extra2 != "":
-        argv.append(extra2)
+    if action in ("pause-global", "resume-global", "status-global"):
+        global_root = scope / "itonami"
+        global_root.mkdir(parents=True, exist_ok=True)
+        env["ITONAMI_DIR"] = str(global_root)
+        argv = [launcher, "cron", "jobs", action]
+        if action == "pause-global" and value != "":
+            argv.append(value)
+    else:
+        argv = [launcher, "cron", "jobs", action, scope / "d"]
+        if value != "":
+            argv.append(value)
+        if option != "" or append_empty_option:
+            argv.append(option)
+        if extra1 != "":
+            argv.append(extra1)
+        if extra2 != "":
+            argv.append(extra2)
     started = time.monotonic()
     result = subprocess.run(list(map(str, argv)), cwd=ROOT, env=env,
                             capture_output=True, timeout=120)
@@ -289,10 +297,10 @@ def main():
     if marker.read_text(encoding="utf-8") != expected_pause:
         raise RuntimeError("invalid global pause timestamp changed the existing marker")
 
-    execute("runtime-global-resume-unavailable-refusal", runner, payload, pause_scope,
-            "resume-global", "", "", 2, out, calls, allow_stderr=True)
-    if marker.read_text(encoding="utf-8") != expected_pause:
-        raise RuntimeError("unavailable global resume modified the pause marker")
+    resume_stdout = execute("runtime-global-resume-positive", runner, payload, pause_scope,
+                            "resume-global", "", "", 0, out, calls)
+    if b"resumed" not in resume_stdout or marker.exists():
+        raise RuntimeError(f"global resume did not remove the active marker: {resume_stdout!r}")
     pause_absent_scope = out / "pause-marker-absent-scope"
     (pause_absent_scope / "d").mkdir(parents=True)
     resume_absent_stdout = execute("runtime-global-resume-absent", runner, payload, pause_absent_scope,
@@ -408,6 +416,44 @@ def main():
     if missing_result.returncode != 78 or b"native artifact missing" not in missing_result.stderr:
         raise RuntimeError(f"launcher missing-artifact refusal mismatch: "
                            f"exit={missing_result.returncode} stderr={missing_result.stderr!r}")
+
+    launcher_global_pause = out / "launcher-global-pause-scope"
+    (launcher_global_pause / "d").mkdir(parents=True)
+    launcher_global_reason = "operator request"
+    launcher_global_pause_stdout = execute_launcher(
+        "launcher-global-pause-positive", package_launcher, launcher_global_pause,
+        "pause-global", launcher_global_reason, "", 0, out, calls)
+    launcher_global_marker = launcher_global_pause / "itonami/paused"
+    launcher_global_contents = launcher_global_marker.read_text(encoding="utf-8")
+    launcher_global_timestamp, _, launcher_global_saved_reason = launcher_global_contents.rstrip("\n").partition(" ")
+    parsed_global_timestamp = dt.datetime.fromisoformat(launcher_global_timestamp)
+    if (launcher_global_saved_reason != launcher_global_reason
+            or abs(parsed_global_timestamp.timestamp() - time.time()) > 10
+            or b"paused" not in launcher_global_pause_stdout):
+        raise RuntimeError(f"launcher global pause marker/output mismatch: "
+                           f"{launcher_global_contents!r} {launcher_global_pause_stdout!r}")
+
+    launcher_global_status_stdout = execute_launcher(
+        "launcher-global-status-positive", package_launcher, launcher_global_pause,
+        "status-global", "", "", 0, out, calls)
+    if (b"paused " not in launcher_global_status_stdout
+            or launcher_global_reason.encode() not in launcher_global_status_stdout):
+        raise RuntimeError(f"launcher global status did not read marker: {launcher_global_status_stdout!r}")
+
+    launcher_global_resume_stdout = execute_launcher(
+        "launcher-global-resume-positive", package_launcher, launcher_global_pause,
+        "resume-global", "", "", 0, out, calls)
+    if b"resumed" not in launcher_global_resume_stdout or launcher_global_marker.exists():
+        raise RuntimeError(f"launcher global resume did not remove marker: {launcher_global_resume_stdout!r}")
+
+    launcher_global_absent = out / "launcher-global-absent-scope"
+    (launcher_global_absent / "d").mkdir(parents=True)
+    launcher_global_absent_stdout = execute_launcher(
+        "launcher-global-resume-absent", package_launcher, launcher_global_absent,
+        "resume-global", "", "", 0, out, calls)
+    if (b"nothing to resume" not in launcher_global_absent_stdout
+            or (launcher_global_absent / "itonami/paused").exists()):
+        raise RuntimeError(f"launcher absent global resume was not idempotent: {launcher_global_absent_stdout!r}")
 
     list_scope = out / "list-scope"
     (list_scope / "d").mkdir(parents=True)
@@ -823,8 +869,12 @@ def main():
         "global_pause_runtime": "PASS",
         "global_pause_invalid_timestamp_refusal": "PASS",
         "global_pause_status_runtime": "PASS",
-        "global_resume_unavailable_refusal": "PASS",
+        "global_resume_positive_runtime": "PASS",
         "global_resume_idempotent_runtime": "PASS",
+        "global_pause_launcher_runtime": "PASS",
+        "global_status_launcher_runtime": "PASS",
+        "global_resume_launcher_runtime": "PASS",
+        "global_resume_idempotent_launcher": "PASS",
         "pause_missing_id_refusal_runtime": "PASS",
         "pause_launcher_runtime": "PASS",
         "pause_missing_id_refusal_launcher": "PASS",
@@ -863,7 +913,7 @@ def main():
                           "pause": sha(pause_stdout), "launcher_pause": sha(launcher_pause_stdout),
                           "resume": sha(resume_stdout), "launcher_resume": sha(launcher_resume_stdout),
                           "launcher_create": sha(launcher_create_stdout)},
-        "scope": "standalone Linux x86_64 native cron jobs and partial global pause-marker Kotoba CLI candidate with scoped FS35, route-specific entropy, positive/refusal controls; global resume is explicitly refused because marker removal trapped in the Amu KX64 runtime; neither global pause nor resume is wired to the launcher; macOS runtime qualification remains open",
+        "scope": "standalone Linux x86_64 native cron jobs and global pause-marker Kotoba CLI candidate with scoped FS35, route-specific entropy, positive/refusal controls; global pause/resume/status launcher routes use ITONAMI_DIR and run only through the pinned Amu native runtime; macOS runtime qualification remains open",
     }
     receipt_path = out / "build-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")

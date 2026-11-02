@@ -26,11 +26,11 @@
         (if (and (fs/write path body) (fs/sync path)) 0 1)))))
 
 (defn resume [root :string] :i64
-  ;; 1 = already absent; 2 = removal unavailable in the current native runtime.
+  ;; 0 = removed; 1 = already absent; 2 = invalid root or filesystem refusal.
   (let [path (marker-path root)]
     (if (= (string-length path) 0) 2
       (if (not (fs/exists? path)) 1
-        2))))
+        (if (fs/remove path) 0 2)))))
 
 (defn active? [root :string] :bool
   (let [path (marker-path root)]
