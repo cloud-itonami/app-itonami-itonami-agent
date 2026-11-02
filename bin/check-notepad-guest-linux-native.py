@@ -152,7 +152,7 @@ def main():
     runner.chmod(0o700)
 
     def execute(name, root, args, allowed=WIRES, browse_root=None, app_root=None,
-                expected_result=None):
+                expected_result=None, expected_trap=False):
         root.mkdir(parents=True, exist_ok=True)
         env2 = {"PATH": "/nonexistent", "KEXE_ALLOW": allowed,
                 "KEXE_CAP_RESOURCES_34": str(browse_root or root),
@@ -167,6 +167,14 @@ def main():
                       "stdout_sha256": sha(result.stdout), "stderr_sha256": sha(result.stderr)})
         (out / f"{name}.stdout").write_bytes(result.stdout)
         (out / f"{name}.stderr").write_bytes(result.stderr)
+        if expected_trap:
+            if (result.returncode != 120
+                    or b":status :trap :exit 120" not in result.stdout
+                    or b"KEXE_TRAP" not in result.stderr):
+                raise RuntimeError(f"{name} did not produce the expected fail-closed trap: "
+                                   f"exit={result.returncode} stdout={result.stdout!r} "
+                                   f"stderr={result.stderr!r}")
+            return result
         if result.returncode != 0:
             raise RuntimeError(f"{name} trapped: exit={result.returncode} "
                                f"stdout={result.stdout!r} stderr={result.stderr!r}")
@@ -209,7 +217,7 @@ def main():
     outside = out / "outside-scope"
     outside.mkdir()
     escaped = execute("outside-scope-refusal", scope,
-                       ["set", str(outside), "escape", "value"], expected_result=2)
+                       ["set", str(outside), "escape", "value"], expected_trap=True)
     if any(outside.iterdir()) or b"escape = value" in escaped.stdout:
         raise RuntimeError("outside-scope operation was not refused")
 
@@ -228,6 +236,7 @@ def main():
         "payload_sha256": sha(body),
         "runner_sha256": sha(runner.read_bytes()),
         "capabilities": ["hash/sha256", "fs/browse", "fs/app-data", "io/write", "cli/args", "io/write-error"],
+        "scope_refusal": "Amu KX64 runner trap (exit 120) with no outside-scope write",
         "cases": [c["name"] for c in calls if c["name"].endswith(("positive", "refusal"))],
         "processes": calls,
     }
