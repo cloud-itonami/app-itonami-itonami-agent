@@ -1,5 +1,43 @@
 ;; Compose after the exact schedule, Murakumo agent-step and gateway sources.
 ;; Expected CIDs and job hashes were generated independently from UTF-8 JSON.
+(defn- test-definition [cron :string id :string offset :i64] :vector-i64
+  (gt-bytes (str "{\"cron\":\"" cron "\",\"id\":\"" id
+    "\",\"input\":\"bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey\",\"kind\":\"itonami.cron-schedule/1\",\"offsetMinutes\":" offset
+    ",\"policy\":\"bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq\",\"profile\":\"sha256:6e5ac5ef12cd31e4889ec39bc8944e41cbca613829e5dad43c2eb401239c9ea8\",\"rail\":\"murakumo\"}")))
+
+(defn- test-pin [b :vector-i64] :string (digest-cid (str "sha256:" (sha256-hex b)) 85))
+
+(defn- test-verified-cron [] :bool
+  (let [definition (gt-bytes "{\"cron\":\"* * * * *\",\"id\":\"test-schedule\",\"input\":\"bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey\",\"kind\":\"itonami.cron-schedule/1\",\"offsetMinutes\":540,\"policy\":\"bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq\",\"profile\":\"sha256:6e5ac5ef12cd31e4889ec39bc8944e41cbca613829e5dad43c2eb401239c9ea8\",\"rail\":\"murakumo\"}")
+        pin "bafkreiegpypxkmtidu6ethokq4f4qqvkakdf35ie4fxzzmfmkprejusp5a"
+        slot 1792638000000 previous (- slot 60000)
+        altered (gt-bytes "{\"cron\":\"* * * * *\",\"id\":\"other\"}")
+        vixie (test-definition "0 12 13 * 5" "vixie" 540)
+        impossible (test-definition "0 0 31 2 *" "impossible" 0)
+        empty-id (test-definition "* * * * *" "" 0)
+        bad-zone (test-definition "* * * * *" "bad-zone" 841)]
+    (and (= (verified-cron-problem true slot previous slot pin definition) "trigger/ok")
+         (not (= (verified-cron-input true slot previous slot pin definition) ""))
+         (not (= (verified-cron-job true slot previous slot pin definition) ""))
+         (= (verified-cron-input-cid true slot previous slot pin definition)
+            (gt-str (gt-bytes (verified-cron-job true slot previous slot pin definition)) "input"))
+         (= (verified-cron-job-id true slot previous slot pin definition)
+            (verified-cron-job-id true (+ slot 5000) previous slot pin definition))
+         (= (verified-cron-problem true slot previous slot pin altered) "trigger/definition")
+         (= (verified-cron-problem true slot previous slot "bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq" definition) "trigger/definition-cid")
+         (= (verified-cron-problem false slot previous slot pin definition) "trigger/not-due")
+         (= (verified-cron-problem true (- slot 1) previous slot pin definition) "trigger/not-due")
+         (= (verified-cron-problem true (+ slot 60000) previous (+ slot 60000) pin definition) "trigger/not-next")
+         (= (verified-cron-problem true slot previous (- slot 1) pin definition) "trigger/not-a-slot")
+         (= (verified-cron-problem true slot slot slot pin definition) "trigger/invalid-time")
+         (= (verified-cron-problem true 4102444800001 previous slot pin definition) "trigger/invalid-time")
+         (= (verified-cron-problem true 1792724400000 1792638000000 1792724400000 (test-pin vixie) vixie) "trigger/ok")
+         (= (verified-cron-problem true 1803772800000 1792638000000 1803772800000 (test-pin impossible) impossible) "trigger/not-a-slot")
+         (= (verified-cron-problem true slot previous slot (test-pin empty-id) empty-id) "trigger/definition")
+         (= (verified-cron-problem true slot previous slot (test-pin bad-zone) bad-zone) "trigger/definition")
+         (= (verified-cron-input-cid true (+ slot 60000) previous (+ slot 60000) pin definition) "")
+         (= (verified-cron-job-id true (+ slot 60000) previous (+ slot 60000) pin definition) ""))))
+
 (defn main [] :i64
   (let [source "bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey"
         schedule "bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq"
@@ -9,7 +47,8 @@
         cid (trigger-input-cid true a a schedule source profile schedule "murakumo")
         job (trigger-job true a a schedule source profile schedule "murakumo")
         id (trigger-job-id true a a schedule source profile schedule "murakumo")]
-    (if (and (= (trigger-problem true a a schedule source profile schedule "murakumo") "trigger/ok")
+    (if (and (test-verified-cron)
+             (= (trigger-problem true a a schedule source profile schedule "murakumo") "trigger/ok")
              (json-canonical? (gt-bytes input)) (json-canonical? (gt-bytes job))
              (= cid "bafkreifmncfrhksedzb553i4gipebvykhhh2iueonff6ho4fexr5p3rgq4")
              (= id "c1102c0d0c74a2c952990e15f12a5a2bc1645877e8f9f236b082ceb398996588")

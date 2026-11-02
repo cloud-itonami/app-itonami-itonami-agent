@@ -3,12 +3,13 @@
 ;; the schedule definition, persist the input, and enforce a fresh lease before
 ;; dispatch. It does not reserve, submit, run or retry a job.
 (ns itonami.gateway-trigger
-  (:export [trigger-problem trigger-input trigger-input-cid trigger-job trigger-job-id]))
+  (:export [verified-cron-problem verified-cron-input verified-cron-input-cid
+            verified-cron-job verified-cron-job-id]))
 
 (defn- gt-bytes [s :string] :vector-i64
   (vector-i64-from-bytes (string-to-utf8 s)))
 
-(defn trigger-problem [active :bool now :i64 slot :i64 schedule :string source :string
+(defn- trigger-problem [active :bool now :i64 slot :i64 schedule :string source :string
                        profile :string policy :string rail :string] :string
   (cond (or (< now 0) (< slot 0)) "trigger/invalid-time"
         (not (due? active slot now)) "trigger/not-due"
@@ -20,22 +21,96 @@
   (str "{\"input\":\"" source "\",\"kind\":\"itonami.cron-trigger/1\",\"schedule\":\""
        schedule "\",\"scheduledAt\":" slot "}"))
 
-(defn trigger-input [active :bool now :i64 slot :i64 schedule :string source :string
+(defn- trigger-input [active :bool now :i64 slot :i64 schedule :string source :string
                     profile :string policy :string rail :string] :string
   (if (= (trigger-problem active now slot schedule source profile policy rail) "trigger/ok")
     (gt-input slot schedule source) ""))
 
-(defn trigger-input-cid [active :bool now :i64 slot :i64 schedule :string source :string
+(defn- trigger-input-cid [active :bool now :i64 slot :i64 schedule :string source :string
                         profile :string policy :string rail :string] :string
   (let [input (trigger-input active now slot schedule source profile policy rail)]
     (if (= input "") "" (digest-cid (str "sha256:" (sha256-hex (gt-bytes input))) 85))))
 
-(defn trigger-job [active :bool now :i64 slot :i64 schedule :string source :string
+(defn- trigger-job [active :bool now :i64 slot :i64 schedule :string source :string
                   profile :string policy :string rail :string] :string
   (let [input (trigger-input-cid active now slot schedule source profile policy rail)]
     (if (= input "") "" (job-text profile input policy rail))))
 
-(defn trigger-job-id [active :bool now :i64 slot :i64 schedule :string source :string
+(defn- trigger-job-id [active :bool now :i64 slot :i64 schedule :string source :string
                      profile :string policy :string rail :string] :string
   (let [input (trigger-input-cid active now slot schedule source profile policy rail)]
     (if (= input "") "" (job-id profile input policy rail))))
+
+;; A canonical definition and its host-pinned CID bind the schedule identity,
+;; expression, source, profile and policy. They do not prove authorization:
+;; the caller still supplies a trusted pin and a durably admitted cursor.
+(defn- gt-str [b :vector-i64 key :string] :string
+  (let [i (json-member b 0 key)]
+    (if (and (>= i 0) (= (json-kind b i) 3)) (json-string b i) "")))
+
+(defn- gt-integer? [b :vector-i64 key :string] :bool
+  (let [i (json-member b 0 key)]
+    (and (>= i 0) (= (json-kind b i) 4) (json-int-ok? b i))))
+
+(defn- gt-num [b :vector-i64 key :string] :i64
+  (let [i (json-member b 0 key)] (if (gt-integer? b key) (json-int b i) 0)))
+
+;; Before walking, confirm that the proposed slot itself matches the cron.
+;; An impossible expression such as 31 February then fails immediately rather
+;; than making the scheduler search to its 600000-step limit.
+(defn- gt-slot-matches? [expr :string offset :i64 slot :i64] :bool
+  (if (not (= (rem slot 60000) 0)) false
+    (let [l (+ (quot slot 60000) offset) days (floor-div l 1440)
+          mins (- l (* days 1440)) hour (quot mins 60) minute (rem mins 60)]
+      (and (has-bit? (field-mask (field-at expr 0) 0 59 false) minute)
+           (has-bit? (field-mask (field-at expr 1) 0 23 false) hour)
+           (has-bit? (field-mask (field-at expr 3) 1 12 false) (civil-month days))
+           (day-ok? (field-mask (field-at expr 2) 1 31 false)
+                    (field-mask (field-at expr 4) 0 7 true)
+                    (= (field-at expr 2) "*") (= (field-at expr 4) "*")
+                    (civil-day days) (weekday days))))))
+
+(defn verified-cron-problem [active :bool now :i64 previous :i64 slot :i64
+                            expected :string definition :vector-i64] :string
+  (cond (or (> (vector-count definition) 8192) (not (json-canonical? definition))
+            (not (= (json-kind definition 0) 1)) (not (= (json-count definition 0) 8))) "trigger/definition"
+        (or (= (cid-digest expected) "")
+            (not (= (digest-cid (str "sha256:" (sha256-hex definition)) 85) expected))) "trigger/definition-cid"
+        (or (not (= (gt-str definition "kind") "itonami.cron-schedule/1"))
+            (= (gt-str definition "id") "")
+            (not (= (field-problem (gt-str definition "id")) "enroll/ok"))
+            (not (gt-integer? definition "offsetMinutes"))
+            (< (gt-num definition "offsetMinutes") -840) (> (gt-num definition "offsetMinutes") 840)
+            (not (= (cron-problem (gt-str definition "cron")) "schedule/ok"))) "trigger/definition"
+        ;; Bound the calendar domain to avoid arithmetic overflow and reject
+        ;; impossible or stale cursor data instead of silently skipping slots.
+        (or (< previous 0) (< now 0) (< slot 0)
+            (> previous 4102444800000) (> now 4102444800000) (> slot 4102444800000)
+            (<= slot previous)) "trigger/invalid-time"
+        (not (gt-slot-matches? (gt-str definition "cron") (gt-num definition "offsetMinutes") slot)) "trigger/not-a-slot"
+        (not (= (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes")) slot)) "trigger/not-next"
+        :else (trigger-problem active now slot expected (gt-str definition "input")
+                (gt-str definition "profile") (gt-str definition "policy") (gt-str definition "rail"))))
+
+(defn verified-cron-input [active :bool now :i64 previous :i64 slot :i64
+                          expected :string definition :vector-i64] :string
+  (if (= (verified-cron-problem active now previous slot expected definition) "trigger/ok")
+    (trigger-input active now slot expected (gt-str definition "input") (gt-str definition "profile")
+                   (gt-str definition "policy") (gt-str definition "rail")) ""))
+
+(defn verified-cron-input-cid [active :bool now :i64 previous :i64 slot :i64
+                              expected :string definition :vector-i64] :string
+  (let [input (verified-cron-input active now previous slot expected definition)]
+    (if (= input "") "" (digest-cid (str "sha256:" (sha256-hex (gt-bytes input))) 85))))
+
+(defn verified-cron-job [active :bool now :i64 previous :i64 slot :i64
+                        expected :string definition :vector-i64] :string
+  (if (= (verified-cron-problem active now previous slot expected definition) "trigger/ok")
+    (trigger-job active now slot expected (gt-str definition "input") (gt-str definition "profile")
+                 (gt-str definition "policy") (gt-str definition "rail")) ""))
+
+(defn verified-cron-job-id [active :bool now :i64 previous :i64 slot :i64
+                           expected :string definition :vector-i64] :string
+  (if (= (verified-cron-problem active now previous slot expected definition) "trigger/ok")
+    (trigger-job-id active now slot expected (gt-str definition "input") (gt-str definition "profile")
+                    (gt-str definition "policy") (gt-str definition "rail")) ""))
