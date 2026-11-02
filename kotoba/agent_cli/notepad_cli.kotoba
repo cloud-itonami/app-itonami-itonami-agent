@@ -22,7 +22,7 @@
   (:require [itonami.notepad :as np]
             [itonami.notepad-render :as nr]
             [itonami.journal-core :as jc])
-  (:export [notepad-cli main])
+  (:export [main])
   (:capabilities #{:cli/args :io/write :io/write-error}))
 
 (def usage "usage: itonami-agent cron notepad <job-id> set <key> <value> | get <key> | delete <key> | list")
