@@ -76,6 +76,23 @@ revives an old approval or lease: the destination obtains fresh admission.
    receipt before another turn. GitHub outage leaves the job pending/unknown;
    it never silently selects an unrelated store.
 
+## Native decision slice
+
+`kotoba/agent_cli/github_checkpoint_core.kotoba` implements the pure admission
+and remote-result decisions for this protocol. It does not fetch, push, verify
+objects, enforce a lease, perform a bot turn or persist state. In particular,
+its `fence-enforced` input must come from the actual effect boundary; passing
+`1` in a fixture is not evidence of fencing. No production caller uses this
+module yet.
+
+`test/native/github_checkpoint_cases.kotoba` exercises refusal, conflicting
+refs, missing readback and an uncertain acknowledgement. For the scoped Mac
+single-source CLI, prepare a temporary source by replacing the module's
+namespace with `(ns github-checkpoint-native-test (:export [main]))`, then
+append the test cases, and run `amu check` and `amu run` on that file. The
+test returns `0` on success. Mac native project imports, GitHub transport,
+cryptographic verification and effect-boundary fencing are separate gates.
+
 ## Inference qualification
 
 The requested model is Ternary Bonsai 2 27B with MTP. Identify and pin the
