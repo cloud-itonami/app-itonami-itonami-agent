@@ -289,10 +289,10 @@ def main():
     if marker.read_text(encoding="utf-8") != expected_pause:
         raise RuntimeError("invalid global pause timestamp changed the existing marker")
 
-    resume_stdout = execute("runtime-global-resume-positive", runner, payload, pause_scope,
-                            "resume-global", "", "", 0, out, calls)
-    if marker.exists():
-        raise RuntimeError("global resume left the pause marker in place")
+    execute("runtime-global-resume-unavailable-refusal", runner, payload, pause_scope,
+            "resume-global", "", "", 2, out, calls, allow_stderr=True)
+    if marker.read_text(encoding="utf-8") != expected_pause:
+        raise RuntimeError("unavailable global resume modified the pause marker")
     resume_absent_stdout = execute("runtime-global-resume-absent", runner, payload, pause_scope,
                                    "resume-global", "", "", 0, out, calls)
     if b"nothing to resume" not in resume_absent_stdout:
@@ -821,7 +821,7 @@ def main():
         "global_pause_runtime": "PASS",
         "global_pause_invalid_timestamp_refusal": "PASS",
         "global_pause_status_runtime": "PASS",
-        "global_resume_runtime": "PASS",
+        "global_resume_unavailable_refusal": "PASS",
         "global_resume_idempotent_runtime": "PASS",
         "pause_missing_id_refusal_runtime": "PASS",
         "pause_launcher_runtime": "PASS",
@@ -861,7 +861,7 @@ def main():
                           "pause": sha(pause_stdout), "launcher_pause": sha(launcher_pause_stdout),
                           "resume": sha(resume_stdout), "launcher_resume": sha(launcher_resume_stdout),
                           "launcher_create": sha(launcher_create_stdout)},
-        "scope": "standalone Linux x86_64 native cron jobs and global pause-marker Kotoba CLI candidate with scoped FS35, route-specific entropy, positive/refusal controls; cron launcher remains packaged candidate and global pause-marker is not wired to launcher; macOS runtime qualification remains open",
+        "scope": "standalone Linux x86_64 native cron jobs and partial global pause-marker Kotoba CLI candidate with scoped FS35, route-specific entropy, positive/refusal controls; global resume is explicitly refused because marker removal trapped in the Amu KX64 runtime; neither global pause nor resume is wired to the launcher; macOS runtime qualification remains open",
     }
     receipt_path = out / "build-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
