@@ -231,7 +231,10 @@ def main():
         "amu_profile_sha256": AMU_PROFILE_SHA256,
         "amu_project_source_sha256": sha(project_source.read_bytes()),
         "amu_compiler_generations": generations,
-        "kotoba_sources": {str(p.relative_to(ROOT)): sha(p.read_bytes()) for p in files},
+        "kotoba_sources": {
+            f"kotoba/{relative}": sha((ROOT / "kotoba" / relative).read_bytes())
+            for _, relative in modules
+        },
         "project_kx64_sha256": sha(artifact.read_bytes()),
         "payload_sha256": sha(body),
         "runner_sha256": sha(runner.read_bytes()),
