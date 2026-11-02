@@ -18,16 +18,14 @@ import time
 from pathlib import Path
 
 
-AMU_COMMIT = "a73bd0350ecdb73abde7548f7fbb101e72b73d64"
+AMU_COMMIT = "f1030901b86d80d2ea6e44fdcb8b25334a740624"
 AMU_BINARY = "bin/amu-linux-x86_64"
-AMU_BINARY_SHA256 = "925fa6999fff4e48759fd1c355b32bf613e67d1497e8e8ab610c3890620f197b"
+AMU_BINARY_SHA256 = "3ef5d23c261be698c66bd75bc09745912e210d023f46cd6ec3c8e0c14ca5d285"
 AMU_RUNNER_SOURCE = "seed/x86_64-kx64-runner.kotoba"
 AMU_RUNNER_SHA256 = "c9f1fe1b5c1748450fb11b233cbdc9d9234880a60dc480c0387b173f60d905be"
 AMU_PROFILE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
-AMU_PROFILE_SOURCE_SHA256 = "07776b80a479f551725cd48101cfdb9e120c67454164e881ebc476a25bddef52"
-AMU_PROFILE_SHA256 = "e975a3ee5308da4c69b2b1f1e7ce71024197f5e127d481aba7e27222b7108996"
-AMU_PROFILE_MASK_FROM = b"bit-not 996440801408"
-AMU_PROFILE_MASK_TO = b"bit-not 1013612281864"
+AMU_PROFILE_SOURCE_SHA256 = "40e8ab9d6c220c27b93de3328798b2acf91c0cca9a21623441ba136398075d30"
+AMU_PROFILE_SHA256 = AMU_PROFILE_SOURCE_SHA256
 WIRES = "3,34,35,37,38,39"
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -86,14 +84,11 @@ def main():
         raise RuntimeError("pinned Amu compiler or runner source digest mismatch")
     if sha(profile_source) != AMU_PROFILE_SOURCE_SHA256:
         raise RuntimeError("pinned Amu experimental project-profile source digest mismatch")
-    # The upstream Hata-focused profile intentionally omits Itonami's hash and
-    # browse wires. Derive a bounded compile-only profile admitting exactly
-    # this guest's declared wires; the runtime still enforces runner grants.
-    if profile_source.count(AMU_PROFILE_MASK_FROM) != 1:
-        raise RuntimeError("Amu profile no longer has the expected single capability mask")
-    profile = profile_source.replace(AMU_PROFILE_MASK_FROM, AMU_PROFILE_MASK_TO)
+    # Pin Amu's reviewed candidate profile, which explicitly includes the
+    # Itonami wire set. Runtime grants remain separately constrained by WIRES.
+    profile = profile_source
     if sha(profile) != AMU_PROFILE_SHA256:
-        raise RuntimeError("derived Itonami project-profile digest mismatch")
+        raise RuntimeError("pinned Itonami project-profile digest mismatch")
     manifest = git_blob(amu_repo, AMU_COMMIT, "seed/FULL-MANIFEST").decode("ascii")
     modules = [x for x in manifest.splitlines() if x and not x.startswith("#")]
     if len(modules) != 60 or "seed/98-x86_64-project.kotoba" not in modules:
