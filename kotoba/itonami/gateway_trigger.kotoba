@@ -1,0 +1,41 @@
+;; Deterministic input for a due cron slot, composed with itonami.schedule and
+;; Murakumo fleet_agent_step. This only prepares bytes: the host must verify
+;; the schedule definition, persist the input, and enforce a fresh lease before
+;; dispatch. It does not reserve, submit, run or retry a job.
+(ns itonami.gateway-trigger
+  (:export [trigger-problem trigger-input trigger-input-cid trigger-job trigger-job-id]))
+
+(defn- gt-bytes [s :string] :vector-i64
+  (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn trigger-problem [active :bool now :i64 slot :i64 schedule :string source :string
+                       profile :string policy :string rail :string] :string
+  (cond (or (< now 0) (< slot 0)) "trigger/invalid-time"
+        (not (due? active slot now)) "trigger/not-due"
+        (= (cid-digest schedule) "") "trigger/bad-schedule-cid"
+        (not (= (job-problem profile source policy rail) "job/ok")) "trigger/bad-job"
+        :else "trigger/ok"))
+
+(defn- gt-input [slot :i64 schedule :string source :string] :string
+  (str "{\"input\":\"" source "\",\"kind\":\"itonami.cron-trigger/1\",\"schedule\":\""
+       schedule "\",\"scheduledAt\":" slot "}"))
+
+(defn trigger-input [active :bool now :i64 slot :i64 schedule :string source :string
+                    profile :string policy :string rail :string] :string
+  (if (= (trigger-problem active now slot schedule source profile policy rail) "trigger/ok")
+    (gt-input slot schedule source) ""))
+
+(defn trigger-input-cid [active :bool now :i64 slot :i64 schedule :string source :string
+                        profile :string policy :string rail :string] :string
+  (let [input (trigger-input active now slot schedule source profile policy rail)]
+    (if (= input "") "" (digest-cid (str "sha256:" (sha256-hex (gt-bytes input))) 85))))
+
+(defn trigger-job [active :bool now :i64 slot :i64 schedule :string source :string
+                  profile :string policy :string rail :string] :string
+  (let [input (trigger-input-cid active now slot schedule source profile policy rail)]
+    (if (= input "") "" (job-text profile input policy rail))))
+
+(defn trigger-job-id [active :bool now :i64 slot :i64 schedule :string source :string
+                     profile :string policy :string rail :string] :string
+  (let [input (trigger-input-cid active now slot schedule source profile policy rail)]
+    (if (= input "") "" (job-id profile input policy rail))))
