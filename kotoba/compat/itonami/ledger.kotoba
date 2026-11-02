@@ -2,7 +2,9 @@
   "The effect half of the execution ledger port (executions table slice):
   per-execution state files (notepad's hashed naming) plus a per-job journal
   carrying claim order. The SQLite claim! contract is kept: at most one
-  ACTIVE (claimed/running) row per job, enforced by a bounded journal scan.
+  ACTIVE (claimed/running) row per job, enforced by a bounded journal scan
+  under the caller's single-writer discipline. This file is not an atomic
+  cross-process or distributed lock, and does not prove durable writes.
 
   Parity notes (measured scope of this slice): cron_incidents, handoff
   transitions, recover-interrupted and finished_at timestamps stay open;
@@ -67,7 +69,7 @@
                         1)]
               (count-run base q (+ i 1) n wanted (+ acc add)))))))))
 
-(defn lg-claim [base :string job :string id :string source :string] :i64
+(defn- claim-with-at [base :string job :string id :string source :string at :string] :i64
   (if (= 0 (string-length id))
     0
     (let [q (jpath base job)]
@@ -77,9 +79,12 @@
           (let [p (spath base id)]
             (if (= 1 (exists? p))
               0
-              (let [w (wire-write p (core/row-encode6 0 source "" "" 0 ""))]
+              (let [w (wire-write p (core/row-encode6 0 source "" "" 0 at))]
                 (let [a (j/journal-append q id)]
                   1)))))))))
+
+(defn lg-claim [base :string job :string id :string source :string] :i64
+  (claim-with-at base job id source ""))
 
 (defn lg-mark-running [base :string job :string id :string] :i64
   (let [p (spath base id)]
@@ -125,15 +130,9 @@
       (core/row-at (wire-read p)))))
 
 (defn lg-claim-at [base :string job :string id :string source :string at :string] :i64
-  ;; the claim carrying the caller's clock text (the isolation rule: the
-  ;; clock effect stays out of this module).
-  (if (= 0 (string-length id))
-    0
-    (let [p (spath base id)]
-      (if (= 1 (exists? p))
-        0
-        (let [w (wire-write p (core/row-encode6 0 source "" "" 0 at))]
-          1)))))
+  ;; The clock is supplied by the caller; claim and journal semantics must be
+  ;; identical to lg-claim so both APIs observe the same active execution.
+  (claim-with-at base job id source at))
 
 (defn lg-finish-at [base :string job :string id :string status :i64 error :string at :string] :i64
   (let [p (spath base id)]
