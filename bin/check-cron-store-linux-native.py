@@ -27,7 +27,7 @@ AMU_CANDIDATE_SOURCE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
 # Amu PR #1771 contains the scoped wire-35 unlink and experimental
 # project-profile admission needed by this consumer. The candidate compiler
 # reached F1=F2=F3 at this exact digest; pin it so consumer runs prove identity.
-AMU_CANDIDATE_COMPILER_SHA256 = "925fa6999fff4e48759fd1c355b32bf613e67d1497e8e8ab610c3890620f197b"
+AMU_CANDIDATE_COMPILER_SHA256 = "ea7cd6c04022c8adf12881ab404285652eb440573fd9829cf11396af4a829421"
 AMU_CANDIDATE_COMPILER_BYTES = 10310144
 AMU_CANDIDATE_RUNNER_SHA256 = "86c0929295446a27b92b44ce90e8e4e445a7b9293fb24e115dc133d93ebd6f92"
 KOTOBA_COMMIT = "14e84d230933e8aa638f3a416c4728d0c305305e"
