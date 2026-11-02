@@ -19,6 +19,15 @@ not authorization to continue using that repository as a checkpoint sink.
 The current `main` points to the historical 2026-09-28 commit; this does not
 establish that every other repository setting or reference is unchanged.
 
+The candidate archive is the separate private
+[`cloud-itonami/itonami-bot-state`](https://github.com/cloud-itonami/itonami-bot-state)
+repository. Its `main` was initialized with a non-sensitive README and read
+back through the GitHub API; no bot checkpoint has been stored there. The
+organization's default repository permission is `read`, so private does not
+mean owner-only. Effective app and bot access, classification, encryption,
+retention and restore remain qualification gates. Do not send actual bot
+state until they are satisfied.
+
 ## Boundaries
 
 * The gateway admits bounded triggers and submits agent-step jobs to the
