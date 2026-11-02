@@ -1,0 +1,16 @@
+;; Compose after gateway_trigger_cases (without its main) and gateway_job_node.
+(defn test-cron-job-node [] :bool
+  (let [source (gt-bytes "bounded source") wrong (gt-bytes "different source")
+        definition (test-definition-source "* * * * *" "node-test" 540 (test-pin source))
+        pin (test-pin definition) slot 1792638000000 previous (- slot 60000)
+        wrapper (gt-bytes (verified-cron-input true slot previous slot pin definition))
+        input (verified-cron-input-cid true slot previous slot pin definition)
+        profile "sha256:6e5ac5ef12cd31e4889ec39bc8944e41cbca613829e5dad43c2eb401239c9ea8"
+        policy "bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq"]
+    (and (= (cj-problem slot previous pin definition profile input policy "murakumo" wrapper source) "consume/ok")
+         (= (cj-problem slot previous pin definition profile input policy "murakumo" wrapper wrong) "consume/source-cid")
+         (= (cj-problem slot previous pin definition profile "bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey" policy "murakumo" wrapper source) "consume/job-mismatch")
+         (= (cj-problem slot previous pin definition profile input policy "openrouter" wrapper source) "consume/job-mismatch")
+         (= (cj-problem slot previous pin definition profile input policy "murakumo" (gt-bytes "{\"a\":") source) "consume/wrapper")
+         (= (cj-problem slot slot pin definition profile input policy "murakumo" wrapper source) "trigger/invalid-time")
+         (= (cj-problem (- slot 1) previous pin definition profile input policy "murakumo" wrapper source) "trigger/not-due"))))
