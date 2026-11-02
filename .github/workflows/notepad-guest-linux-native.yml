@@ -1,0 +1,49 @@
+name: itonami notepad guest Linux native
+
+on:
+  pull_request:
+    paths:
+      - "bin/check-notepad-guest-linux-native.py"
+      - "kotoba/agent_cli/notepad_cli.kotoba"
+      - "kotoba/compat/itonami/notepad.kotoba"
+      - "kotoba/compat/itonami/notepad_core.kotoba"
+      - "kotoba/compat/itonami/notepad_render.kotoba"
+      - "kotoba/compat/itonami/journal_core.kotoba"
+      - ".github/workflows/notepad-guest-linux-native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x86_64-native-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Fetch requested Itonami source without a runtime action
+        env:
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/$REPOSITORY.git"
+          if [ -n "$PR_NUMBER" ]; then
+            SOURCE_REF="refs/pull/$PR_NUMBER/head"
+          else
+            SOURCE_REF="$GITHUB_SHA"
+          fi
+          git -C "$GITHUB_WORKSPACE" -c protocol.version=2 fetch --depth=1 origin "$SOURCE_REF"
+          git -C "$GITHUB_WORKSPACE" checkout --detach FETCH_HEAD
+      - name: Build and run the Kotoba guest on Amu native Linux runtime
+        run: |
+          python3 bin/check-notepad-guest-linux-native.py \
+            --output "$RUNNER_TEMP/itonami-notepad-linux-native"
+      - name: Retain native gate evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: itonami-notepad-linux-native
+          path: ${{ runner.temp }}/itonami-notepad-linux-native
+          if-no-files-found: warn
