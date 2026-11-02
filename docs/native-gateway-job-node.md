@@ -33,6 +33,16 @@ topology membership, real cell, effect sink or restart was tested. The same
 live fixture on a separate ARM host reached its lease but could not launch
 the `stat`/`mkdir` subprocess because process isolation was unavailable there.
 
+A subsequent isolated ARM Linux Podman VM ran the actual node admission and
+actual network-disabled, read-only test cell, without either cell stub. The
+cell read the source on stdin, returned exit 0, and its output CID matched the
+independently calculated value. OpenSSL independently verified the signed
+receipt using the public RFC 8032 fixture key. A repeat was refused at the
+attempt marker and a changed source was refused before cell execution. The
+three authenticated voters remained colocated in the same test VM. The cell
+was rule-based and did not perform model inference. The temporary token and
+dedicated VM were removed after the test. [Evidence](evidence/awai147-cron-real-cell-20261103.json).
+
 The host still needs trusted schedule enrollment and durable cursor advancement,
 reconciliation for unknown outcomes, resource admission, cross-host fencing,
 and real cell/production verification. A prior slot supplied again under a

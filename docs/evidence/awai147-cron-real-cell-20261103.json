@@ -1,0 +1,39 @@
+{
+  "kind": "itonami.cron-job-native-cell-evidence/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "gatewayCommit": "ea6acad",
+  "murakumoCommit": "1bf2127",
+  "platform": "aarch64 Linux, dedicated local Podman VM",
+  "realNodeBinarySha256": "1933ea97413edaf5708f04733ea1b841046018da61c892095a894e1b6ca4c464",
+  "cellBinarySha256": "7d64359dfa17433187ded59822a205accbec8655ae229f0fd3dd315dc94a5f69",
+  "cellImageConfigSha256": "b33845bee6acca4241d52363254e308ef0b3a76e29faff4d5995995b3d37994d",
+  "fixture": "isolated rule-based stdin echo cell, no model inference",
+  "checks": {
+    "actualCronAdapter": true,
+    "actualJobNode": true,
+    "actualCellAdmission": true,
+    "actualPodmanCell": true,
+    "loopbackHmacVoters": 3,
+    "voterHosts": 1,
+    "correctSourceOutputCid": true,
+    "receiptSignatureIndependentOpenSSL": true,
+    "sameJobLocallyRefused": true,
+    "changedSourceRefused": true,
+    "temporaryTokenRemoved": true,
+    "testMachineRemoved": true
+  },
+  "receipt": {
+    "at": 1793645072119,
+    "did": "did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw",
+    "epoch": 1,
+    "exit": 0,
+    "job": "4aa4a032af337ef959a501178367adb6a21dc3265cc590539bf2c603bea24aea",
+    "kind": "itonami.agent-step-receipt/1",
+    "node": "b70",
+    "output": "bafkreibuoymhi5lbx3ktszxduuzmekq2qpbqd7mz66w2cowz4memgb4dna"
+  },
+  "receiptCanonicalText": "{\"at\":1793645072119,\"did\":\"did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw\",\"epoch\":1,\"exit\":0,\"job\":\"4aa4a032af337ef959a501178367adb6a21dc3265cc590539bf2c603bea24aea\",\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"b70\",\"output\":\"bafkreibuoymhi5lbx3ktszxduuzmekq2qpbqd7mz66w2cowz4memgb4dna\"}",
+  "signature": "FDpFd0EUvc9PUR-YeqOvbLI5VQo_eb35vl3IsnxgTbSQQEk6B1gwAhyZOYGN8jDrtP-mOip0Vhvwy3_50UccCQ",
+  "signer": "RFC 8032 test key 1, not a production identity",
+  "limitations": "Single isolated VM; test-only key and three colocated voters without signed topology. No gateway scheduler, GitHub storage, MTP inference, multi-host fencing, failure recovery, resource admission or production deployment was verified."
+}
