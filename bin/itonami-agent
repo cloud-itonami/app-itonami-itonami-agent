@@ -140,6 +140,7 @@ run_notepad_linux() {
   verb=$2
   key=$3
   value=$4
+  argument_count=$5
   if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
     blocked "cron notepad (native runtime is Linux x86_64 only)"
   fi
@@ -153,19 +154,19 @@ run_notepad_linux() {
   fi
   case "$verb" in
     set)
-      if [ "$#" -ne 4 ]; then
+      if [ "$argument_count" -ne 4 ]; then
         printf '%s\n' "usage: itonami-agent cron notepad <job-directory> set <key> <value>" >&2
         exit 2
       fi
       ;;
     get|delete)
-      if [ "$#" -ne 3 ]; then
+      if [ "$argument_count" -ne 3 ]; then
         printf '%s\n' "usage: itonami-agent cron notepad <job-directory> $verb <key>" >&2
         exit 2
       fi
       ;;
     list|clear)
-      if [ "$#" -ne 2 ]; then
+      if [ "$argument_count" -ne 2 ]; then
         printf '%s\n' "usage: itonami-agent cron notepad <job-directory> $verb" >&2
         exit 2
       fi
@@ -325,8 +326,9 @@ case "$1" in
           printf '%s\n' "usage: itonami-agent cron notepad <job-directory> set <key> <value> | get <key> | list" >&2
           exit 2
         fi
+        argument_count=$#
         base=$1; verb=$2; key=${3:-}; value=${4:-}
-        run_notepad_linux "$base" "$verb" "$key" "$value"
+        run_notepad_linux "$base" "$verb" "$key" "$value" "$argument_count"
         ;;
       *)
         blocked "$@"
