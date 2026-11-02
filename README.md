@@ -555,8 +555,10 @@ guard) with two deliberate differences for a network of nodes: time is epoch
 milliseconds plus an explicit UTC offset in minutes (so every node computes
 the same instant; equal to the `.cljk` for a fixed-offset zone such as
 Asia/Tokyo, +540), and a malformed expression is refused
-(`schedule/bad-cron`) rather than read leniently. Gate (no Node.js, nbb, JVM
-or babashka):
+(`schedule/bad-cron`) rather than read leniently. Numeric values and both range
+endpoints must fit their field; reversed ranges are refused before walking,
+so a large invalid endpoint cannot cause a long parser loop. Gate (no Node.js,
+nbb, JVM or babashka):
 
 ```bash
 AMU=../amu; G=$(mktemp -d)   # G must be under a path podman can mount
