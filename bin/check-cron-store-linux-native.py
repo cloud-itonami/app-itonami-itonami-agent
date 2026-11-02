@@ -293,9 +293,11 @@ def main():
             "resume-global", "", "", 2, out, calls, allow_stderr=True)
     if marker.read_text(encoding="utf-8") != expected_pause:
         raise RuntimeError("unavailable global resume modified the pause marker")
-    resume_absent_stdout = execute("runtime-global-resume-absent", runner, payload, pause_scope,
+    pause_absent_scope = out / "pause-marker-absent-scope"
+    (pause_absent_scope / "d").mkdir(parents=True)
+    resume_absent_stdout = execute("runtime-global-resume-absent", runner, payload, pause_absent_scope,
                                    "resume-global", "", "", 0, out, calls)
-    if b"nothing to resume" not in resume_absent_stdout:
+    if b"nothing to resume" not in resume_absent_stdout or (pause_absent_scope / "d/paused").exists():
         raise RuntimeError(f"idempotent global resume did not report the absent marker: {resume_absent_stdout!r}")
 
     source_revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).decode().strip()
