@@ -18,16 +18,16 @@ import time
 from pathlib import Path
 
 
-AMU_COMMIT = "587e8f63979aa763c3fe4b4fdb7a8e6f97d6bea9"
+AMU_COMMIT = "a73bd0350ecdb73abde7548f7fbb101e72b73d64"
 AMU_BINARY_PATH = "bin/amu-linux-x86_64"
-AMU_BINARY_SHA256 = "5524d3b2b7dfd77fb10897f870ffff5090ec9f5600ad5f8db124ac9b1e05e9b6"
+AMU_BINARY_SHA256 = "925fa6999fff4e48759fd1c355b32bf613e67d1497e8e8ab610c3890620f197b"
 AMU_RUNNER_SOURCE = "seed/x86_64-kx64-runner.kotoba"
 AMU_RUNNER_SHA256 = "c9f1fe1b5c1748450fb11b233cbdc9d9234880a60dc480c0387b173f60d905be"
 AMU_CANDIDATE_SOURCE = "seed/experimental/98-x86_64-project-fs-cli.kotoba"
 # Amu PR #1771 contains the scoped wire-35 unlink and experimental
 # project-profile admission needed by this consumer. The candidate compiler
 # reached F1=F2=F3 at this exact digest; pin it so consumer runs prove identity.
-AMU_CANDIDATE_COMPILER_SHA256 = "ea7cd6c04022c8adf12881ab404285652eb440573fd9829cf11396af4a829421"
+AMU_CANDIDATE_COMPILER_SHA256 = "925fa6999fff4e48759fd1c355b32bf613e67d1497e8e8ab610c3890620f197b"
 AMU_CANDIDATE_COMPILER_BYTES = 10310144
 AMU_CANDIDATE_RUNNER_SHA256 = "86c0929295446a27b92b44ce90e8e4e445a7b9293fb24e115dc133d93ebd6f92"
 KOTOBA_COMMIT = "14e84d230933e8aa638f3a416c4728d0c305305e"
