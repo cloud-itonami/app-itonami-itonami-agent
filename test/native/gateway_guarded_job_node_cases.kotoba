@@ -1,0 +1,15 @@
+;; Compose after the guarded node and existing gateway trigger test fixtures.
+(ns itonami.gateway-guarded-job-node-cases (:export [test-guarded-cron-cursor]))
+
+(defn test-guarded-cron-cursor [] :bool
+  (let [definition (test-definition "* * * * *" "guard-test" 540)
+        pin (test-pin definition) now 1792638000000 previous (- now 60000)
+        cursor (cc-cursor pin previous)]
+    (and (= (cjg-cursor-problem "0" "0" "0" definition cursor pin previous now) "cron-guard/ok")
+         (= (cjg-cursor-problem "1" "0" "0" definition cursor pin previous now) "cron-guard/pending-unknown")
+         (= (cjg-cursor-problem "0" "" "0" definition cursor pin previous now) "cron-guard/intent-unknown")
+         (= (cjg-cursor-problem "0" "0" "1" definition cursor pin previous now) "cron-guard/head-intent-unknown")
+         (= (cjg-cursor-problem "0" "0" "" definition cursor pin previous now) "cron-guard/head-intent-unknown")
+         (= (cjg-cursor-problem "0" "0" "0" definition cursor pin (- previous 60000) now) "cron-guard/cursor-changed")
+         (= (cjg-cursor-problem "0" "0" "0" definition cursor pin previous (- now 1)) "cron-guard/plan-refused")
+         (= (cjg-cursor-problem "0" "0" "0" definition (vector-alloc 0) pin previous now) "cron-guard/plan-refused"))))

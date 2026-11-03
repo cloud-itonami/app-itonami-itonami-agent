@@ -1,0 +1,45 @@
+;; Opt-in cron job-node entry. Compose after gateway_job_node, gateway_cursor,
+;; and their native dependencies. The host supplies all paths and holds an
+;; exclusive, globally serialized writer/dispatch boundary across this check
+;; and the entire job lifetime. This does not acquire a lease fence, resource
+;; reservation, process supervisor or lock and is not authorization to run.
+;; Arguments 0..23 match cron-job-node-main; argument 24 is the private cursor
+;; path and argument 25 must be empty. Unknown marker or cursor state refuses.
+(ns itonami.gateway-guarded-job-node (:export [cron-guarded-job-node-main]))
+
+(defn- cjg-read [path :string maximum :i64] :vector-i64
+  (let [size (cp-size path)]
+    (if (or (< size 1) (> size maximum)) (vector-alloc 0)
+      (let [b (cp-range path 0 size)]
+        (if (and (= (vector-count b) size) (= (cp-size path) size)) b (vector-alloc 0))))))
+
+(defn- cjg-cursor-problem [pending :string intent :string head :string definition :vector-i64
+                           cursor :vector-i64 pin :string previous :i64 now :i64] :string
+  (cond (not (= pending "0")) "cron-guard/pending-unknown"
+        (not (= intent "0")) "cron-guard/intent-unknown"
+        (not (= head "0")) "cron-guard/head-intent-unknown"
+        (not (= (cc-plan-problem definition pin cursor now) "trigger/ok")) "cron-guard/plan-refused"
+        (not (= (cp-num cursor 0 "slot") previous)) "cron-guard/cursor-changed"
+        :else "cron-guard/ok"))
+
+(defn cron-guarded-job-node-main [] :i64
+  (let [previous (jn-int (jn-arg 19)) pin (jn-arg 20) definition-path (jn-arg 21)
+        source-path (jn-arg 22) input-path (jn-arg 16) attempts (jn-arg 18)
+        cursor-path (jn-arg 24)]
+    (if (or (not (= (jn-arg 0) "run-cron")) (not (= (jn-arg 25) ""))
+            (not (cp-safe-absolute? cursor-path)) (not (cp-safe-absolute? definition-path))
+            (not (cp-safe-absolute? source-path)) (not (cp-safe-absolute? input-path))
+            (not (cp-safe-absolute? attempts))
+            (cc-definition-overlap? definition-path cursor-path)
+            (cc-definition-overlap? source-path cursor-path)
+            (cc-definition-overlap? input-path cursor-path)
+            (cc-definition-overlap? attempts cursor-path))
+      (let [x (jn-say "cron-guard/input-refused")] 2)
+      (let [pending (cp-fs "D" (str cursor-path ".pending") "")
+            intent (cp-fs "D" (str cursor-path ".intent") "")
+            head (cp-fs "D" (str cursor-path ".head-intent") "")
+            definition (cjg-read definition-path 8192) cursor (cjg-read cursor-path 1024)
+            now (ln-now "clock")
+            problem (cjg-cursor-problem pending intent head definition cursor pin previous now)]
+        (if (= problem "cron-guard/ok") (cron-job-node-main)
+          (let [x (jn-say problem)] 1))))))

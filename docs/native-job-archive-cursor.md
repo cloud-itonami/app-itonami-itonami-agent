@@ -39,12 +39,16 @@ may advance even if the final lease check, cursor write, marker finalization
 or process fails: the host must quarantine the work and independently
 reconcile GitHub head/archive and the local cursor, without automatic retry.
 
-The job-node entry takes a caller-supplied previous slot and does not read this
-marker itself. The trusted host must serialize all paths and refuse all job
-dispatch and alternate cursor writers while the marker or any operation is
-unknown. A marker's absence after an uncertain write is not proof of outcome.
-CAS and lease checks are not atomic: this adds head concurrency control, not a
-receiver-side fence or external-effect protection.
+The separate opt-in `cron-guarded-job-node-main` takes a host-selected cursor
+path at argument 24, checks all three marker names, independently reads the
+schedule and cursor, and compares the due slot's previous cursor against the
+job arguments before invoking the existing job-node entry. The original
+job-node entry remains callable and does not read the marker. These checks are
+not atomic with dispatch; the trusted host must hold serialization throughout
+the check and workload lifetime and refuse alternate entries while an outcome
+is unknown. A marker's absence after an uncertain write is not proof of
+outcome. CAS and lease checks are not atomic: this adds head concurrency
+control, not a receiver-side fence or external-effect protection.
 
 The host supplies and protects all paths, the schedule pin, checkpoint pins,
 signer, authenticated quorum token, node identity, and a fresh archive work
@@ -57,7 +61,7 @@ unknown cell had no external effects.
 The signature binds the digest to the receipt; producing that receipt under a
 live lease and enforcing effects against it still require runtime qualification.
 
-Selected current gateway, checkpoint, archive and head-CAS functions and
-decision test cases passed Amu source check with historical dependencies. The decision tests,
+Selected current gateway, guarded job, checkpoint, archive and head-CAS
+functions and decision cases passed Amu source check with historical dependencies. The decision tests,
 full dependency closure, native runtime, GitHub call, crash recovery and
 cross-host serialization have not been executed for this composition.
