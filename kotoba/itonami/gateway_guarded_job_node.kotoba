@@ -4,8 +4,9 @@
 ;; and the entire job lifetime. This does not acquire a lease fence, resource
 ;; reservation, process supervisor or lock and is not authorization to run.
 ;; Arguments 0..23 match cron-job-node-main; argument 24 is the private cursor
-;; path and argument 25 must be empty. Unknown marker or cursor state refuses.
-(ns itonami.gateway-guarded-job-node (:export [cron-guarded-job-node-main]))
+;; path. Unknown marker or cursor state refuses. The opt-in serialized entry
+;; additionally takes a pre-provisioned host-owned lock at argument 25.
+(ns itonami.gateway-guarded-job-node (:export [cron-guarded-job-node-main cron-serialized-job-node-main]))
 
 (defn- cjg-read [path :string maximum :i64] :vector-i64
   (let [size (cp-size path)]
@@ -22,11 +23,12 @@
         (not (= (cp-num cursor 0 "slot") previous)) "cron-guard/cursor-changed"
         :else "cron-guard/ok"))
 
-(defn cron-guarded-job-node-main [] :i64
+(defn- cjg-run [serialized :bool] :i64
   (let [previous (jn-int (jn-arg 19)) pin (jn-arg 20) definition-path (jn-arg 21)
         source-path (jn-arg 22) input-path (jn-arg 16) attempts (jn-arg 18)
         cursor-path (jn-arg 24)]
-    (if (or (not (= (jn-arg 0) "run-cron")) (not (= (jn-arg 25) ""))
+    (if (or (not (= (jn-arg 0) "run-cron"))
+            (if serialized (not (= (jn-arg 26) "")) (not (= (jn-arg 25) "")))
             (not (cp-safe-absolute? cursor-path)) (not (cp-safe-absolute? definition-path))
             (not (cp-safe-absolute? source-path)) (not (cp-safe-absolute? input-path))
             (not (cp-safe-absolute? attempts))
@@ -43,3 +45,31 @@
             problem (cjg-cursor-problem pending intent head definition cursor pin previous now)]
         (if (= problem "cron-guard/ok") (cron-job-node-main)
           (let [x (jn-say problem)] 1))))))
+
+;; The lock is a stable, privately provisioned regular file outside every
+;; cursor/journal path, the attempt tree and all input paths. All writers must
+;; use the same file without replacing it. This is cooperative host-local
+;; serialization only; a parent death or a detached child can release the
+;; lock before the entire workload stops. The host must qualify that boundary
+;; and resource limits before using it for builds, deployment or live jobs.
+(defn- cjg-lock-paths? [lock :string cursor :string definition :string source :string input :string attempts :string] :bool
+  (and (cp-safe-absolute? lock) (cp-safe-absolute? cursor) (cp-safe-absolute? definition)
+       (cp-safe-absolute? source) (cp-safe-absolute? input) (cp-safe-absolute? attempts)
+       (not (cc-definition-overlap? lock cursor)) (not (cc-path-overlap? lock definition))
+       (not (cc-path-overlap? lock source)) (not (cc-path-overlap? lock input))
+       (not (cc-path-overlap? lock attempts))))
+
+(defn cron-guarded-job-node-main [] :i64 (cjg-run false))
+
+(defn cron-serialized-job-node-main [] :i64
+  (let [lock (jn-arg 25) cursor (jn-arg 24) definition (jn-arg 21) source (jn-arg 22)
+        input (jn-arg 16) attempts (jn-arg 18)
+        valid (and (= (jn-arg 26) "") (cjg-lock-paths? lock cursor definition source input attempts))
+        meta (if valid (cp-fs "U" lock "") "")]
+    (if (not (and valid (= (cp-meta-field meta 0) "384") (= (cp-meta-field meta 3) "0")))
+      (let [x (jn-say "cron-lock/config-refused")] 2)
+      (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+        (let [x (jn-say "cron-lock/busy-or-unknown")] 1)
+        (let [result (cjg-run true)
+              unlocked (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
+          (if unlocked result (let [x (jn-say "cron-lock/unlock-unknown")] 1)))))))

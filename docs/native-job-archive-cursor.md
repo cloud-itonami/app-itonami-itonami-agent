@@ -50,6 +50,17 @@ is unknown. A marker's absence after an uncertain write is not proof of
 outcome. CAS and lease checks are not atomic: this adds head concurrency
 control, not a receiver-side fence or external-effect protection.
 
+An additional opt-in `cron-serialized-job-node-main` takes a private,
+pre-provisioned lock path at argument 25, checks that it is a mode-0600 regular
+file disjoint from the cursor, input paths and attempt tree, and makes one
+non-retrying flock attempt. It holds that cooperative local lock while invoking
+the guarded job entry, then reports unlock failure as unknown. The host must
+ensure all participating writers use the same stable, non-aliased lock and
+must establish ownership and ACL policy. This entry releases the lock before
+any later archive/head/cursor command: it does not serialize the full turn.
+The parent can die or a child can outlive it, so it is not a qualified process
+lifetime boundary, resource governor, distributed lock or permission to deploy.
+
 The host supplies and protects all paths, the schedule pin, checkpoint pins,
 signer, authenticated quorum token, node identity, and a fresh archive work
 path. It must serialize all writers across hosts and hold exclusive ownership
@@ -61,7 +72,7 @@ unknown cell had no external effects.
 The signature binds the digest to the receipt; producing that receipt under a
 live lease and enforcing effects against it still require runtime qualification.
 
-Selected current gateway, guarded job, checkpoint, archive and head-CAS
+Selected current gateway, guarded/serialized job, checkpoint, archive and head-CAS
 functions and decision cases passed Amu source check with historical dependencies. The decision tests,
 full dependency closure, native runtime, GitHub call, crash recovery and
 cross-host serialization have not been executed for this composition.

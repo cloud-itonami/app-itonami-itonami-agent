@@ -6,6 +6,10 @@
         pin (test-pin definition) now 1792638000000 previous (- now 60000)
         cursor (cc-cursor pin previous)]
     (and (= (cjg-cursor-problem "0" "0" "0" definition cursor pin previous now) "cron-guard/ok")
+         (cjg-lock-paths? "/p/cron.lock" "/p/cursor" "/p/definition" "/p/source" "/p/input" "/p/attempts")
+         (not (cjg-lock-paths? "/p/cursor.head-intent" "/p/cursor" "/p/definition" "/p/source" "/p/input" "/p/attempts"))
+         (not (cjg-lock-paths? "/p/attempts/lock" "/p/cursor" "/p/definition" "/p/source" "/p/input" "/p/attempts"))
+         (not (cjg-lock-paths? "/p//lock" "/p/cursor" "/p/definition" "/p/source" "/p/input" "/p/attempts"))
          (= (cjg-cursor-problem "1" "0" "0" definition cursor pin previous now) "cron-guard/pending-unknown")
          (= (cjg-cursor-problem "0" "" "0" definition cursor pin previous now) "cron-guard/intent-unknown")
          (= (cjg-cursor-problem "0" "0" "1" definition cursor pin previous now) "cron-guard/head-intent-unknown")
