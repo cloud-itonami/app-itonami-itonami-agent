@@ -22,6 +22,15 @@ closure. The current selfhost source-unity build also renames schedule's
 private `digit?` to avoid a flattened-name collision. This is not a standalone
 prebuilt service, and it does not run a scheduler or persist its cursor.
 
+A subsequent integration candidate at Murakumo commit `47aa435`
+([PR #572](https://github.com/kotoba-lang/murakumo/pull/572)) composes the
+same private seam and attempt root with stricter `clock` / `follow` mode,
+pre- and post-cell lease checks and expected-job receipt verification. The
+actual cron adapter and selected candidate dependencies passed an Amu source
+check, and a native fixture tested the seam with stubbed effects. This does
+not repin the earlier release evidence below or establish production runtime
+compatibility; qualify and pin the complete combined closure before use.
+
 An ARM Linux static source-unity gate compiled the actual node, schedule,
 gateway and adapter sources and returned 0 for valid and altered input cases.
 An x86 Linux fixture then exercised the actual adapter, proposer, three
