@@ -36,6 +36,9 @@ The caller must hold the same writer lock, protect the private directory,
 and independently reconcile the GitHub archive before recovery. An old or
 different cursor, pending path, malformed intent or uncertain filesystem
 response stays unknown. This operation never dispatches or replays a job.
+The shared `cc-recovery-ready?` preflight lets the controller refuse an
+invalid local intent before invoking an archive operation; `cc-recover`
+rechecks it immediately before syncing and retiring the intent.
 See the [recovery diagnostic](evidence/awai147-cursor-recovery-20261103/README.md).
 
 Advance itself does not verify GitHub. Its trusted caller must serialize

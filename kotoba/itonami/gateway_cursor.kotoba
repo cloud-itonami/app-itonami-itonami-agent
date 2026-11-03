@@ -67,7 +67,7 @@
 ;; Reconcile only a completed replacement. A pending file, malformed intent,
 ;; unreadable state, old cursor or any third value remains UNKNOWN. The host
 ;; must hold the same writer lock and independently reconcile archive state.
-(defn- cc-recover [path :string cursor :vector-i64] :string
+(defn- cc-recovery-ready? [path :string cursor :vector-i64] :bool
   (let [intent (str path ".intent") pending (str path ".pending") dir (cp-parent-dir path)
         pending-state (cp-fs "D" pending "") intent-state (cp-fs "D" intent "")
         ;; Bound the read before allocation. Host-owned exclusive access is
@@ -82,11 +82,14 @@
         text (if ascii (cp-text bytes) "")
         original (if (= (string-length text) 125) (string-substring text 5 64) "")
         current (cp-cid cursor)]
-    (cond (not (= pending-state "0")) "cursor/recovery-unknown"
-          (not (= intent-state "1")) "cursor/recovery-unknown"
-          (or (not (= (string-length original) 59)) (not (cp-raw? original))
-              (= original current) (not (= text (str "itc1\n" original "\n" current "\n")))) "cursor/recovery-unknown"
-          (not (= (cp-cid (cp-read path)) current)) "cursor/recovery-unknown"
+    (and (= pending-state "0") (= intent-state "1") (= (string-length original) 59)
+         (cp-raw? original) (not (= original current))
+         (= text (str "itc1\n" original "\n" current "\n"))
+         (= (cp-cid (cp-read path)) current))))
+
+(defn- cc-recover [path :string cursor :vector-i64] :string
+  (let [intent (str path ".intent") dir (cp-parent-dir path)]
+    (cond (not (cc-recovery-ready? path cursor)) "cursor/recovery-unknown"
           (not (= (cp-fs "M" path "") "1")) "cursor/recovery-unknown"
           (not (= (cp-fs "M" dir "") "1")) "cursor/recovery-unknown"
           (not (= (cp-fs "L" intent (str path ".last")) "1")) "cursor/recovery-unknown"
