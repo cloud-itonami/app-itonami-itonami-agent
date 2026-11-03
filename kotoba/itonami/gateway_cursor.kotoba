@@ -1,0 +1,135 @@
+;; Native local cron plan/cursor boundary. Host must serialize writers and
+;; call advance only after independently verified GitHub archive readback.
+;; Composition: existing gateway_job_node and git_checkpoint sources.
+(ns itonami.gateway-cursor (:export [cron-cursor-main]))
+
+(defn- cc-cursor-problem [cursor :vector-i64 pin :string now :i64] :string
+  (cond (or (> (vector-count cursor) 1024) (not (json-valid? cursor))
+            (not (json-canonical? cursor)) (not (= (json-kind cursor 0) 1))
+            (not (= (json-count cursor 0) 3))) "cursor/schema"
+        (or (not (= (cp-str cursor 0 "kind") "itonami.cron-cursor/1"))
+            (not (= (cp-str cursor 0 "schedule") pin))
+            (not (gt-integer? cursor "slot"))) "cursor/binding"
+        (or (< (cp-num cursor 0 "slot") 0) (> (cp-num cursor 0 "slot") now)
+            (> now 4102444800000)) "cursor/time"
+        :else "cursor/ok"))
+
+(defn- cc-plan-problem [definition :vector-i64 pin :string cursor :vector-i64 now :i64] :string
+  (let [c (cc-cursor-problem cursor pin now)]
+    (cond (not (= c "cursor/ok")) c
+          (or (> (vector-count definition) 8192) (not (json-valid? definition))
+              (not (json-canonical? definition)) (not (= (json-kind definition 0) 1))
+              (not (= (json-count definition 0) 8))
+              (not (= (cp-cid definition) pin))) "cursor/definition"
+          (or (not (gt-integer? definition "offsetMinutes"))
+              (< (gt-num definition "offsetMinutes") -840) (> (gt-num definition "offsetMinutes") 840)
+              (not (= (gt-str definition "kind") "itonami.cron-schedule/1"))
+              (= (gt-str definition "id") "") (not (= (field-problem (gt-str definition "id")) "enroll/ok"))
+              (not (= (job-problem (gt-str definition "profile") (gt-str definition "input")
+                                   (gt-str definition "policy") (gt-str definition "rail")) "job/ok"))
+              (not (= (cron-problem (gt-str definition "cron")) "schedule/ok"))) "cursor/definition"
+          :else
+          (let [previous (cp-num cursor 0 "slot")
+                next (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes"))]
+            (cond (< next 0) "cursor/no-next"
+                  (> next now) "cursor/idle"
+                  :else (verified-cron-problem true now previous next pin definition))))))
+
+(defn- cc-plan [definition :vector-i64 pin :string cursor :vector-i64 now :i64] :string
+  (let [problem (cc-plan-problem definition pin cursor now)]
+    (if (not (= problem "trigger/ok")) problem
+      (let [previous (cp-num cursor 0 "slot") slot (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes"))]
+        (str "cursor/plan " previous " " slot " " (verified-cron-job-id true now previous slot pin definition)
+             " " (verified-cron-input-cid true now previous slot pin definition)
+             " " (gt-str definition "profile") " " (gt-str definition "policy") "\n"
+             (verified-cron-input true now previous slot pin definition))))))
+
+(defn- cc-cursor [pin :string slot :i64] :vector-i64
+  (cp-bytes (str "{\"kind\":\"itonami.cron-cursor/1\",\"schedule\":\"" pin "\",\"slot\":" slot "}")))
+
+;; Atomic file replacement is not a multi-host CAS. The separately synced
+;; intent survives replacement of .pending, including a crash before the
+;; cursor directory sync. Any surviving intent requires host reconciliation.
+(defn- cc-advance [path :string original :vector-i64 pin :string slot :i64] :string
+  (let [tmp (str path ".pending") intent (str path ".intent") dir (cp-parent-dir path)]
+    (cond (not (= (cp-fs "D" tmp "") "0")) "cursor/pending-unknown"
+          (not (= (cp-fs "D" intent "") "0")) "cursor/intent-unknown"
+          (not (cp-write intent (cp-bytes (str "itc1\n" (cp-cid original) "\n" (cp-cid (cc-cursor pin slot)) "\n")))) "cursor/intent-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/intent-unknown"
+          (not (cp-write tmp (cc-cursor pin slot))) "cursor/write-unknown"
+          (not (= (cp-cid (cp-read path)) (cp-cid original))) "cursor/changed"
+          (not (= (cp-fs "L" tmp path) "1")) "cursor/rename-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/fsync-unknown"
+          (not (= (cp-fs "L" intent (str path ".last")) "1")) "cursor/intent-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/intent-unknown"
+          :else "cursor/advanced")))
+
+;; Reconcile only a completed replacement. A pending file, malformed intent,
+;; unreadable state, old cursor or any third value remains UNKNOWN. The host
+;; must hold the same writer lock and independently reconcile archive state.
+(defn- cc-recovery-ready? [path :string cursor :vector-i64] :bool
+  (let [intent (str path ".intent") pending (str path ".pending") dir (cp-parent-dir path)
+        pending-state (cp-fs "D" pending "") intent-state (cp-fs "D" intent "")
+        ;; Bound the read before allocation. Host-owned exclusive access is
+        ;; required because metadata and range read are not an atomic snapshot.
+        bytes (if (and (= intent-state "1") (= (cp-size intent) 125))
+                (cp-range intent 0 125) (vector-alloc 0))
+        ascii (and (= (vector-count bytes) 125)
+                   (loop [i 0]
+                     (if (= i 125) true
+                       (let [b (vector-at bytes i)]
+                         (and (or (= b 10) (and (>= b 32) (<= b 126))) (recur (+ i 1)))))))
+        text (if ascii (cp-text bytes) "")
+        original (if (= (string-length text) 125) (string-substring text 5 64) "")
+        current (cp-cid cursor)]
+    (and (= pending-state "0") (= intent-state "1") (= (string-length original) 59)
+         (cp-raw? original) (not (= original current))
+         (= text (str "itc1\n" original "\n" current "\n"))
+         (= (cp-cid (cp-read path)) current))))
+
+(defn- cc-recover [path :string cursor :vector-i64] :string
+  (let [intent (str path ".intent") dir (cp-parent-dir path)]
+    (cond (not (cc-recovery-ready? path cursor)) "cursor/recovery-unknown"
+          (not (= (cp-fs "M" path "") "1")) "cursor/recovery-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/recovery-unknown"
+          (not (= (cp-fs "L" intent (str path ".last")) "1")) "cursor/recovery-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/recovery-unknown"
+          :else "cursor/recovered")))
+
+(defn cron-cursor-main [] :i64
+  (let [mode (jn-arg 0) definition-path (jn-arg 1) pin (jn-arg 2) path (jn-arg 3)]
+    (cond (= mode "advance") (cron-cursor-advance-main)
+          (or (not (jn-attempt-root? definition-path)) (not (jn-attempt-root? path))
+              (= definition-path path) (not (cp-exists? definition-path)) (not (cp-exists? path)))
+          (let [x (jn-say "cursor/input-unavailable")] 2)
+          (or (not (or (= mode "plan") (= mode "recover"))) (not (= (jn-arg 4) "clock")))
+          (let [x (jn-say "cursor/command-refused")] 2)
+          (= mode "recover")
+          (let [cursor (cp-read path) valid (cc-cursor-problem cursor pin (ln-now "clock"))
+                result (if (= valid "cursor/ok") (cc-recover path cursor) "cursor/recovery-unknown")
+                x (jn-say result)]
+            (if (= result "cursor/recovered") 0 1))
+          (not (= (cp-fs "D" (str path ".pending") "") "0"))
+          (let [x (jn-say "cursor/pending-unknown")] 1)
+          (not (= (cp-fs "D" (str path ".intent") "") "0"))
+          (let [x (jn-say "cursor/intent-unknown")] 1)
+          :else (let [result (cc-plan (cp-read definition-path) pin (cp-read path) (ln-now "clock"))]
+                  (let [x (jn-say result)]
+                    (if (or (= result "cursor/idle") (= (string-index-of result "cursor/plan ") 0)) 0 1))))))
+
+;; Separate entry point: its caller, not the cursor file or model, is trusted
+;; to have archived and read back the pinned job before calling this.
+(defn- cron-cursor-advance-main [] :i64
+  (let [definition-path (jn-arg 1) pin (jn-arg 2) path (jn-arg 3)
+        previous (jn-int (jn-arg 4)) slot (jn-int (jn-arg 5))]
+    (if (or (not (= (jn-arg 0) "advance")) (not (jn-attempt-root? definition-path))
+            (not (jn-attempt-root? path)) (= definition-path path)
+            (not (cp-exists? definition-path)) (not (cp-exists? path)))
+      (let [x (jn-say "cursor/input-unavailable")] 2)
+      (let [definition (cp-read definition-path) cursor (cp-read path) now (ln-now "clock")
+            plan (cc-plan-problem definition pin cursor now)
+            next (if (= plan "trigger/ok") (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes")) -1)]
+        (if (or (not (= plan "trigger/ok")) (not (= (cp-num cursor 0 "slot") previous)) (not (= next slot)))
+          (let [x (jn-say "cursor/advance-refused")] 1)
+          (let [result (cc-advance path cursor pin slot) x (jn-say result)]
+            (if (= result "cursor/advanced") 0 1)))))))

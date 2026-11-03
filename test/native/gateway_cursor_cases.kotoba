@@ -1,0 +1,13 @@
+;; Compose after the gateway trigger fixtures and cursor implementation.
+(defn test-cron-cursor [] :bool
+  (let [definition (test-definition "* * * * *" "cursor-test" 540)
+        pin (test-pin definition) slot 1792638000000 previous (- slot 60000)
+        cursor (cc-cursor pin previous) plan (cc-plan definition pin cursor slot)]
+    (and (= (cc-cursor-problem cursor pin slot) "cursor/ok")
+         (= (cc-plan-problem definition pin cursor (- slot 1)) "cursor/idle")
+         (= (cc-plan-problem definition pin cursor slot) "trigger/ok")
+         (= (string-index-of plan "cursor/plan ") 0)
+         (= (cc-plan-problem definition "bad" cursor slot) "cursor/binding")
+         (= (cc-plan-problem definition pin (gt-bytes "{\"a\":") slot) "cursor/schema")
+         (= (cc-plan-problem definition pin (cc-cursor pin (+ slot 1)) slot) "cursor/time")
+         (= (cc-plan-problem (gt-bytes "{}") pin cursor slot) "cursor/definition"))))

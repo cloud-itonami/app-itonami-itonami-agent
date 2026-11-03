@@ -251,6 +251,8 @@
           (> dash 0)
             (let [a (number-of (string-substring rng 0 dash))
                   b (number-of (string-substring rng (inc dash) (string-length rng)))]
+              ;; Validate before walking: an out-of-range endpoint could
+              ;; otherwise make this loop run up to a billion iterations.
               (if (and (field-value? a lo hi)
                        (field-value? b lo hi)
                        (<= a b))
@@ -589,6 +591,15 @@
            (= (cron-problem "* * * * * *") "schedule/bad-cron")
            (= (cron-problem "5x * * * *") "schedule/bad-cron")
            (= (cron-problem "*/0 * * * *") "schedule/bad-cron")
+           (= (cron-problem "60 * * * *") "schedule/bad-cron")
+           (= (cron-problem "5-2 * * * *") "schedule/bad-cron")
+           (= (cron-problem "59-999999999 * * * *") "schedule/bad-cron")
+           (= (cron-problem "0 24 * * *") "schedule/bad-cron")
+           (= (cron-problem "0 0 0 * *") "schedule/bad-cron")
+           (= (cron-problem "0 0 * 13 *") "schedule/bad-cron")
+           (= (cron-problem "0 0 * * 8") "schedule/bad-cron")
+           (= (cron-problem "59 23 31 12 7") "schedule/ok")
+           (= (cron-problem "0,60 * * * *") "schedule/bad-cron")
            (= (cron-problem "mon-fri * * * *") "schedule/bad-cron")
            (= (cron-problem "") "schedule/bad-cron")
            (= (field-mask "1-5/2" 0 59 false) 42)
@@ -603,6 +614,8 @@
            (= (next-cron-ms "0 0 29 2 *" 1792638000000 540) 1835362800000)
            (= (next-cron-ms "5 4 * * 7" 1792638000000 540) 1792868700000)
            (= (next-cron-ms "1-5/2 3 * * *" 1792605780000 540) 1792605900000)
+           (= (next-cron-ms "59-999999999 * * * *" 1792638000000 540) -1)
+           (= (next-cron-ms "5-2 * * * *" 1792638000000 540) -1)
            (= (next-cron-ms "* * *" 1792638000000 540) -1)) true false))
 
 (defn test-other [] :bool

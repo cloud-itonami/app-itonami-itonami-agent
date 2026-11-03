@@ -1,0 +1,74 @@
+(ns cursor-pending-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-fs [op :string path :string tail :string] :string
+ (if (or (= op "L") (= op "M")) "1"
+ (if (= path "/unknown.pending") "unavailable"
+  (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+   (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000")) (string-substring r 5 (string-length r)) "")))))
+(defn- cp-exists? [p :string] :bool (= (cp-fs "D" p "") "1"))
+(defn- cp-write [p :string v :vector-i64] :bool true)
+(defn- cp-read [p :string] :vector-i64 (cp-bytes "same"))
+(defn- cp-cid [v :vector-i64] :string "same")
+(defn- cp-parent-dir [p :string] :string "/")
+(defn- cc-cursor [pin :string slot :i64] :vector-i64 (cp-bytes "next"))
+(defn- jn-arg [i :i64] :string (typed-cap-call 38 :string :string (str i)))
+(defn- jn-say [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- jn-attempt-root? [s :string] :bool true)
+(defn- cc-plan [d :vector-i64 pin :string c :vector-i64 now :i64] :string (if (= pin "bad") "cursor/definition" "cursor/idle"))
+(defn- ln-now [clock :string] :i64 1)
+(defn- jn-int [s :string] :i64 (if (= s "60000") 60000 0))
+(defn- cp-num [v :vector-i64 i :i64 k :string] :i64 0)
+(defn- cc-plan-problem [d :vector-i64 p :string c :vector-i64 n :i64] :string "trigger/ok")
+(defn- gt-str [d :vector-i64 k :string] :string "*")
+(defn- gt-num [d :vector-i64 k :string] :i64 0)
+(defn- next-cron-ms [c :string p :i64 o :i64] :i64 60000)
+(defn- cc-advance [path :string original :vector-i64 pin :string slot :i64] :string
+  (let [tmp (str path ".pending") intent (str path ".intent") dir (cp-parent-dir path)]
+    (cond (not (= (cp-fs "D" tmp "") "0")) "cursor/pending-unknown"
+          (not (= (cp-fs "D" intent "") "0")) "cursor/intent-unknown"
+          (not (cp-write intent (cp-bytes (str "itc1\n" (cp-cid original) "\n" (cp-cid (cc-cursor pin slot)) "\n")))) "cursor/intent-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/intent-unknown"
+          (not (cp-write tmp (cc-cursor pin slot))) "cursor/write-unknown"
+          (not (= (cp-cid (cp-read path)) (cp-cid original))) "cursor/changed"
+          (not (= (cp-fs "L" tmp path) "1")) "cursor/rename-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/fsync-unknown"
+          (not (= (cp-fs "L" intent (str path ".last")) "1")) "cursor/intent-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/intent-unknown"
+          :else "cursor/advanced")))
+
+(defn cron-cursor-main [] :i64
+  (let [mode (jn-arg 0) definition-path (jn-arg 1) pin (jn-arg 2) path (jn-arg 3)]
+    (cond (= mode "advance") (cron-cursor-advance-main)
+          (or (not (jn-attempt-root? definition-path)) (not (jn-attempt-root? path))
+              (= definition-path path) (not (cp-exists? definition-path)) (not (cp-exists? path)))
+          (let [x (jn-say "cursor/input-unavailable")] 2)
+          (or (not (= mode "plan")) (not (= (jn-arg 4) "clock")))
+          (let [x (jn-say "cursor/command-refused")] 2)
+          (not (= (cp-fs "D" (str path ".pending") "") "0"))
+          (let [x (jn-say "cursor/pending-unknown")] 1)
+          (not (= (cp-fs "D" (str path ".intent") "") "0"))
+          (let [x (jn-say "cursor/intent-unknown")] 1)
+          :else (let [result (cc-plan (cp-read definition-path) pin (cp-read path) (ln-now "clock"))]
+                  (let [x (jn-say result)]
+                    (if (or (= result "cursor/idle") (= (string-index-of result "cursor/plan ") 0)) 0 1))))))
+
+;; Separate entry point: its caller, not the cursor file or model, is trusted
+;; to have archived and read back the pinned job before calling this.
+(defn- cron-cursor-advance-main [] :i64
+  (let [definition-path (jn-arg 1) pin (jn-arg 2) path (jn-arg 3)
+        previous (jn-int (jn-arg 4)) slot (jn-int (jn-arg 5))]
+    (if (or (not (= (jn-arg 0) "advance")) (not (jn-attempt-root? definition-path))
+            (not (jn-attempt-root? path)) (= definition-path path)
+            (not (cp-exists? definition-path)) (not (cp-exists? path)))
+      (let [x (jn-say "cursor/input-unavailable")] 2)
+      (let [definition (cp-read definition-path) cursor (cp-read path) now (ln-now "clock")
+            plan (cc-plan-problem definition pin cursor now)
+            next (if (= plan "trigger/ok") (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes")) -1)]
+        (if (or (not (= plan "trigger/ok")) (not (= (cp-num cursor 0 "slot") previous)) (not (= next slot)))
+          (let [x (jn-say "cursor/advance-refused")] 1)
+          (let [result (cc-advance path cursor pin slot) x (jn-say result)]
+            (if (= result "cursor/advanced") 0 1)))))))
+(defn main [] :i64
+ (if (= (jn-arg 0) "advance-test")
+  (jn-say (cc-advance (jn-arg 1) (cp-bytes "same") "pin" 1))
+  (cron-cursor-main)))
