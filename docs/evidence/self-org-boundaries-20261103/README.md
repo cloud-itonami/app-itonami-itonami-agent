@@ -23,5 +23,17 @@ signed fixture `9be81478e176e1782a13a4a1a12031ea280932ef94682c52aa61e336bc764910
 mutants: wake `c0c91048ef7f665c3a2de90541d39f2ecd3622e1a8d04d846cf568f927628354`,
 backoff `e99366284367560a007a30551d91be17663e76a55915cfa3cb59fb292d9bf139`,
 staff `447be6c2a7041c2ed74711314cb7a0cbdda1658245d15bd19befbe162c9b151a`.
-This is a local diagnostic gate, not the Linux static CI gate, production
-runtime qualification, or proof of autonomous bot operation.
+The same unity source and mutants were then compiled by the pinned ARM64
+Linux static root compiler in a task-owned, 1 CPU / 1 GiB VM. Structured
+results were 0 for the fixture and 1 for each mutant. The compiler SHA-256
+was `914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4`.
+The static ELF hashes were fixture
+`47d03219c03dab9c95141bf457b56e2406b635c8e102e2cbb4e2c31be86dc152`,
+wake `229766f891aaa602aa693090656a587a67e278896e785c1d72f16decb174c4d2`,
+backoff `525abb4df604eb17d6fdadb2b8750f43f5c7eec0d6e5441f8f98964a840f9929`,
+staff `5362c30c2666e421c012077ffa4ee4866c1502227a5d4562217d24e4a0ebdcee`.
+The test VM was stopped and deleted. `generate.py` reconstructs the unity
+sources and mutants for this test; it is not production tooling.
+
+This isolated test does not run CI, establish a production runtime boundary,
+or demonstrate autonomous bot operation.
