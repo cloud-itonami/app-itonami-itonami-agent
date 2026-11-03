@@ -19,7 +19,7 @@
 ;; archive operation, bind its signed receipt fields to the adopted lease.
 ;; The digest binds the signed receipt to the complete canonical lease; this
 ;; does not provide atomic receiver fencing.
-(defn- jac-proof-lease? [proof :vector-i64 chosen :string node :string] :bool
+(defn- jac-proof-lease? [proof :vector-i64 chosen :string node :string now :i64] :bool
   (let [receipt (if (json-valid? proof) (json-member proof 0 "receipt") -1)
         at (if (>= receipt 0) (cp-num proof receipt "at") -1)
         epoch (if (>= receipt 0) (cp-num proof receipt "epoch") -1)]
@@ -27,7 +27,7 @@
          (= (cp-str proof receipt "kind") "itonami.agent-step-receipt/2")
          (= (cp-str proof receipt "lease") (sha256-hex (jn-bytes chosen)))
          (= (cp-str proof receipt "node") node) (= (jn-text chosen "node") node)
-         (> epoch 0) (= epoch (jn-num chosen "epoch")) (> at 0) (< at (jn-num chosen "until")))))
+         (> epoch 0) (= epoch (jn-num chosen "epoch")) (> at 0) (<= at now) (< at (jn-num chosen "until")))))
 
 (defn- jac-complete? [archived :string cid :string chosen :string fresh :string guard :string
                      before :i64 after :i64 same-inputs :bool] :bool
@@ -68,7 +68,7 @@
           (let [chosen (lease-round ballot "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token)
                 before (ln-now "clock") guard (jn-lease-problem chosen node job before)
                 pins (str out-path " " output-cid " " proof-path " " proof-cid " " did " " job)
-                archived (if (and (>= before now) (= guard "job/lease-ok") (jac-proof-lease? proof chosen node))
+                archived (if (and (>= before now) (= guard "job/lease-ok") (jac-proof-lease? proof chosen node before))
                            (jo-archive work store cid author profile policy environment epoch parent task repo gh pins)
                            "cron-job-archive/lease-refused")
                 tree (jn-field archived 2)
