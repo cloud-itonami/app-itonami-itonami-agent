@@ -6,13 +6,18 @@
         tree "0123456789abcdef0123456789abcdef01234567"
         ok (str "job-output/archive-verified " cid " " tree)
         chosen "{\"epoch\":1,\"node\":\"node-a\",\"until\":2000}"
-        proof (cp-bytes "{\"receipt\":{\"at\":1500,\"epoch\":1,\"node\":\"node-a\"}}")
-        old-epoch (cp-bytes "{\"receipt\":{\"at\":1500,\"epoch\":2,\"node\":\"node-a\"}}")
-        expired (cp-bytes "{\"receipt\":{\"at\":2000,\"epoch\":1,\"node\":\"node-a\"}}")]
+        digest (sha256-hex (jn-bytes chosen))
+        proof (cp-bytes (str "{\"receipt\":{\"at\":1500,\"epoch\":1,\"kind\":\"itonami.agent-step-receipt/2\",\"lease\":\"" digest "\",\"node\":\"node-a\"}}"))
+        old-epoch (cp-bytes (str "{\"receipt\":{\"at\":1500,\"epoch\":2,\"kind\":\"itonami.agent-step-receipt/2\",\"lease\":\"" digest "\",\"node\":\"node-a\"}}"))
+        expired (cp-bytes (str "{\"receipt\":{\"at\":2000,\"epoch\":1,\"kind\":\"itonami.agent-step-receipt/2\",\"lease\":\"" digest "\",\"node\":\"node-a\"}}"))
+        old-lease (cp-bytes "{\"receipt\":{\"at\":1500,\"epoch\":1,\"kind\":\"itonami.agent-step-receipt/2\",\"lease\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"node\":\"node-a\"}}")
+        legacy (cp-bytes "{\"receipt\":{\"at\":1500,\"epoch\":1,\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"node-a\"}}")]
     (and (jac-complete? ok cid "lease-a" "lease-a" "job/lease-ok" 100 101 true)
          (jac-proof-lease? proof chosen "node-a")
          (not (jac-proof-lease? old-epoch chosen "node-a"))
          (not (jac-proof-lease? expired chosen "node-a"))
+         (not (jac-proof-lease? old-lease chosen "node-a"))
+         (not (jac-proof-lease? legacy chosen "node-a"))
          (not (jac-proof-lease? proof chosen "node-b"))
          (not (jac-complete? "job-output/archive-readback-unknown" cid "lease-a" "lease-a" "job/lease-ok" 100 101 true))
          (not (jac-complete? ok cid "lease-a" "lease-b" "job/lease-ok" 100 101 true))

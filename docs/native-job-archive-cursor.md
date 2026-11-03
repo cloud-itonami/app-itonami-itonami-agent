@@ -1,11 +1,12 @@
 # Job archive and cron cursor candidate
 
 This candidate composes the current cron cursor with Murakumo job output and
-archive candidate at commit `78439ce` in [PR 572](https://github.com/kotoba-lang/murakumo/pull/572).
+archive candidate at commit `a57be3c` in [PR 572](https://github.com/kotoba-lang/murakumo/pull/572).
 It derives the job ID and slot from the pinned schedule and current cursor,
 checks the proof's node and the schedule's profile/policy, and learns a live
 job lease before archiving. The signed receipt's node and epoch must match the
-adopted lease and its timestamp must precede that lease's deadline. After the private GitHub archive independently
+adopted lease, its timestamp must precede that lease's deadline, and its v2
+lease digest must match the full canonical adopted lease. After the private GitHub archive independently
 reads back and revalidates the signed checkpoint and output proof, it learns
 the same live lease again and checks that the schedule and cursor are unchanged
 before attempting the existing durable cursor update. An unknown result is
@@ -20,8 +21,8 @@ cursor write and do not supply receiver-side fencing; do not deploy this
 candidate until an actual distributed writer fence, workload lifetime and
 resource governor are qualified. This does not establish that a failed or
 unknown cell had no external effects.
-The receipt does not carry the complete lease value, so epoch and deadline
-checks do not prove that it was produced under this exact lease instance.
+The signature binds the digest to the receipt; producing that receipt under a
+live lease and enforcing effects against it still require runtime qualification.
 
 The selected composed source and its decision test cases passed Amu source
 check. The decision tests, native runtime, GitHub call, crash recovery and

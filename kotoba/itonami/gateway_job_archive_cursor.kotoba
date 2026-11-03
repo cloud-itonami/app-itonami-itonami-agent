@@ -17,12 +17,15 @@
 
 ;; The output signature is verified separately by jo-archive. Before any
 ;; archive operation, bind its signed receipt fields to the adopted lease.
-;; Epoch and time equality alone do not provide atomic receiver fencing.
+;; The digest binds the signed receipt to the complete canonical lease; this
+;; does not provide atomic receiver fencing.
 (defn- jac-proof-lease? [proof :vector-i64 chosen :string node :string] :bool
   (let [receipt (if (json-valid? proof) (json-member proof 0 "receipt") -1)
         at (if (>= receipt 0) (cp-num proof receipt "at") -1)
         epoch (if (>= receipt 0) (cp-num proof receipt "epoch") -1)]
     (and (>= receipt 0) (= (json-kind proof receipt) 1)
+         (= (cp-str proof receipt "kind") "itonami.agent-step-receipt/2")
+         (= (cp-str proof receipt "lease") (sha256-hex (jn-bytes chosen)))
          (= (cp-str proof receipt "node") node) (= (jn-text chosen "node") node)
          (> epoch 0) (= epoch (jn-num chosen "epoch")) (> at 0) (< at (jn-num chosen "until")))))
 
