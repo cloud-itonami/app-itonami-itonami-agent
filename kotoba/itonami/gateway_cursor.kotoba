@@ -51,7 +51,7 @@
 ;; acknowledgement is UNKNOWN; caller re-reads before any new dispatch.
 (defn- cc-advance [path :string original :vector-i64 pin :string slot :i64] :string
   (let [tmp (str path ".pending")]
-    (cond (cp-exists? tmp) "cursor/pending-unknown"
+    (cond (not (= (cp-fs "D" tmp "") "0")) "cursor/pending-unknown"
           (not (cp-write tmp (cc-cursor pin slot))) "cursor/write-unknown"
           (not (= (cp-cid (cp-read path)) (cp-cid original))) "cursor/changed"
           (not (= (cp-fs "L" tmp path) "1")) "cursor/rename-unknown"
@@ -66,8 +66,11 @@
           (let [x (jn-say "cursor/input-unavailable")] 2)
           (or (not (= mode "plan")) (not (= (jn-arg 4) "clock")))
           (let [x (jn-say "cursor/command-refused")] 2)
+          (not (= (cp-fs "D" (str path ".pending") "") "0"))
+          (let [x (jn-say "cursor/pending-unknown")] 1)
           :else (let [result (cc-plan (cp-read definition-path) pin (cp-read path) (ln-now "clock"))]
-                  (jn-say result)))))
+                  (let [x (jn-say result)]
+                    (if (or (= result "cursor/idle") (= (string-index-of result "cursor/plan ") 0)) 0 1))))))
 
 ;; Separate entry point: its caller, not the cursor file or model, is trusted
 ;; to have archived and read back the pinned job before calling this.
@@ -83,4 +86,5 @@
             next (if (= plan "trigger/ok") (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes")) -1)]
         (if (or (not (= plan "trigger/ok")) (not (= (cp-num cursor 0 "slot") previous)) (not (= next slot)))
           (let [x (jn-say "cursor/advance-refused")] 1)
-          (jn-say (cc-advance path cursor pin slot)))))))
+          (let [result (cc-advance path cursor pin slot) x (jn-say result)]
+            (if (= result "cursor/advanced") 0 1)))))))
