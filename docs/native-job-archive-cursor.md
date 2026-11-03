@@ -90,3 +90,11 @@ Selected current gateway, guarded/serialized job, checkpoint, archive and head-C
 functions and decision cases passed Amu source check with historical dependencies. The decision tests,
 full dependency closure, native runtime, GitHub call, crash recovery and
 cross-host serialization have not been executed for this composition.
+
+On one Mac, `test/native/cron_lock_provider_probe.py` exercised an earlier,
+externally supplied SHA-pinned Darwin bridge-lock diagnostic. While a separate
+process held its task-owned flock, the fixture returned `bridge/local-writer-busy`;
+a mutant that skipped acquisition ran its stub command. After release the
+fixture reached the stub command. This checks the old diagnostic's local lock
+interaction only: it does not execute either new serialized entry, the journal,
+a real child workload, process-death recovery, another host or a governor.
