@@ -15,6 +15,17 @@
   (or (jo-overlap? path cursor) (jo-overlap? path (str cursor ".pending"))
       (jo-overlap? path (str cursor ".intent")) (jo-overlap? path (str cursor ".last"))))
 
+;; The output signature is verified separately by jo-archive. Before any
+;; archive operation, bind its signed receipt fields to the adopted lease.
+;; Epoch and time equality alone do not provide atomic receiver fencing.
+(defn- jac-proof-lease? [proof :vector-i64 chosen :string node :string] :bool
+  (let [receipt (if (json-valid? proof) (json-member proof 0 "receipt") -1)
+        at (if (>= receipt 0) (cp-num proof receipt "at") -1)
+        epoch (if (>= receipt 0) (cp-num proof receipt "epoch") -1)]
+    (and (>= receipt 0) (= (json-kind proof receipt) 1)
+         (= (cp-str proof receipt "node") node) (= (jn-text chosen "node") node)
+         (> epoch 0) (= epoch (jn-num chosen "epoch")) (> at 0) (< at (jn-num chosen "until")))))
+
 (defn- jac-complete? [archived :string cid :string chosen :string fresh :string guard :string
                      before :i64 after :i64 same-inputs :bool] :bool
   (let [tree (jn-field archived 2)]
@@ -53,7 +64,7 @@
           (let [chosen (lease-round ballot "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token)
                 before (ln-now "clock") guard (jn-lease-problem chosen node job before)
                 pins (str out-path " " output-cid " " proof-path " " proof-cid " " did " " job)
-                archived (if (and (>= before now) (= guard "job/lease-ok"))
+                archived (if (and (>= before now) (= guard "job/lease-ok") (jac-proof-lease? proof chosen node))
                            (jo-archive work store cid author profile policy environment epoch parent task repo gh pins)
                            "cron-job-archive/lease-refused")
                 tree (jn-field archived 2)

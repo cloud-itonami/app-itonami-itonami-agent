@@ -4,8 +4,16 @@
 (defn test-job-archive-cursor [] :bool
   (let [cid "bafkreibuoymhi5lbxktszxduuzmekq2qpbqd7mz66w2cowz4memgb4dna"
         tree "0123456789abcdef0123456789abcdef01234567"
-        ok (str "job-output/archive-verified " cid " " tree)]
+        ok (str "job-output/archive-verified " cid " " tree)
+        chosen "{\"epoch\":1,\"node\":\"node-a\",\"until\":2000}"
+        proof (cp-bytes "{\"receipt\":{\"at\":1500,\"epoch\":1,\"node\":\"node-a\"}}")
+        old-epoch (cp-bytes "{\"receipt\":{\"at\":1500,\"epoch\":2,\"node\":\"node-a\"}}")
+        expired (cp-bytes "{\"receipt\":{\"at\":2000,\"epoch\":1,\"node\":\"node-a\"}}")]
     (and (jac-complete? ok cid "lease-a" "lease-a" "job/lease-ok" 100 101 true)
+         (jac-proof-lease? proof chosen "node-a")
+         (not (jac-proof-lease? old-epoch chosen "node-a"))
+         (not (jac-proof-lease? expired chosen "node-a"))
+         (not (jac-proof-lease? proof chosen "node-b"))
          (not (jac-complete? "job-output/archive-readback-unknown" cid "lease-a" "lease-a" "job/lease-ok" 100 101 true))
          (not (jac-complete? ok cid "lease-a" "lease-b" "job/lease-ok" 100 101 true))
          (not (jac-complete? ok cid "lease-a" "lease-a" "job/lease-invalid" 100 101 true))
