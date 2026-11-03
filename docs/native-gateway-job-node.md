@@ -31,6 +31,16 @@ check, and a native fixture tested the seam with stubbed effects. This does
 not repin the earlier release evidence below or establish production runtime
 compatibility; qualify and pin the complete combined closure before use.
 
+The newer Murakumo candidate at commit `22c91c4` returns nonzero when this
+node is ineligible, another holder is selected, or the pre-dispatch lease is
+invalid or unavailable. This adapter forwards that status. Older job-node
+closures can return zero for those no-dispatch outcomes, so their exit status
+must not be used as proof of execution. Even with the newer closure, zero is
+not proof of a valid signed receipt, independent GitHub archive readback, or
+durable cursor advancement. The host must verify and reconcile those steps;
+this adapter does not do so. The newer composition passed an Amu source check,
+but its changed exit behavior and production runtime are not yet qualified.
+
 An ARM Linux static source-unity gate compiled the actual node, schedule,
 gateway and adapter sources and returned 0 for valid and altered input cases.
 An x86 Linux fixture then exercised the actual adapter, proposer, three

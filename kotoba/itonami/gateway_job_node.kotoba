@@ -9,6 +9,9 @@
 ;; 21 = definition path; 22 = source path. Argument 9 must be "clock".
 ;; The host must persist and reconcile the cursor, source and attempt outcome;
 ;; this entry point does not claim a slot, grant effects or resolve UNKNOWN.
+;; Its result is the composed node's exit status, not a verified receipt or a
+;; cursor-advance authorization. Pin a node closure with the documented
+;; nonzero no-dispatch contract and verify the receipt and GitHub readback.
 (ns itonami.gateway-job-node (:export [cron-job-node-main]))
 
 (defn- cj-problem [now :i64 previous :i64 pin :string definition :vector-i64
