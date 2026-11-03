@@ -1,7 +1,14 @@
 # Job archive and cron cursor candidate
 
-This candidate composes the current cron cursor with Murakumo job output and
-archive sources at merged commit [`d6fbfab`](https://github.com/kotoba-lang/murakumo/commit/d6fbfab289dcfe272121a06b43149251e7651330).
+The selected-source composition uses Murakumo job output and archive sources
+from candidate commit [`f73deaf`](https://github.com/kotoba-lang/murakumo/commit/f73deaf2187619afe46da96fa294a0549896a134)
+in [draft PR #586](https://github.com/kotoba-lang/murakumo/pull/586), which
+depends on merged checkpoint sources including
+[`d6fbfab`](https://github.com/kotoba-lang/murakumo/commit/d6fbfab289dcfe272121a06b43149251e7651330).
+The Murakumo candidate adds checked checkpoint reads, closure verification,
+block synchronization and Git configuration refusals. It is not merged;
+this document records the source used for the check, not an enforced build pin
+or a qualified dependency. Reconcile the exact merged dependency before build.
 It derives the job ID and slot from the pinned schedule and current cursor,
 checks the proof's node and the schedule's profile/policy, and learns a live
 job lease before archiving. The signed receipt's node and epoch must match the
@@ -24,6 +31,7 @@ unknown cell had no external effects.
 The signature binds the digest to the receipt; producing that receipt under a
 live lease and enforcing effects against it still require runtime qualification.
 
-The selected composed source and its decision test cases passed Amu source
-check. The decision tests, native runtime, GitHub call, crash recovery and
+Selected current gateway, checkpoint and archive functions and decision test
+cases passed Amu source check with historical dependencies. The decision tests,
+full dependency closure, native runtime, GitHub call, crash recovery and
 cross-host serialization have not been executed for this composition.
