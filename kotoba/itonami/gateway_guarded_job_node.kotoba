@@ -28,9 +28,11 @@
   (let [previous (jn-int (jn-arg 19)) pin (jn-arg 20) definition-path (jn-arg 21)
         source-path (jn-arg 22) input-path (jn-arg 16) attempts (jn-arg 18)
         cursor-path (jn-arg 24)]
-    (if (or (not (= (jn-arg 0) "run-cron"))
+    (if (or (not (= (jn-arg 0) "run-cron")) (not (= (jn-arg 9) "clock"))
             (if serialized (not (= (jn-arg 26) "")) (not (= (jn-arg 25) "")))
             (and serialized (not (= (jn-arg 23) "capture-output")))
+            (not (jn-attempt-root? definition-path)) (not (jn-attempt-root? source-path))
+            (not (jn-attempt-root? input-path))
             (not (cp-safe-absolute? cursor-path)) (not (cp-safe-absolute? definition-path))
             (not (cp-safe-absolute? source-path)) (not (cp-safe-absolute? input-path))
             (not (cp-safe-absolute? attempts))
@@ -47,11 +49,15 @@
             now (ln-now "clock")
             problem (cjg-cursor-problem pending intent head turn definition cursor pin previous now)]
         (if (not (= problem "cron-guard/ok")) (let [x (jn-say problem)] 1)
-          (let [slot (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes"))
-                job (verified-cron-job-id true now previous slot pin definition)
-                marked (if serialized (and (jn-job-id? job) (cc-turn-begin cursor-path pin cursor job slot (jn-arg 25))) true)]
-            (if marked (cron-job-node-main)
-              (let [x (jn-say "cron-guard/turn-intent-unknown")] 1))))))))
+          (let [source (cjg-read source-path 8192) wrapper (cjg-read input-path 8192)
+                consume (cj-problem now previous pin definition (jn-arg 1) (jn-arg 2)
+                                    (jn-arg 3) (jn-arg 4) wrapper source)]
+            (if (not (= consume "consume/ok")) (let [x (jn-say consume)] 2)
+              (let [slot (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes"))
+                    job (verified-cron-job-id true now previous slot pin definition)
+                    marked (if serialized (and (jn-job-id? job) (cc-turn-begin cursor-path pin cursor job slot (jn-arg 25))) true)]
+                (if marked (jn-run-with-source (string-from-utf8 (bytes-from-vector-i64 source)) true)
+                  (let [x (jn-say "cron-guard/turn-intent-unknown")] 1))))))))))
 
 ;; The lock is a stable, privately provisioned regular file outside every
 ;; cursor/journal path, the attempt tree and all input paths. All writers must
