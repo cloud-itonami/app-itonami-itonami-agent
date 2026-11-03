@@ -3,6 +3,18 @@
 ;; Composition: existing gateway_job_node and git_checkpoint sources.
 (ns itonami.gateway-cursor (:export [cron-cursor-main]))
 
+;; The advance operation writes these four names, including replacement of
+;; .last. Lexical checks require normalized absolute paths; the trusted host
+;; must also exclude symlink and hard-link aliases and serialize all writers.
+(defn- cc-path-overlap? [a :string b :string] :bool
+  (or (= a b) (= (string-index-of a (str b "/")) 0)
+      (= (string-index-of b (str a "/")) 0)))
+(defn- cc-definition-overlap? [definition :string cursor :string] :bool
+  (or (cc-path-overlap? definition cursor)
+      (cc-path-overlap? definition (str cursor ".pending"))
+      (cc-path-overlap? definition (str cursor ".intent"))
+      (cc-path-overlap? definition (str cursor ".last"))))
+
 (defn- cc-cursor-problem [cursor :vector-i64 pin :string now :i64] :string
   (cond (or (> (vector-count cursor) 1024) (not (json-valid? cursor))
             (not (json-canonical? cursor)) (not (= (json-kind cursor 0) 1))
@@ -100,7 +112,9 @@
   (let [mode (jn-arg 0) definition-path (jn-arg 1) pin (jn-arg 2) path (jn-arg 3)]
     (cond (= mode "advance") (cron-cursor-advance-main)
           (or (not (jn-attempt-root? definition-path)) (not (jn-attempt-root? path))
-              (= definition-path path) (not (cp-exists? definition-path)) (not (cp-exists? path)))
+              (not (cp-safe-absolute? definition-path)) (not (cp-safe-absolute? path))
+              (cc-definition-overlap? definition-path path)
+              (not (cp-exists? definition-path)) (not (cp-exists? path)))
           (let [x (jn-say "cursor/input-unavailable")] 2)
           (or (not (or (= mode "plan") (= mode "recover"))) (not (= (jn-arg 4) "clock")))
           (let [x (jn-say "cursor/command-refused")] 2)
@@ -123,7 +137,8 @@
   (let [definition-path (jn-arg 1) pin (jn-arg 2) path (jn-arg 3)
         previous (jn-int (jn-arg 4)) slot (jn-int (jn-arg 5))]
     (if (or (not (= (jn-arg 0) "advance")) (not (jn-attempt-root? definition-path))
-            (not (jn-attempt-root? path)) (= definition-path path)
+            (not (jn-attempt-root? path)) (not (cp-safe-absolute? definition-path))
+            (not (cp-safe-absolute? path)) (cc-definition-overlap? definition-path path)
             (not (cp-exists? definition-path)) (not (cp-exists? path)))
       (let [x (jn-say "cursor/input-unavailable")] 2)
       (let [definition (cp-read definition-path) cursor (cp-read path) now (ln-now "clock")

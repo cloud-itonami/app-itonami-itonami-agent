@@ -4,6 +4,12 @@
         pin (test-pin definition) slot 1792638000000 previous (- slot 60000)
         cursor (cc-cursor pin previous) plan (cc-plan definition pin cursor slot)]
     (and (= (cc-cursor-problem cursor pin slot) "cursor/ok")
+         (cc-definition-overlap? "/p/cursor.last" "/p/cursor")
+         (cc-definition-overlap? "/p/cursor.pending/child" "/p/cursor")
+         (cc-definition-overlap? "/p/cursor.intent" "/p/cursor")
+         (cc-definition-overlap? "/p" "/p/cursor")
+         (not (cc-definition-overlap? "/p/cursor-backup" "/p/cursor"))
+         (not (cp-safe-absolute? "/p//cursor.last"))
          (= (cc-plan-problem definition pin cursor (- slot 1)) "cursor/idle")
          (= (cc-plan-problem definition pin cursor slot) "trigger/ok")
          (= (string-index-of plan "cursor/plan ") 0)
