@@ -1,0 +1,14 @@
+;; Compose after gateway_job_archive_cursor. Effects remain stubbed by the host.
+(ns itonami.gateway-job-archive-cursor-cases (:export [test-job-archive-cursor]))
+
+(defn test-job-archive-cursor [] :bool
+  (let [cid "bafkreibuoymhi5lbxktszxduuzmekq2qpbqd7mz66w2cowz4memgb4dna"
+        tree "0123456789abcdef0123456789abcdef01234567"
+        ok (str "job-output/archive-verified " cid " " tree)]
+    (and (jac-complete? ok cid "lease-a" "lease-a" "job/lease-ok" 100 101 true)
+         (not (jac-complete? "job-output/archive-readback-unknown" cid "lease-a" "lease-a" "job/lease-ok" 100 101 true))
+         (not (jac-complete? ok cid "lease-a" "lease-b" "job/lease-ok" 100 101 true))
+         (not (jac-complete? ok cid "lease-a" "lease-a" "job/lease-invalid" 100 101 true))
+         (not (jac-complete? ok cid "lease-a" "lease-a" "job/lease-ok" 101 100 true))
+         (not (jac-complete? ok cid "lease-a" "lease-a" "job/lease-ok" 100 101 false))
+         (not (jac-complete? (str ok " extra") cid "lease-a" "lease-a" "job/lease-ok" 100 101 true)))))
