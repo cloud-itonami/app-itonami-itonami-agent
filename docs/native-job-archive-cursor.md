@@ -20,6 +20,22 @@ before attempting the existing durable cursor update. An unknown result is
 not permission to retry or advance; a surviving cursor intent requires the
 existing explicit reconciliation path.
 
+The separate opt-in `cron-job-archive-head-cursor-main` additionally takes an
+independently trusted expected Git commit at argument 24. After the output
+archive has been verified and the lease rechecked, it invokes the candidate
+GitHub expected-head CAS, checks the fetched head receipt, then learns the
+same live lease again and rechecks the schedule and cursor before advancing.
+The CAS implementation re-verifies the archive in its own private child work
+directory. The earlier `cron-job-archive-cursor-main` retains its existing
+non-head path. The host must provision the initial head and pin the exact
+expected commit; neither a GitHub ref nor the expected OID is a lease.
+
+The head may advance even if the final lease check, output, cursor write or
+process fails. The host must quarantine the work, independently reconcile
+GitHub head/archive and local cursor, and never automatically replay an
+unknown result. The CAS and lease check are not atomic: this adds head
+concurrency control, not a receiver-side fence or external-effect protection.
+
 The host supplies and protects all paths, the schedule pin, checkpoint pins,
 signer, authenticated quorum token, node identity, and a fresh archive work
 path. It must serialize all writers across hosts and hold exclusive ownership
@@ -31,7 +47,7 @@ unknown cell had no external effects.
 The signature binds the digest to the receipt; producing that receipt under a
 live lease and enforcing effects against it still require runtime qualification.
 
-Selected current gateway, checkpoint and archive functions and decision test
-cases passed Amu source check with historical dependencies. The decision tests,
+Selected current gateway, checkpoint, archive and head-CAS functions and
+decision test cases passed Amu source check with historical dependencies. The decision tests,
 full dependency closure, native runtime, GitHub call, crash recovery and
 cross-host serialization have not been executed for this composition.
