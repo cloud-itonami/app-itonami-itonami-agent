@@ -44,9 +44,10 @@
         cursor-path (jn-arg 20) ports (jn-arg 21) token-path (jn-arg 22) ballot (jn-int (jn-arg 23))]
     (if (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? store))
             (not (cp-safe-absolute? definition-path)) (not (cp-safe-absolute? cursor-path))
-            (not (cp-safe-absolute? token-path)) (not (jn-private-dir? store))
+            (not (cp-safe-absolute? token-path)) (not (cp-safe-absolute? gh)) (not (jn-private-dir? store))
             (jo-overlap? work store) (jac-cursor-overlap? work cursor-path) (jo-overlap? work definition-path)
-            (jo-overlap? work token-path) (jac-cursor-overlap? store cursor-path) (jo-overlap? store definition-path)
+            (jo-overlap? work token-path) (jo-overlap? work gh) (jac-cursor-overlap? gh cursor-path)
+            (jac-cursor-overlap? store cursor-path) (jo-overlap? store definition-path)
             (jac-cursor-overlap? definition-path cursor-path) (jac-cursor-overlap? token-path cursor-path)
             (or (< ballot 1) (>= ballot 9007199254740991)) (= node "")
             (not (= (cp-fs "D" (str cursor-path ".pending") "") "0"))

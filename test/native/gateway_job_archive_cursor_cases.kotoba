@@ -13,6 +13,9 @@
         old-lease (cp-bytes "{\"receipt\":{\"at\":1500,\"epoch\":1,\"kind\":\"itonami.agent-step-receipt/2\",\"lease\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"node\":\"node-a\"}}")
         legacy (cp-bytes "{\"receipt\":{\"at\":1500,\"epoch\":1,\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"node-a\"}}")]
     (and (jac-complete? ok cid "lease-a" "lease-a" "job/lease-ok" 100 101 true)
+         (jac-cursor-overlap? "/private/task/cursor.last" "/private/task/cursor")
+         (jac-cursor-overlap? "/private/task/cursor.pending/child" "/private/task/cursor")
+         (not (jac-cursor-overlap? "/private/task/cursor-backup" "/private/task/cursor"))
          (jac-proof-lease? proof chosen "node-a")
          (not (jac-proof-lease? old-epoch chosen "node-a"))
          (not (jac-proof-lease? expired chosen "node-a"))
