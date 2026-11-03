@@ -30,11 +30,21 @@ directory. The earlier `cron-job-archive-cursor-main` retains its existing
 non-head path. The host must provision the initial head and pin the exact
 expected commit; neither a GitHub ref nor the expected OID is a lease.
 
-The head may advance even if the final lease check, output, cursor write or
-process fails. The host must quarantine the work, independently reconcile
-GitHub head/archive and local cursor, and never automatically replay an
-unknown result. The CAS and lease check are not atomic: this adds head
-concurrency control, not a receiver-side fence or external-effect protection.
+Before the CAS the candidate writes and syncs `cursor.head-intent`, recording
+the expected head, checkpoint, job, prior cursor, task digest and slot. After
+the cursor advances, it moves the marker to `cursor.head-last` and syncs the
+directory. A surviving or unreadable intent blocks the cursor planning,
+standalone cursor recovery/advance and archive coordinator entries. The head
+may advance even if the final lease check, cursor write, marker finalization
+or process fails: the host must quarantine the work and independently
+reconcile GitHub head/archive and the local cursor, without automatic retry.
+
+The job-node entry takes a caller-supplied previous slot and does not read this
+marker itself. The trusted host must serialize all paths and refuse all job
+dispatch and alternate cursor writers while the marker or any operation is
+unknown. A marker's absence after an uncertain write is not proof of outcome.
+CAS and lease checks are not atomic: this adds head concurrency control, not a
+receiver-side fence or external-effect protection.
 
 The host supplies and protects all paths, the schedule pin, checkpoint pins,
 signer, authenticated quorum token, node identity, and a fresh archive work

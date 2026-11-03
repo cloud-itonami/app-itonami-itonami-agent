@@ -7,6 +7,8 @@
          (cc-definition-overlap? "/p/cursor.last" "/p/cursor")
          (cc-definition-overlap? "/p/cursor.pending/child" "/p/cursor")
          (cc-definition-overlap? "/p/cursor.intent" "/p/cursor")
+         (cc-definition-overlap? "/p/cursor.head-intent" "/p/cursor")
+         (cc-definition-overlap? "/p/cursor.head-last" "/p/cursor")
          (cc-definition-overlap? "/p" "/p/cursor")
          (not (cc-definition-overlap? "/p/cursor-backup" "/p/cursor"))
          (not (cp-safe-absolute? "/p//cursor.last"))

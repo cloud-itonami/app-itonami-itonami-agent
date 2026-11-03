@@ -13,7 +13,8 @@
 
 (defn- jac-cursor-overlap? [path :string cursor :string] :bool
   (or (jo-overlap? path cursor) (jo-overlap? path (str cursor ".pending"))
-      (jo-overlap? path (str cursor ".intent")) (jo-overlap? path (str cursor ".last"))))
+      (jo-overlap? path (str cursor ".intent")) (jo-overlap? path (str cursor ".last"))
+      (jo-overlap? path (str cursor ".head-intent")) (jo-overlap? path (str cursor ".head-last"))))
 
 ;; The output signature is verified separately by jo-archive. Before any
 ;; archive operation, bind its signed receipt fields to the adopted lease.
@@ -40,6 +41,18 @@
     (and (cp-hex? tip 40) (or (= status "acknowledged") (= status "unacknowledged"))
          (= result (str "head-cas/advanced " cid " " tip " " status)))))
 
+;; A synced marker blocks planning if the host dies before it can reconcile
+;; the remote head with the local cursor. It is not a lease or writer lock.
+(defn- jac-head-intent [cursor-path :string cursor :vector-i64 expected :string cid :string
+                       job :string task :string slot :i64] :bool
+  (let [path (str cursor-path ".head-intent") dir (cp-parent-dir cursor-path)
+        body (cp-bytes (str "jhc1\n" expected "\n" cid "\n" job "\n" (cp-cid cursor) "\n"
+                            (sha256-hex (cp-bytes task)) "\n" slot "\n"))]
+    (and (= (cp-fs "D" path "") "0") (cp-write path body) (= (cp-fs "M" dir "") "1"))))
+(defn- jac-head-finalize [cursor-path :string] :bool
+  (and (= (cp-fs "L" (str cursor-path ".head-intent") (str cursor-path ".head-last")) "1")
+       (= (cp-fs "M" (cp-parent-dir cursor-path) "") "1")))
+
 ;; The CAS entry additionally accepts a host-pinned expected Git commit at
 ;; argument 24. A head update can succeed while a later lease or cursor step
 ;; fails: the host must reconcile the independently read-back head and cursor,
@@ -63,7 +76,8 @@
             (and head-cas (or (not (cp-hex? expected 40)) (not (= (jn-arg 25) ""))
                               (>= ballot 9007199254740990)))
             (not (= (cp-fs "D" (str cursor-path ".pending") "") "0"))
-            (not (= (cp-fs "D" (str cursor-path ".intent") "") "0")))
+            (not (= (cp-fs "D" (str cursor-path ".intent") "") "0"))
+            (not (= (cp-fs "D" (str cursor-path ".head-intent") "") "0")))
       (let [x (jn-say "cron-job-archive/input-refused")] 2)
       (let [definition (jac-bounded definition-path 8192) cursor (jac-bounded cursor-path 1024)
             now (ln-now "clock") plan (cc-plan-problem definition pin cursor now)
@@ -91,8 +105,9 @@
                                  (= (cp-cid (jac-bounded cursor-path 1024)) (cp-cid cursor)))]
             (if (not (jac-complete? archived cid chosen fresh again before after same-inputs))
               (let [x (jn-say "cron-job-archive/unconfirmed")] 1)
-              (let [head (if head-cas (hg-advance (str work "/head-cas") store cid author profile policy environment
-                                                  epoch parent task repo gh expected) "head-cas/skipped")
+              (let [marked (if head-cas (jac-head-intent cursor-path cursor expected cid job task slot) true)
+                    head (if (and head-cas marked) (hg-advance (str work "/head-cas") store cid author profile policy environment
+                                                              epoch parent task repo gh expected) "head-cas/skipped")
                     head-ok (if head-cas (jac-head-result? head cid) true)
                     notice (if (and head-cas head-ok) (jn-say head) 0)
                     final (if (and head-cas head-ok) (lease-round (+ ballot 2) "verifier" chosen ports token) fresh)
@@ -103,8 +118,10 @@
                 (if (or (not head-ok) (< finished after) (not (= final chosen))
                         (not (= final-guard "job/lease-ok")) (not unchanged))
                   (let [x (jn-say "cron-job-archive/head-or-lease-unknown")] 1)
-                  (let [result (cc-advance cursor-path cursor pin slot) x (jn-say result)]
-                    (if (= result "cursor/advanced") 0 1)))))))))))
+                  (let [result (cc-advance cursor-path cursor pin slot)
+                        complete (and (= result "cursor/advanced") (or (not head-cas) (jac-head-finalize cursor-path)))
+                        x (jn-say (if complete result (if (= result "cursor/advanced") "cursor/head-finalize-unknown" result)))]
+                    (if complete 0 1)))))))))))
 
 (defn cron-job-archive-cursor-main [] :i64 (jac-run false))
 (defn cron-job-archive-head-cursor-main [] :i64 (jac-run true))

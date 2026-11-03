@@ -13,7 +13,9 @@
   (or (cc-path-overlap? definition cursor)
       (cc-path-overlap? definition (str cursor ".pending"))
       (cc-path-overlap? definition (str cursor ".intent"))
-      (cc-path-overlap? definition (str cursor ".last"))))
+      (cc-path-overlap? definition (str cursor ".last"))
+      (cc-path-overlap? definition (str cursor ".head-intent"))
+      (cc-path-overlap? definition (str cursor ".head-last"))))
 
 (defn- cc-cursor-problem [cursor :vector-i64 pin :string now :i64] :string
   (cond (or (> (vector-count cursor) 1024) (not (json-valid? cursor))
@@ -118,6 +120,8 @@
           (let [x (jn-say "cursor/input-unavailable")] 2)
           (or (not (or (= mode "plan") (= mode "recover"))) (not (= (jn-arg 4) "clock")))
           (let [x (jn-say "cursor/command-refused")] 2)
+          (not (= (cp-fs "D" (str path ".head-intent") "") "0"))
+          (let [x (jn-say "cursor/head-intent-unknown")] 1)
           (= mode "recover")
           (let [cursor (cp-read path) valid (cc-cursor-problem cursor pin (ln-now "clock"))
                 result (if (= valid "cursor/ok") (cc-recover path cursor) "cursor/recovery-unknown")
@@ -141,10 +145,12 @@
             (not (cp-safe-absolute? path)) (cc-definition-overlap? definition-path path)
             (not (cp-exists? definition-path)) (not (cp-exists? path)))
       (let [x (jn-say "cursor/input-unavailable")] 2)
+      (if (not (= (cp-fs "D" (str path ".head-intent") "") "0"))
+        (let [x (jn-say "cursor/head-intent-unknown")] 1)
       (let [definition (cp-read definition-path) cursor (cp-read path) now (ln-now "clock")
             plan (cc-plan-problem definition pin cursor now)
             next (if (= plan "trigger/ok") (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes")) -1)]
         (if (or (not (= plan "trigger/ok")) (not (= (cp-num cursor 0 "slot") previous)) (not (= next slot)))
           (let [x (jn-say "cursor/advance-refused")] 1)
           (let [result (cc-advance path cursor pin slot) x (jn-say result)]
-            (if (= result "cursor/advanced") 0 1)))))))
+            (if (= result "cursor/advanced") 0 1))))))))
