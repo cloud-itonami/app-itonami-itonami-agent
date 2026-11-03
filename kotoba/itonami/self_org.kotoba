@@ -12,7 +12,7 @@
 ;;                    wake/lease-lapsed (the organisation's lease was not
 ;;                    renewed: fail closed), wake/over-budget, wake/busy (at
 ;;                    its work-in-progress limit), wake/idle (nothing takeable:
-;;                    no job, no cost)
+;;                    no job, no cost), wake/invalid (invalid observations)
 ;;   next-after       what follows a turn on a claimed issue:
 ;;                    next/complete  done, with a receipt
 ;;                    next/continue  a step made, with a receipt; keep the claim
@@ -47,6 +47,7 @@
   (cond stopped "wake/stopped"
         (<= lease-left-ms 0) "wake/lease-lapsed"
         (<= budget-left 0) "wake/over-budget"
+        (or (< takeable 0) (< in-flight 0) (< wip-limit 0)) "wake/invalid"
         (>= in-flight (if (< wip-limit 1) 1 wip-limit)) "wake/busy"
         (<= takeable 0) "wake/idle"
         :else "wake/go"))
@@ -58,10 +59,11 @@
 ;; included.
 
 (defn failed-next [attempts :i64 max-attempts :i64] :string
-  (if (< attempts max-attempts) "next/retry" "next/escalate"))
+  (if (and (>= attempts 0) (> max-attempts 0) (< attempts max-attempts)) "next/retry" "next/escalate"))
 
 (defn next-after [outcome :string has-receipt :bool attempts :i64 max-attempts :i64] :string
-  (cond (= outcome "done") (if has-receipt "next/complete" (failed-next attempts max-attempts))
+  (cond (or (< attempts 0) (<= max-attempts 0)) "next/escalate"
+        (= outcome "done") (if has-receipt "next/complete" (failed-next attempts max-attempts))
         (= outcome "progress") (if has-receipt "next/continue" (failed-next attempts max-attempts))
         (= outcome "failed") (failed-next attempts max-attempts)
         :else "next/escalate"))
@@ -77,11 +79,12 @@
 (defn backoff-at [ms :i64 k :i64 cap :i64] :i64
   (cond (>= ms cap) cap
         (<= k 1) ms
+        (> ms (quot cap 2)) cap
         :else (backoff-at (* ms 2) (dec k) cap)))
 
 (defn backoff-ms [attempts :i64 base-ms :i64 cap-ms :i64] :i64
   (cond (<= attempts 0) 0
-        (<= base-ms 0) 0
+        (or (<= base-ms 0) (<= cap-ms 0)) 0
         :else (backoff-at base-ms attempts cap-ms)))
 
 ;; ---------------------------------------------------------------------------
@@ -90,9 +93,13 @@
 (defn staffing-reason [takeable :i64 workers :i64 high-per-worker :i64
                        longest-idle-ms :i64 retire-after-ms :i64
                        changes-today :i64 daily-limit :i64] :string
-  (cond (>= changes-today daily-limit) "staff/limit"
-        (and (> takeable 0) (<= workers 0)) "staff/add"
-        (> takeable (* workers (if (< high-per-worker 1) 1 high-per-worker))) "staff/add"
+  (cond (or (< takeable 0) (< workers 0) (< high-per-worker 0)
+            (< longest-idle-ms 0) (< retire-after-ms 0)
+            (< changes-today 0) (< daily-limit 0)) "staff/invalid"
+        (>= changes-today daily-limit) "staff/limit"
+        (and (> takeable 0) (= workers 0)) "staff/add"
+        (and (> takeable 0) (> workers 0)
+             (>= (quot (- takeable 1) workers) (if (< high-per-worker 1) 1 high-per-worker))) "staff/add"
         (and (<= takeable 0) (> workers 0) (> retire-after-ms 0)
              (>= longest-idle-ms retire-after-ms)) "staff/retire"
         :else "staff/hold"))
@@ -113,6 +120,10 @@
            ;; a limit below 1 is 1
            (= (wake-reason false 1000 5 3 1 0) "wake/busy")
            (= (wake-reason false 1000 5 0 0 1) "wake/idle")
+           (= (wake-reason false 1000 5 3 -1 1) "wake/invalid")
+           (= (wake-reason false 1000 5 -1 0 1) "wake/invalid")
+           (= (wake-reason false 1000 5 3 0 -1) "wake/invalid")
+           (= (wake-reason true 1000 5 -1 -1 -1) "wake/stopped")
            (wake? "wake/go") (not (wake? "wake/idle")))
     true false))
 
@@ -128,6 +139,9 @@
            (= (next-after "blocked" true 0 3) "next/escalate")
            (= (next-after "floor" true 0 3) "next/escalate")
            (= (next-after "weird" true 0 3) "next/escalate")
+           (= (next-after "done" true -1 3) "next/escalate")
+           (= (next-after "failed" false -1 3) "next/escalate")
+           (= (next-after "done" true 0 0) "next/escalate")
            (= (next-state "next/complete") 4)
            (= (next-state "next/continue") 3)
            (= (next-state "next/retry") 3)
@@ -144,7 +158,11 @@
            (= (backoff-ms 7 1000 60000) 60000)
            (= (backoff-ms 60 1000 60000) 60000)
            (= (backoff-ms 2 0 60000) 0)
-           (= (backoff-ms 1 90000 60000) 60000))
+           (= (backoff-ms 1 90000 60000) 60000)
+           (= (backoff-ms 2 4611686018427387904 9223372036854775807) 9223372036854775807)
+           (= (backoff-ms 63 1 9223372036854775807) 4611686018427387904)
+           (= (backoff-ms 64 1 9223372036854775807) 9223372036854775807)
+           (= (backoff-ms 1 1 -1) 0))
     true false))
 
 (defn test-staffing [] :bool
@@ -158,6 +176,11 @@
            (= (staffing-reason 1 2 5 86400000 86400000 0 2) "staff/hold")
            (= (staffing-reason 0 0 5 0 0 0 2) "staff/hold")
            (= (staffing-reason 11 2 5 0 0 2 2) "staff/limit")
+           (= (staffing-reason -1 2 5 86400000 86400000 0 2) "staff/invalid")
+           (= (staffing-reason 1 -1 5 0 0 0 2) "staff/invalid")
+           (= (staffing-reason 1 1 5 0 0 -1 2) "staff/invalid")
+           (= (staffing-reason 9223372036854775807 9223372036854775807 2 0 0 0 2) "staff/hold")
+           (= (staffing-reason 9223372036854775807 1 9223372036854775806 0 0 0 2) "staff/add")
            ;; a high-per-worker below 1 is 1
            (= (staffing-reason 3 2 0 0 0 0 2) "staff/add"))
     true false))

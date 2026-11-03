@@ -1,0 +1,201 @@
+#!/bin/sh
+# Compile and execute the pure schedule selfhost gate through the locked
+# multi-module Amu CLI. This is a bounded native qualification probe, not the
+# Itonami product launcher or a release gate.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
+EXPECTED_CRON_CLI_SHA256=92d8a25d028e63b8486022eb91984c3e7097278537f3b2e9cef277290b630dd4
+EXPECTED_SCHEDULE_SHA256=720b216c867eec90e33249d47ded08c8fcc685c3ab216e8a1c3a438389c174e5
+AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+CLI_SHA256=$(shasum -a 256 "$CLI" | cut -d ' ' -f 1)
+if [ "$CLI_SHA256" != "$EXPECTED_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected Amu CLI digest: $CLI_SHA256" >&2
+  exit 2
+fi
+SCHEDULE="$REPO_ROOT/kotoba/itonami/schedule.kotoba"
+CRON_CLI="$REPO_ROOT/kotoba/agent_cli/cron_schedule_cli.kotoba"
+SCHEDULE_SHA256=$(shasum -a 256 "$SCHEDULE" | cut -d ' ' -f 1)
+if [ "$SCHEDULE_SHA256" != "$EXPECTED_SCHEDULE_SHA256" ]; then
+  printf '%s\n' "unexpected schedule source digest: $SCHEDULE_SHA256" >&2
+  exit 2
+fi
+CRON_CLI_SHA256=$(shasum -a 256 "$CRON_CLI" | cut -d ' ' -f 1)
+if [ "$CRON_CLI_SHA256" != "$EXPECTED_CRON_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected schedule CLI source digest: $CRON_CLI_SHA256" >&2
+  exit 2
+fi
+
+mkdir -p "$OUT_DIR"
+cp "$SCHEDULE" "$OUT_DIR/itonami-schedule.kotoba"
+cp "$CRON_CLI" "$OUT_DIR/cron-schedule-cli.kotoba"
+cat > "$OUT_DIR/schedule-gate.kotoba" <<'EOF'
+(ns schedule-gate (:require [itonami.schedule :as schedule]) (:export [main]))
+(defn main [] :i64
+  (+ (if (schedule/test-civil) 1 0)
+     (+ (if (schedule/test-parse) 2 0)
+        (+ (if (schedule/test-cron) 4 0)
+           (if (schedule/test-other) 8 0)))))
+EOF
+
+SCHEDULE_PATH="$OUT_DIR/itonami-schedule.kotoba"
+GATE_PATH="$OUT_DIR/schedule-gate.kotoba"
+SCHEDULE_FILE_SHA=$(shasum -a 256 "$SCHEDULE_PATH" | cut -d ' ' -f 1)
+GATE_FILE_SHA=$(shasum -a 256 "$GATE_PATH" | cut -d ' ' -f 1)
+cat > "$OUT_DIR/schedule.ksl" <<EOF
+KSL2
+entry $GATE_PATH
+module itonami.schedule $SCHEDULE_PATH
+module schedule-gate $GATE_PATH
+file $SCHEDULE_FILE_SHA $SCHEDULE_PATH
+file $GATE_FILE_SHA $GATE_PATH
+EOF
+LOCK_SHA=$(shasum -a 256 "$OUT_DIR/schedule.ksl" | cut -d ' ' -f 1)
+
+"$CLI" compile "$GATE_PATH" --source-lock "$OUT_DIR/schedule.ksl" \
+  -o "$OUT_DIR/schedule-tests.macho"
+codesign --verify --strict "$OUT_DIR/schedule-tests.macho"
+RESULT=$("$OUT_DIR/schedule-tests.macho")
+if [ "$RESULT" != 15 ]; then
+  printf 'schedule test mask mismatch: expected 15, got %s\n' "$RESULT" >&2
+  exit 1
+fi
+RUN_RESULT=$("$CLI" run "$GATE_PATH" --source-lock "$OUT_DIR/schedule.ksl")
+if [ "$RUN_RESULT" != 15 ]; then
+  printf 'amu run schedule test mask mismatch: expected 15, got %s\n' "$RUN_RESULT" >&2
+  exit 1
+fi
+ARTIFACT_RESULT=$("$CLI" run "$OUT_DIR/schedule-tests.macho")
+if [ "$ARTIFACT_RESULT" != 15 ]; then
+  printf 'amu run project artifact mask mismatch: expected 15, got %s\n' "$ARTIFACT_RESULT" >&2
+  exit 1
+fi
+
+cp "$SCHEDULE_PATH" "$OUT_DIR/schedule-before-refusal.kotoba"
+printf '\n' >> "$SCHEDULE_PATH"
+if "$CLI" compile "$GATE_PATH" --source-lock "$OUT_DIR/schedule.ksl" \
+  -o "$OUT_DIR/should-not-exist.macho" > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! rg -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+CRON_CLI_PATH="$OUT_DIR/cron-schedule-cli.kotoba"
+CRON_CLI_FILE_SHA=$(shasum -a 256 "$CRON_CLI_PATH" | cut -d ' ' -f 1)
+CRON_SCHEDULE_PATH="$OUT_DIR/itonami-schedule.kotoba"
+CRON_SCHEDULE_SHA=$(shasum -a 256 "$CRON_SCHEDULE_PATH" | cut -d ' ' -f 1)
+CRON_CLI_LOCK="$OUT_DIR/cron-schedule-cli.ksl"
+printf 'KSL2\nentry %s\nmodule agent-cli-cron-schedule %s\nmodule itonami.schedule %s\nfile %s %s\nfile %s %s\n' \
+  "$CRON_CLI_PATH" "$CRON_CLI_PATH" "$CRON_SCHEDULE_PATH" \
+  "$CRON_CLI_FILE_SHA" "$CRON_CLI_PATH" "$CRON_SCHEDULE_SHA" "$CRON_SCHEDULE_PATH" \
+  > "$CRON_CLI_LOCK"
+CRON_CLI_LOCK_SHA=$(shasum -a 256 "$CRON_CLI_LOCK" | cut -d ' ' -f 1)
+CRON_CLI_PROGRAM="$OUT_DIR/cron-schedule-cli.macho"
+"$CLI" compile "$CRON_CLI_PATH" --source-lock "$CRON_CLI_LOCK" -o "$CRON_CLI_PROGRAM"
+codesign --verify --strict "$CRON_CLI_PROGRAM"
+DIRECT_CLI_RESULT=$("$CRON_CLI_PROGRAM" 'every 5m')
+EXPECTED_AMU_CLI_RESULT=$(printf 'interval 5\n0')
+if [ "$DIRECT_CLI_RESULT" != "$EXPECTED_AMU_CLI_RESULT" ]; then
+  printf 'schedule CLI direct result mismatch: got %s\n' "$DIRECT_CLI_RESULT" >&2
+  exit 1
+fi
+LOCKED_CLI_RESULT=$("$CLI" run "$CRON_CLI_PATH" --source-lock "$CRON_CLI_LOCK" -- 'every 5m')
+if [ "$LOCKED_CLI_RESULT" != "$EXPECTED_AMU_CLI_RESULT" ]; then
+  printf 'schedule CLI locked-run result mismatch: got %s\n' "$LOCKED_CLI_RESULT" >&2
+  exit 1
+fi
+ARTIFACT_CLI_RESULT=$("$CLI" run "$CRON_CLI_PROGRAM" -- 'every 5m')
+if [ "$ARTIFACT_CLI_RESULT" != "$EXPECTED_AMU_CLI_RESULT" ]; then
+  printf 'schedule CLI artifact-run result mismatch: got %s\n' "$ARTIFACT_CLI_RESULT" >&2
+  exit 1
+fi
+
+# Invalid schedule handling is a guest result plus an explicit diagnostic.
+# The standalone host runner itself exits zero after returning the guest's
+# i64 result, so assert the marker and diagnostic rather than conflating it
+# with the host process status.
+REFUSAL_RESULT=$("$CRON_CLI_PROGRAM" 'not-a-schedule' 2> "$OUT_DIR/schedule-cli-refusal.stderr")
+if [ "$REFUSAL_RESULT" != 2 ]; then
+  printf 'schedule CLI refusal marker mismatch: expected 2, got %s\n' "$REFUSAL_RESULT" >&2
+  exit 1
+fi
+if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/schedule-cli-refusal.stderr"; then
+  cat "$OUT_DIR/schedule-cli-refusal.stderr" >&2
+  printf '%s\n' "schedule CLI refusal did not emit its named diagnostic" >&2
+  exit 1
+fi
+AMU_REFUSAL_RESULT=$("$CLI" run "$CRON_CLI_PROGRAM" -- 'not-a-schedule' \
+  2> "$OUT_DIR/amu-run-schedule-cli-refusal.stderr")
+if [ "$AMU_REFUSAL_RESULT" != 2 ]; then
+  printf 'amu run schedule CLI refusal marker mismatch: expected 2, got %s\n' "$AMU_REFUSAL_RESULT" >&2
+  exit 1
+fi
+if ! rg -q '^cron: unsupported or invalid schedule: not-a-schedule$' "$OUT_DIR/amu-run-schedule-cli-refusal.stderr"; then
+  cat "$OUT_DIR/amu-run-schedule-cli-refusal.stderr" >&2
+  printf '%s\n' "amu run schedule CLI refusal did not emit its named diagnostic" >&2
+  exit 1
+fi
+
+{
+  printf 'format: itonami.cron-schedule-selfhost-gate.v1\n'
+  printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$CLI_SHA256"
+  printf 'schedule_source_sha256: %s\n' "$SCHEDULE_SHA256"
+  printf 'gate_source_sha256: %s\n' "$GATE_FILE_SHA"
+  printf 'source_lock_sha256: %s\n' "$LOCK_SHA"
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$OUT_DIR/schedule-tests.macho" | cut -d ' ' -f 1)"
+  printf 'runtime_result: %s\n' "$RESULT"
+  printf 'amu_run_result: %s\n' "$RUN_RESULT"
+  printf 'amu_run_artifact_result: %s\n' "$ARTIFACT_RESULT"
+  printf 'schedule_cli_source_sha256: %s\n' "$CRON_CLI_FILE_SHA"
+  printf 'schedule_cli_lock_sha256: %s\n' "$CRON_CLI_LOCK_SHA"
+  printf 'schedule_cli_program_sha256: %s\n' "$(shasum -a 256 "$CRON_CLI_PROGRAM" | cut -d ' ' -f 1)"
+  printf 'schedule_cli_direct_result: %s\n' "$DIRECT_CLI_RESULT"
+  printf 'schedule_cli_locked_run_result: %s\n' "$LOCKED_CLI_RESULT"
+  printf 'schedule_cli_artifact_run_result: %s\n' "$ARTIFACT_CLI_RESULT"
+  printf 'schedule_cli_direct_refusal_result: %s\n' "$REFUSAL_RESULT"
+  printf 'schedule_cli_direct_refusal_diagnostic: PASS\n'
+  printf 'schedule_cli_amu_run_refusal_result: %s\n' "$AMU_REFUSAL_RESULT"
+  printf 'schedule_cli_amu_run_refusal_diagnostic: PASS\n'
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: bounded multi-module native selfhost schedule gate; not product-launcher qualification\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"

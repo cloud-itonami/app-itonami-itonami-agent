@@ -1,0 +1,23 @@
+(ns ledger-claim-at-probe
+  "Run with a fresh app-data store. Both claim APIs must see the same active
+  execution; a terminal row permits the next claim and timestamps survive."
+  (:require [itonami.ledger :as l])
+  (:export [ledger-claim-at-probe])
+  (:capabilities #{:io/write}))
+
+(defn ledger-claim-at-probe [] :i64
+  (let [base "/data/ledger-claim-at-probe"
+        bad (l/lg-claim-at base "job1" "bad\nid" "cron" "t0")
+        bad-status (l/lg-status base "job1" "bad\nid")
+        a (l/lg-claim-at base "job1" "ex1" "cron" "t1")
+        time1 (l/lg-at base "job1" "ex1")
+        count1 (l/lg-active-count base "job1")
+        blocked-normal (l/lg-claim base "job1" "ex2" "cron")
+        done (l/lg-finish-at base "job1" "ex1" 2 "" "t2")
+        time2 (l/lg-at base "job1" "ex1")
+        b (l/lg-claim base "job1" "ex2" "cron")
+        blocked-timed (l/lg-claim-at base "job1" "ex3" "cron" "t3")
+        count2 (l/lg-row-count base "job1")]
+    (if (and (= bad 0) (= bad-status -1) (= a 1) (string=? time1 "t1") (= count1 1)
+             (= blocked-normal 0) (= done 1) (string=? time2 "t2")
+             (= b 1) (= blocked-timed 0) (= count2 2)) 1 0)))

@@ -1,0 +1,39 @@
+(ns agent-cli.github-checkpoint-core
+  "Pure decisions for GitHub checkpoint publication. These functions do not
+  perform IO, verify signatures, grant authority, or fence a remote writer.
+  Their caller must obtain and enforce those facts at the commit boundary."
+  (:export [commit-admitted remote-result]))
+
+(defn commit-admitted [profile-verified :i64 head-verified :i64
+                       fence-enforced :i64 data-approved :i64] :i64
+  ;; Each value must be exactly 1. Unknown, absent and malformed values refuse.
+  ;; fence-enforced means enforcement AT the effect boundary, not merely that
+  ;; the caller once observed a lease; GitHub ref CAS alone does not supply it.
+  (if (and (= profile-verified 1)
+           (and (= head-verified 1)
+                (and (= fence-enforced 1) (= data-approved 1))))
+    1
+    0))
+
+(defn remote-result [push :i64 observed :i64 candidate-verified :i64] :i64
+  ;; push: 0 not attempted, 1 acknowledged, 2 rejected, 3 outcome unknown.
+  ;; observed: 0 unavailable, 1 exact candidate, 2 old parent, 3 other ref.
+  ;; candidate-verified: 1 iff immutable commit/objects were verified.
+  ;; result: 0 refused/no write, 1 persisted, 2 unknown, 3 conflict.
+  ;; A read of the old parent after a timeout does not prove that an in-flight
+  ;; write will not subsequently arrive. UNKNOWN must not trigger a new turn.
+  (if (or (< push 0) (> push 3))
+    2
+    (if (or (< observed 0) (> observed 3))
+      2
+      (if (or (< candidate-verified 0) (> candidate-verified 1))
+        2
+        (if (= push 0)
+          0
+          (if (= push 2)
+            3
+            (if (= observed 3)
+              3
+              (if (and (= observed 1) (= candidate-verified 1))
+                1
+                2))))))))

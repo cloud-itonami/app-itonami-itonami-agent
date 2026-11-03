@@ -23,9 +23,11 @@
 ;; Written in the Amu selfhost seed subset (no ns docstring, no fn literal,
 ;; declared result types); README "Schedule" has the gate.
 (ns itonami.schedule
-  (:export [cron-problem next-cron-ms next-interval-ms next-once-ms due?
+  (:export [cron-problem duration-minutes parse-schedule-form iso-time-epoch-ms
+            parse-i64-digits
+            next-cron-ms next-interval-ms next-once-ms due?
             days-from-civil civil-year civil-month civil-day weekday
-            test-civil test-parse test-cron test-other]))
+            epoch-ms->iso-utc test-civil test-parse test-cron test-other test-iso-utc]))
 
 ;; ---------------------------------------------------------------------------
 ;; Civil calendar (H. Hinnant's days_from_civil / civil_from_days), in days
@@ -74,6 +76,42 @@
 (defn weekday [z :i64] :i64
   (let [r (- (+ z 4) (* 7 (quot (+ z 4) 7)))] (if (< r 0) (+ r 7) r)))
 
+(defn- pad2 [n :i64] :string
+  (if (< n 10) (string-concat "0" (string-from-i64 n)) (string-from-i64 n)))
+
+(defn- pad3 [n :i64] :string
+  (if (< n 10) (string-concat "00" (string-from-i64 n))
+    (if (< n 100) (string-concat "0" (string-from-i64 n)) (string-from-i64 n))))
+
+(defn- pad4 [n :i64] :string
+  (if (< n 10) (string-concat "000" (string-from-i64 n))
+    (if (< n 100) (string-concat "00" (string-from-i64 n))
+      (if (< n 1000) (string-concat "0" (string-from-i64 n)) (string-from-i64 n)))))
+
+(defn epoch-ms->iso-utc [epoch-ms :i64] :string
+  ;; The store's updated_at uses the UTC subset emitted by Date#toISOString.
+  (if (< epoch-ms 0) ""
+    (let [days (floor-div epoch-ms 86400000)
+          day-ms (- epoch-ms (* days 86400000))
+          year (civil-year days)
+          month (civil-month days)
+          day (civil-day days)
+          hour (quot day-ms 3600000)
+          minute (quot (- day-ms (* hour 3600000)) 60000)
+          second (quot (- day-ms (* hour 3600000) (* minute 60000)) 1000)
+          millis (- day-ms (* hour 3600000) (* minute 60000) (* second 1000))]
+      (if (or (< year 0) (> year 9999)) ""
+        (let [date-month (string-concat (pad4 year)
+                     (string-concat "-" (pad2 month)))
+              date-full (string-concat date-month (string-concat "-" (pad2 day)))
+              time-hour (string-concat (pad2 hour)
+                     (string-concat ":" (pad2 minute)))
+              time-second (string-concat time-hour
+                     (string-concat ":" (pad2 second)))
+              time-millis (string-concat time-second
+                     (string-concat "." (pad3 millis)))]
+          (string-concat date-full (string-concat "T" (string-concat time-millis "Z"))))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Parsing. A field is a bit mask (bit v = value v allowed); -1 = malformed.
 
@@ -83,6 +121,15 @@
 
 (defn digit? [c :i64] :bool (if (< c 48) false (if (> c 57) false true)))
 
+(defn parse-i64-digits [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s)) acc
+    (let [c (string-code-point-at s i)
+          d (- c 48)]
+      (if (not (digit? c)) -1
+        (if (or (> acc 922337203685477580)
+                (and (= acc 922337203685477580) (> d 7))) -1
+          (recur s (inc i) (+ (* acc 10) d)))))))
+
 ;; s is 1..9 decimal digits: its value, else -1. Stops at the first non-digit.
 (defn digits-from [s :string i :i64 acc :i64] :i64
   (cond (>= i (string-length s)) acc
@@ -91,6 +138,55 @@
 
 (defn number-of [s :string] :i64
   (let [n (string-length s)] (if (< n 1) -1 (if (> n 9) -1 (digits-from s 0 0)))))
+
+;; ---------------------------------------------------------------------------
+;; Duration shorthand from cron.cljk. Return minutes, or -1 for malformed,
+;; zero, or a value outside the native i64 result range. Unit matching is
+;; ASCII case-insensitive, like the source regex.
+
+(defn duration-edge-space? [c :i64] :bool
+  (cond (= c 9) true (= c 10) true (= c 11) true (= c 12) true (= c 13) true
+        (= c 32) true (= c 160) true (= c 5760) true
+        (and (>= c 8192) (<= c 8202)) true
+        (= c 8232) true (= c 8233) true (= c 8239) true
+        (= c 8287) true (= c 12288) true (= c 65279) true
+        :else false))
+
+(defn duration-js-space? [c :i64] :bool
+  (duration-edge-space? c))
+
+(defn duration-utf8-width [c :i64] :i64
+  (cond (< c 128) 1 (< c 2048) 2 (< c 65536) 3 :else 4))
+
+(defn duration-left [s :string i :i64] :i64
+  (if (>= i (string-byte-length s)) i
+    (if (duration-edge-space? (string-code-point-at s i))
+      (recur s (+ i (duration-utf8-width (string-code-point-at s i)))) i)))
+
+(defn duration-right-run [s :string i :i64 end :i64 kept :i64] :i64
+  (if (>= i end) kept
+    (let [c (string-code-point-at s i)
+          next (+ i (duration-utf8-width c))
+          last (if (duration-edge-space? c) kept next)]
+      (recur s next end last))))
+
+(defn duration-right [s :string end :i64] :i64
+  (duration-right-run s 0 end 0))
+
+(defn duration-digit? [c :i64] :bool
+  (if (< c 48) false (if (> c 57) false true)))
+
+(defn duration-digit-end [s :string i :i64] :i64
+  (if (>= i (string-length s)) i
+    (if (duration-digit? (string-code-point-at s i))
+      (recur s (inc i)) i)))
+
+(defn duration-amount [s :string i :i64 end :i64 acc :i64] :i64
+  (if (>= i end) acc
+    (let [d (- (string-code-point-at s i) 48)]
+      (if (or (> acc 922337203685477580) (and (= acc 922337203685477580) (> d 7)))
+        -1
+        (recur s (inc i) end (+ (* acc 10) d))))))
 
 (defn lower [c :i64] :i64 (if (and (>= c 65) (<= c 90)) (+ c 32) c))
 
@@ -103,6 +199,33 @@
 (defn same-ci? [s :string w :string] :bool
   (if (= (string-length s) (string-length w)) (same-ci-from? s w 0) false))
 
+(defn duration-unit-scale [s :string] :i64
+  (cond (or (same-ci? s "m") (same-ci? s "min") (same-ci? s "mins")
+            (same-ci? s "minute") (same-ci? s "minutes")) 1
+        (or (same-ci? s "h") (same-ci? s "hr") (same-ci? s "hrs")
+            (same-ci? s "hour") (same-ci? s "hours")) 60
+        (or (same-ci? s "d") (same-ci? s "day") (same-ci? s "days")) 1440
+        (or (same-ci? s "w") (same-ci? s "week") (same-ci? s "weeks")) 10080
+        :else -1))
+
+(defn duration-minutes [s :string] :i64
+  ;; Source contract: optional decimal count (default 1), optional whitespace
+  ;; before a unit, and singular/plural aliases for minutes/hours/days/weeks.
+  (let [start (duration-left s 0)
+        end (duration-right s (string-byte-length s))
+        trimmed (string-substring s start end)
+        digits-end (duration-digit-end trimmed 0)
+        has-amount (> digits-end 0)
+        amount (if has-amount (duration-amount trimmed 0 digits-end 0) 1)
+        unit-start (loop [i digits-end]
+                     (if (and (< i (string-length trimmed))
+                              (duration-js-space? (string-code-point-at trimmed i)))
+                       (recur (inc i)) i))
+        scale (duration-unit-scale (string-substring trimmed unit-start (string-length trimmed)))]
+    (if (or (< amount 1) (< scale 1)) -1
+      (if (> amount (quot 9223372036854775807 scale)) -1
+        (* amount scale)))))
+
 ;; a whole field that is one day name becomes its number, as the .cljk does
 (defn day-name [s :string] :string
   (cond (same-ci? s "sun") "0" (same-ci? s "mon") "1" (same-ci? s "tue") "2"
@@ -113,6 +236,9 @@
   (loop [i a m mask]
     (if (> i b) m
       (recur (+ i step) (bit-or m (bit-of (if dow (- i (* 7 (quot i 7))) i)))))))
+
+(defn field-value? [v :i64 lo :i64 hi :i64] :bool
+  (and (>= v lo) (<= v hi)))
 
 ;; one comma-separated part: rng or rng/step
 (defn part-mask [part :string lo :i64 hi :i64 dow :bool] :i64
@@ -127,11 +253,13 @@
                   b (number-of (string-substring rng (inc dash) (string-length rng)))]
               ;; Validate before walking: an out-of-range endpoint could
               ;; otherwise make this loop run up to a billion iterations.
-              (if (or (< a lo) (> a hi) (< b lo) (> b hi) (> a b))
-                -1 (add-range 0 a b step dow)))
+              (if (and (field-value? a lo hi)
+                       (field-value? b lo hi)
+                       (<= a b))
+                (add-range 0 a b step dow) -1))
           :else (let [v (number-of rng)]
-                  (if (or (< v lo) (> v hi)) -1
-                    (add-range 0 v (if (< sl 0) v hi) step dow))))))
+                  (if (field-value? v lo hi)
+                    (add-range 0 v (if (< sl 0) v hi) step dow) -1)))))
 
 (defn field-parts [s :string lo :i64 hi :i64 dow :bool acc :i64] :i64
   (let [c (string-index-of s ",")
@@ -171,6 +299,227 @@
             (< (field-mask (field-at e 3) 1 12 false) 0)
             (< (field-mask (field-at e 4) 0 7 true) 0))
       "schedule/bad-cron" "schedule/ok")))
+
+;; ---------------------------------------------------------------------------
+;; Pure schedule input port from cron.cljk/parse-schedule. The result is a
+;; tagged wire form for the native CLI, not the old JSON object:
+;;   interval\n<minutes>, once-after\n<minutes>, cron\n<expression>
+;; Unsupported or malformed forms answer schedule/bad. Absolute ISO times
+;; remain a host/time parsing boundary and are refused here.
+
+(defn trim-space [s :string] :string
+  (let [start (duration-left s 0)
+        end (duration-right s (string-byte-length s))]
+    (string-substring s start end)))
+
+(defn lower-text-run [s :string i :i64 acc :string] :string
+  (if (>= i (string-length s)) acc
+    (let [c (lower (string-code-point-at s i))]
+      (if (and (>= c 97) (<= c 122))
+        (recur s (inc i) (string-concat acc (string-substring "abcdefghijklmnopqrstuvwxyz" (- c 97) (- c 96))))
+        (recur s (inc i) (string-concat acc (string-substring s i (inc i))))))))
+
+(defn lower-text [s :string] :string (lower-text-run s 0 ""))
+
+(defn starts-with-text? [s :string prefix :string] :bool
+  (if (< (string-length s) (string-length prefix)) false
+    (string=? (string-substring s 0 (string-length prefix)) prefix)))
+
+(defn time-space? [c :i64] :bool
+  (if (< c 0) false (if (> c 32) false true)))
+
+(defn time-core? [s :string] :bool
+  (if (= (string-length s) 0) false
+    (if (>= (string-index-of s " ") 0) false true)))
+
+(defn parse-clock [s :string] :string
+  (let [text (trim-space (lower-text (trim-space s)))
+        n (string-length text)
+        suffix (if (>= n 2) (string-substring text (- n 2) n) "")
+        am (= suffix "am") pm (= suffix "pm")
+        ap (or am pm)
+        core (trim-space (if ap (string-substring text 0 (- n 2)) text))
+        colon (string-index-of core ":")
+        hour-text (if (< colon 0) core (string-substring core 0 colon))
+        minute-text (if (< colon 0) "0" (string-substring core (inc colon) (string-length core)))
+        hour (number-of hour-text)
+        minute (number-of minute-text)
+        hour-ok (and (>= (string-length hour-text) 1) (<= (string-length hour-text) 2) (>= hour 0))
+        minute-ok (if (< colon 0) true (and (= (string-length minute-text) 2) (>= minute 0)))
+        clock-ok (if ap (and (>= hour 1) (<= hour 12)) (and (>= hour 0) (<= hour 23)))
+        hour24 (if ap (+ (if (= hour 12) 0 hour) (if pm 12 0)) hour)]
+    (if (and hour-ok minute-ok clock-ok (<= minute 59) (time-core? core))
+      (string-concat (string-from-i64 hour24) (string-concat ":" (string-from-i64 minute)))
+      "")))
+
+(defn day-token [s :string] :string
+  (cond (= s "day") "*" (= s "daily") "*" (= s "everyday") "*"
+        (= s "weekday") "1-5" (= s "weekdays") "1-5"
+        (= s "weekend") "0,6" (= s "weekends") "0,6"
+        (= s "sun") "0" (= s "sunday") "0"
+        (= s "mon") "1" (= s "monday") "1"
+        (= s "tue") "2" (= s "tuesday") "2"
+        (= s "wed") "3" (= s "wednesday") "3"
+        (= s "thu") "4" (= s "thursday") "4"
+        (= s "fri") "5" (= s "friday") "5"
+        (= s "sat") "6" (= s "saturday") "6"
+        :else ""))
+
+(defn skip-day-separators [s :string i :i64] :i64
+  (if (>= i (string-length s)) i
+    (let [c (string-code-point-at s i)]
+      (if (or (= c 44) (time-space? c))
+        (recur s (inc i)) i))))
+
+(defn day-token-end [s :string i :i64] :i64
+  (if (>= i (string-length s)) i
+    (let [c (string-code-point-at s i)]
+      (if (or (= c 44) (time-space? c)) i (recur s (inc i))))))
+
+(defn day-list-contains? [acc :string value :string] :bool
+  (if (= acc "") false
+    (>= (string-index-of (string-concat "," (string-concat acc ","))
+                         (string-concat "," (string-concat value ","))) 0)))
+
+(defn day-list [s :string i :i64 acc :string star :bool seen :bool] :string
+  (let [start (skip-day-separators s i)]
+    (if (>= start (string-length s))
+      (if seen (if star "*" acc) "")
+      (let [end (day-token-end s start)
+            token (string-substring s start end)
+            value (day-token token)]
+        (cond (= token "and") (day-list s end acc star seen)
+              (= value "") ""
+              (= value "*") (day-list s end acc true true)
+              star (day-list s end acc star true)
+              (day-list-contains? acc value) (day-list s end acc star true)
+              :else (day-list s end (if (= acc "") value (string-concat acc (string-concat "," value))) star true))))))
+
+(defn strip-trailing-at [s :string] :string
+  (let [text (trim-space s) n (string-length text)]
+    (if (and (>= n 3) (= (string-substring text (- n 3) n) " at"))
+      (trim-space (string-substring text 0 (- n 3))) text)))
+
+(defn natural-cron-from [s :string i :i64] :string
+  (if (>= i (string-length s)) ""
+    (if (not (time-space? (string-code-point-at s i)))
+      (recur s (inc i))
+      (let [clock (parse-clock (string-substring s (inc i) (string-length s)))]
+        (if (= clock "")
+          (recur s (inc i))
+          (let [day-part (strip-trailing-at (string-substring s 0 i))
+                dow (day-list day-part 0 "" false false)
+                colon (string-index-of clock ":")
+                hour (string-substring clock 0 colon)
+                minute (string-substring clock (inc colon) (string-length clock))]
+            (if (= dow "") ""
+              (string-concat minute (string-concat " " (string-concat hour
+                (string-concat " * * " dow)))))))))))
+
+(defn natural-cron [s :string] :string
+  (natural-cron-from (trim-space (lower-text s)) 0))
+
+;; Bounded ISO timestamp form accepted by the old JS Date parser: a four-digit
+;; date, `T`, time with seconds, and either Z or a numeric UTC offset. Date
+;; days 1..31 follow JS Date normalization (e.g. February 30 rolls into March);
+;; month, clock, and offset fields are range-checked. This is intentionally not
+;; the full set of implementation-defined strings accepted by JS Date.
+(defn decimal-digits? [s :string i :i64 end :i64] :bool
+  (if (>= i end) true
+    (if (digit? (string-code-point-at s i)) (recur s (inc i) end) false)))
+
+(defn fixed-decimal [s :string i :i64 n :i64] :i64
+  (number-of (string-substring s i (+ i n))))
+
+(defn fraction-millis [s :string start :i64 end :i64] :i64
+  (let [n (- end start)
+        take (if (> n 3) 3 n)
+        value (number-of (string-substring s start (+ start take)))]
+    (if (= take 1) (* value 100) (if (= take 2) (* value 10) value))))
+
+(defn parse-iso-time-form-bounded [s :string n :i64] :string
+  (let [zulu (and (> n 0) (= (lower (string-code-point-at s (dec n))) 122))
+        zone-start (if zulu (dec n) (- n 6))
+        zone-sign (if zulu 0 (string-code-point-at s zone-start))
+        zone-shape (or zulu (and (or (= zone-sign 43) (= zone-sign 45))
+                                 (>= zone-start 0) (= (string-code-point-at s (- n 3)) 58)))
+        zone-hour (if zulu 0 (fixed-decimal s (inc zone-start) 2))
+        zone-minute (if zulu 0 (fixed-decimal s (- n 2) 2))
+        zone-valid (and zone-shape (>= zone-hour 0) (<= zone-hour 23)
+                        (>= zone-minute 0) (<= zone-minute 59)
+                        (or zulu (and (decimal-digits? s (inc zone-start) (+ zone-start 3))
+                                      (decimal-digits? s (- n 2) n))))
+        core-end zone-start
+        fraction? (and (> core-end 19) (= (string-code-point-at s 19) 46))
+        fraction-start (if fraction? 20 core-end)
+        fraction-valid (if fraction? (and (< fraction-start core-end)
+                                              (decimal-digits? s fraction-start core-end))
+                           (= core-end 19))
+        year (fixed-decimal s 0 4)
+        month (fixed-decimal s 5 2)
+        day (fixed-decimal s 8 2)
+        hour (fixed-decimal s 11 2)
+        minute (fixed-decimal s 14 2)
+        second (fixed-decimal s 17 2)
+        millis (if fraction? (fraction-millis s fraction-start core-end) 0)
+        date-shape (and (>= core-end 19)
+                        (= (string-code-point-at s 4) 45) (= (string-code-point-at s 7) 45)
+                        (= (lower (string-code-point-at s 10)) 116)
+                        (= (string-code-point-at s 13) 58) (= (string-code-point-at s 16) 58)
+                        (decimal-digits? s 0 4) (decimal-digits? s 5 7)
+                        (decimal-digits? s 8 10) (decimal-digits? s 11 13)
+                        (decimal-digits? s 14 16) (decimal-digits? s 17 19))
+        clock-valid (and (>= hour 0) (<= hour 24) (>= minute 0) (<= minute 59)
+                         (>= second 0) (<= second 59)
+                         (or (< hour 24) (and (= minute 0) (= second 0) (= millis 0))))]
+    (if (and date-shape fraction-valid zone-valid (>= year 0) (>= month 1) (<= month 12)
+             (>= day 1) (<= day 31) clock-valid)
+      (let [offset-minutes (* (if (= zone-sign 45) 1 (if (= zone-sign 43) -1 0))
+                              (+ (* zone-hour 60) zone-minute))
+            epoch (+ (* (days-from-civil year month day) 86400000)
+                     (* hour 3600000) (* minute 60000) (* second 1000) millis
+                     (* offset-minutes 60000))]
+        (string-concat "once-at\n" (string-from-i64 epoch)))
+      "")))
+
+(defn parse-iso-time-form [s :string] :string
+  (let [n (string-length s)]
+    (if (< n 20) "" (parse-iso-time-form-bounded s n))))
+
+(defn- nonnegative-decimal [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s)) acc
+    (let [c (string-code-point-at s i)]
+      (if (or (< c 48) (> c 57)) -1
+        (let [d (- c 48)]
+          (if (or (> acc 922337203685477580)
+                  (and (= acc 922337203685477580) (> d 7))) -1
+            (recur s (inc i) (+ (* acc 10) d))))))))
+
+(defn iso-time-epoch-ms [s :string] :i64
+  ;; Resume only accepts timestamps in the supported ISO subset and the
+  ;; nonnegative epoch range used by the bounded native scheduler.
+  (let [form (parse-iso-time-form s)
+        newline (string-index-of form "\n")]
+    (if (or (< newline 0) (not (string=? (string-substring form 0 newline) "once-at"))
+            (>= (+ newline 1) (string-length form))) -1
+      (nonnegative-decimal form (+ newline 1) 0))))
+
+(defn parse-schedule-form [s :string] :string
+  (let [text (trim-space s)
+        lower-s (lower-text text)
+        absolute (parse-iso-time-form text)
+        every? (starts-with-text? lower-s "every ")
+        body (if every? (string-substring lower-s 6 (string-length lower-s)) lower-s)
+        relative? (starts-with-text? lower-s "in ")
+        relative (if relative? (duration-minutes (string-substring lower-s 3 (string-length lower-s))) -1)
+        natural (natural-cron body)
+        minutes (duration-minutes body)]
+    (cond (not (= absolute "")) absolute
+          (and relative? (> relative 0)) (string-concat "once-after\n" (string-from-i64 relative))
+          (not (= natural "")) (string-concat "cron\n" natural)
+          (> minutes 0) (string-concat "interval\n" (string-from-i64 minutes))
+          (= (cron-problem text) "schedule/ok") (string-concat "cron\n" text)
+          :else "schedule/bad")))
 
 ;; ---------------------------------------------------------------------------
 ;; next-cron: the first minute strictly after AFTER that matches, walked as
@@ -278,3 +627,8 @@
            (not (due? true 1792638000001 1792638000000))
            (not (due? false 1792638000000 1792638000000))
            (not (due? true -1 1792638000000))) true false))
+
+(defn test-iso-utc [] :bool
+  (and (string=? (epoch-ms->iso-utc 0) "1970-01-01T00:00:00.000Z")
+       (string=? (epoch-ms->iso-utc 951782400123) "2000-02-29T00:00:00.123Z")
+       (string=? (epoch-ms->iso-utc -1) "")))

@@ -22,7 +22,7 @@
   (:require [itonami.notepad :as np]
             [itonami.notepad-render :as nr]
             [itonami.journal-core :as jc])
-  (:export [notepad-cli])
+  (:export [main])
   (:capabilities #{:cli/args :io/write :io/write-error}))
 
 (def usage "usage: itonami-agent cron notepad <job-id> set <key> <value> | get <key> | delete <key> | list")
@@ -59,24 +59,25 @@
     0))
 
 (defn notepad-cli [] :i64
-  (let [verb (wire-arg 0) base (wire-arg 1) key (wire-arg 2) value (wire-arg 3)]
+  (let [verb (wire-arg 0) base (wire-arg 1) key (wire-arg 2) value (wire-arg 3)
+        updated-at (wire-arg 4)]
     (if (string=? verb "set")
       (if (= 0 (string-length key))
         (fail usage)
-        (if (= 0 (string-length value))
-          (fail usage)
-          (if (= 1 (np/notepad-set base key value))
-            (ok (string-concat key (string-concat " = " value)))
-            (fail usage))))
+        (if (= 1 (np/notepad-set-at base key value updated-at))
+          (ok (string-concat key (string-concat " = " value)))
+          (fail usage)))
       (if (string=? verb "get")
-        (let [v (np/notepad-get base key)]
-          (if (= 0 (string-length v))
-            (ok (string-concat key " is not set"))
-            (ok v)))
+        (if (= 1 (np/notepad-has base key))
+          (ok (np/notepad-get base key))
+          (ok (string-concat key " is not set")))
         (if (string=? verb "delete")
-          (if (= 1 (np/notepad-delete base key))
-            (ok "deleted")
-            (ok (string-concat key " is not set")))
+          (let [deleted (np/notepad-delete base key)]
+            (if (= deleted 1)
+              (ok "deleted")
+              (if (= deleted 0)
+                (ok (string-concat key " is not set"))
+                (fail "cron notepad delete refused"))))
           (if (string=? verb "list")
             (let [keys (nr/note-keys base)]
               (if (= 0 (string-length keys))
@@ -85,5 +86,11 @@
 ") ""))))
             (if (string=? verb "clear")
               (let [n (np/notepad-clear base)]
-                (ok "cleared"))
+                (if (< n 0)
+                  (fail "cron notepad clear refused")
+                  (ok "cleared")))
               (fail usage))))))))
+
+(defn main [] :i64
+  ;; Amu KX64 admits a zero-argument i64 `main` as its payload entry.
+  (notepad-cli))

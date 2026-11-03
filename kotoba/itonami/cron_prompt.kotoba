@@ -1,0 +1,43 @@
+;; Pure prompt assembly from src/itonami/agent/cron.cljk's build-prompt.
+;; The host supplies resolved lane/base text and script execution outcome.
+(ns itonami.cron-prompt
+  (:require [itonami.cron-hint :as hint])
+  (:export [cron-prompt-form test-cron-prompt-form]))
+
+(defn cron-prompt-form [lane :string base :string run-script :bool
+                        script-ok :bool script-output :string
+                        wake-false :bool] :string
+  (if (and run-script script-ok (= (string-length script-output) 0))
+    "skip\nscript produced no output"
+    (if (and run-script script-ok wake-false)
+      "skip\nScript gate returned `wakeAgent=false`"
+      (string-concat
+        "prompt\n"
+        (string-concat (hint/cron-hint lane)
+          (string-concat
+            (if run-script
+              (string-concat
+                (if script-ok
+                  "## Script Output\nThe following data was collected by a pre-run script. Use it as context for your analysis."
+                  "## Script Error\nThe data-collection script failed. Report this to the user.")
+                (string-concat "\n\n```\n"
+                  (string-concat script-output "\n```\n\n")))
+              "")
+            base))))))
+
+(defn test-cron-prompt-form [] :bool
+  (let [plain (cron-prompt-form "local" "BASE" false false "" false)
+        script (cron-prompt-form "slack" "BASE" true true "OUTPUT" false)
+        failure (cron-prompt-form "local" "BASE" true false "BROKEN" false)
+        empty (cron-prompt-form "local" "BASE" true true "" false)
+        asleep (cron-prompt-form "local" "BASE" true true "{\"wakeAgent\":false}" true)]
+    (and
+      (string=? plain
+        "prompt\n[IMPORTANT: You are running as a scheduled cron job. DELIVERY: The configured lane is 'local'. Return your report as the final response; do NOT use send_message or try to deliver the output yourself. The scheduler stores local-lane output in the cron output record and sends non-local lanes through its configured delivery adapter. A missing adapter is recorded as delivery_failed. SILENT: If there is genuinely nothing new to report, respond with exactly \"[SILENT]\" (nothing else) to suppress delivery. [SILENT] is a literal ASCII control token — never translate or rephrase it, whatever language the rest of your answer uses. Never combine [SILENT] with content — either report your findings normally, or say [SILENT] and nothing more. FAILURE: If a delegated child fails and this cron run must be recorded as failed, put [CRON_FAILURE] on the first line by itself, then explain the child failure on following lines. RECURSION: This is a run of an EXISTING scheduled job — execute the task now. NEVER create or update a cron job because of recurring or future-schedule language in the task prompt below; treat phrasing like \"each Monday\" or \"every day at 9\" as context for this run, not as a request to schedule another job.]\n\nBASE")
+      (>= (string-index-of script "lane is 'slack'.") 0)
+      (>= (string-index-of script "## Script Output\nThe following data was collected") 0)
+      (>= (string-index-of script "```\nOUTPUT\n```\n\nBASE") 0)
+      (>= (string-index-of failure "## Script Error\nThe data-collection script failed") 0)
+      (>= (string-index-of failure "```\nBROKEN\n```\n\nBASE") 0)
+      (string=? empty "skip\nscript produced no output")
+      (string=? asleep "skip\nScript gate returned `wakeAgent=false`"))))

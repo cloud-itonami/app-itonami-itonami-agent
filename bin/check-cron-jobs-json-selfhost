@@ -1,0 +1,151 @@
+#!/bin/sh
+# Build and run the cron jobs JSON adapter with a pinned Amu-native CLI and
+# the canonical Kotoba JCS reader source. Artifacts stay in a new workspace.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: KOTOBA_REPO=<kotoba-checkout> $0 <amu-native-cli> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+AMU_CLI=$1
+OUT_DIR=$2
+EXPECTED_AMU_CLI_SHA256=16cbef76292013eae7c2324624ed5d76dd6e890acdba1f3537998d2690bc4896
+AMU_CLI_COMMIT=49dccb68f1a6ef9aece7e9de30bf6224687d06fc
+KOTOBA_COMMIT=63e30efc6402320fca6f9c70abd93f113e05d99c
+KOTOBA_JCS_PATH=lib/org.ietf.jcs/kotoba/jcs/reader.kotoba
+EXPECTED_JCS_SHA256=f8af2953904bd0a96e7b5c3b9e34151bcae3754e5358669adb8ac289acc0872f
+KOTOBA_STORE_IO_PATH=lib/kotoba.hata/src/hata/store_io.kotoba
+EXPECTED_STORE_IO_SHA256=096f6d29d77f374313600a51a18366ee59525c7385456a01218a160904187b10
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf 'refusing output outside %s/workspaces\n' "$GITHUB_ROOT" >&2; exit 2 ;;
+esac
+case "$AMU_CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+case "${KOTOBA_REPO:-}" in
+  /*) ;;
+  *) printf '%s\n' "KOTOBA_REPO must name an absolute Kotoba checkout" >&2; exit 2 ;;
+esac
+if [ ! -x "$AMU_CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $AMU_CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+git -C "$KOTOBA_REPO" cat-file -e "$KOTOBA_COMMIT:$KOTOBA_JCS_PATH"
+
+AMU_CLI_SHA256=$(shasum -a 256 "$AMU_CLI" | cut -d ' ' -f 1)
+if [ "$AMU_CLI_SHA256" != "$EXPECTED_AMU_CLI_SHA256" ]; then
+  printf 'unexpected Amu CLI digest: %s\n' "$AMU_CLI_SHA256" >&2
+  exit 2
+fi
+
+mkdir -p "$OUT_DIR/src/gate" "$OUT_DIR/src/hata" "$OUT_DIR/src/itonami" "$OUT_DIR/src/jcs"
+cp "$REPO_ROOT/kotoba/itonami/cron_jobs_json.kotoba" "$OUT_DIR/src/itonami/cron_jobs_json.kotoba"
+cp "$REPO_ROOT/kotoba/itonami/cron_jobs_store.kotoba" "$OUT_DIR/src/itonami/cron_jobs_store.kotoba"
+cp "$REPO_ROOT/kotoba/itonami/schedule.kotoba" "$OUT_DIR/src/itonami/schedule.kotoba"
+cp "$REPO_ROOT/test/native/cron_jobs_json_gate.kotoba" "$OUT_DIR/src/gate/cron_jobs_json_gate.kotoba"
+cp "$REPO_ROOT/test/native/cron_jobs_store_runtime_gate.kotoba" "$OUT_DIR/src/gate/cron_jobs_store_runtime_gate.kotoba"
+git -C "$KOTOBA_REPO" show "$KOTOBA_COMMIT:$KOTOBA_JCS_PATH" > "$OUT_DIR/src/jcs/reader.kotoba"
+git -C "$KOTOBA_REPO" show "$KOTOBA_COMMIT:$KOTOBA_STORE_IO_PATH" > "$OUT_DIR/src/hata/store_io.kotoba"
+
+GATE="$OUT_DIR/src/gate/cron_jobs_json_gate.kotoba"
+STORE_GATE="$OUT_DIR/src/gate/cron_jobs_store_runtime_gate.kotoba"
+STORE_IO="$OUT_DIR/src/hata/store_io.kotoba"
+SOURCE="$OUT_DIR/src/itonami/cron_jobs_json.kotoba"
+STORE="$OUT_DIR/src/itonami/cron_jobs_store.kotoba"
+SCHEDULE="$OUT_DIR/src/itonami/schedule.kotoba"
+JCS="$OUT_DIR/src/jcs/reader.kotoba"
+GATE_SHA256=$(shasum -a 256 "$GATE" | cut -d ' ' -f 1)
+STORE_GATE_SHA256=$(shasum -a 256 "$STORE_GATE" | cut -d ' ' -f 1)
+STORE_IO_SHA256=$(shasum -a 256 "$STORE_IO" | cut -d ' ' -f 1)
+SOURCE_SHA256=$(shasum -a 256 "$SOURCE" | cut -d ' ' -f 1)
+STORE_SHA256=$(shasum -a 256 "$STORE" | cut -d ' ' -f 1)
+SCHEDULE_SHA256=$(shasum -a 256 "$SCHEDULE" | cut -d ' ' -f 1)
+JCS_SHA256=$(shasum -a 256 "$JCS" | cut -d ' ' -f 1)
+if [ "$JCS_SHA256" != "$EXPECTED_JCS_SHA256" ] || [ "$STORE_IO_SHA256" != "$EXPECTED_STORE_IO_SHA256" ]; then
+  printf 'unexpected pinned Kotoba library source digest: JCS=%s store-io=%s\n' "$JCS_SHA256" "$STORE_IO_SHA256" >&2
+  exit 2
+fi
+
+JSON_LOCK="$OUT_DIR/json-source.ksl"
+printf 'KSL2\nentry %s\nmodule hata.store-io %s\nmodule itonami.cron-jobs-json %s\nmodule itonami.cron-jobs-json-gate %s\nmodule itonami.cron-jobs-store %s\nmodule itonami.schedule %s\nmodule jcs.reader %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\n' \
+  "$GATE" "$STORE_IO" "$SOURCE" "$GATE" "$STORE" "$SCHEDULE" "$JCS" \
+  "$GATE_SHA256" "$GATE" "$STORE_IO_SHA256" "$STORE_IO" "$SOURCE_SHA256" "$SOURCE" "$STORE_SHA256" "$STORE" "$SCHEDULE_SHA256" "$SCHEDULE" "$JCS_SHA256" "$JCS" \
+  > "$JSON_LOCK"
+LOCK_SHA256=$(shasum -a 256 "$JSON_LOCK" | cut -d ' ' -f 1)
+PROGRAM="$OUT_DIR/cron-jobs-json-gate"
+COMPILE_RESULT=$("$AMU_CLI" compile "$GATE" --source-lock "$JSON_LOCK" -o "$PROGRAM")
+codesign --verify --strict "$PROGRAM"
+"$PROGRAM"
+
+STORE_PROGRAM="$OUT_DIR/cron-jobs-store-runtime-gate"
+STORE_LOCK="$OUT_DIR/store-source.ksl"
+printf 'KSL2\nentry %s\nmodule hata.store-io %s\nmodule itonami.cron-jobs-json %s\nmodule itonami.cron-jobs-store %s\nmodule itonami.cron-jobs-store-runtime-gate %s\nmodule itonami.schedule %s\nmodule jcs.reader %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\n' \
+  "$STORE_GATE" "$STORE_IO" "$SOURCE" "$STORE" "$STORE_GATE" "$SCHEDULE" "$JCS" \
+  "$STORE_GATE_SHA256" "$STORE_GATE" "$STORE_IO_SHA256" "$STORE_IO" "$SOURCE_SHA256" "$SOURCE" "$STORE_SHA256" "$STORE" "$SCHEDULE_SHA256" "$SCHEDULE" "$JCS_SHA256" "$JCS" \
+  > "$STORE_LOCK"
+STORE_LOCK_SHA256=$(shasum -a 256 "$STORE_LOCK" | cut -d ' ' -f 1)
+STORE_COMPILE_RESULT=$("$AMU_CLI" compile "$STORE_GATE" --source-lock "$STORE_LOCK" \
+  --runtime-profile amu-command-fs35 -o "$STORE_PROGRAM")
+codesign --verify --strict "$STORE_PROGRAM"
+SCOPE="$OUT_DIR/store-runtime-scope"
+mkdir -m 700 -p "$SCOPE/d"
+printf '%s' '{"jobs":[{"id":"remove-me","keep":1},{"id":"stay","future":1.25e+7}],"unknown":{"n":-0.0001},"updated_at":"old"}' \
+  > "$SCOPE/d/jobs.json"
+"$STORE_PROGRAM" /d positive 3< "$SCOPE"
+EXPECTED_STORE='{"jobs":[{"id":"stay","future":1.25e+7}],"unknown":{"n":-0.0001},"updated_at":"2026-11-02T03:04:05.006Z"}'
+ACTUAL_STORE=$(cat "$SCOPE/d/jobs.json")
+if [ "$ACTUAL_STORE" != "$EXPECTED_STORE" ] || [ -e "$SCOPE/d/.jobs.json.tmp" ]; then
+  printf '%s\n' "store positive runtime result or cleanup mismatch" >&2
+  exit 1
+fi
+REFUSAL_SCOPE="$OUT_DIR/store-runtime-refusal-scope"
+mkdir -m 700 -p "$REFUSAL_SCOPE/d"
+printf '%s' '{"jobs":' > "$REFUSAL_SCOPE/d/jobs.json"
+"$STORE_PROGRAM" /d refuse 3< "$REFUSAL_SCOPE"
+if [ "$(cat "$REFUSAL_SCOPE/d/jobs.json")" != '{"jobs":' ] || [ -e "$REFUSAL_SCOPE/d/.jobs.json.tmp" ]; then
+  printf '%s\n' "store refusal modified invalid source or left a temp file" >&2
+  exit 1
+fi
+
+PROGRAM_SHA256=$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)
+PROGRAM_BYTES=$(wc -c < "$PROGRAM" | tr -d ' ')
+SOURCE_REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)
+{
+  printf 'format: itonami.cron-jobs-json-native-gate.v1\n'
+  printf 'itonami_source_revision: %s\n' "$SOURCE_REVISION"
+  printf 'kotoba_source_commit: %s\n' "$KOTOBA_COMMIT"
+  printf 'kotoba_jcs_source_sha256: %s\n' "$JCS_SHA256"
+  printf 'kotoba_store_io_source_sha256: %s\n' "$STORE_IO_SHA256"
+  printf 'amu_cli_commit: %s\n' "$AMU_CLI_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$AMU_CLI_SHA256"
+  printf 'adapter_source_sha256: %s\n' "$SOURCE_SHA256"
+  printf 'store_source_sha256: %s\n' "$STORE_SHA256"
+  printf 'schedule_source_sha256: %s\n' "$SCHEDULE_SHA256"
+  printf 'test_gate_source_sha256: %s\n' "$GATE_SHA256"
+  printf 'json_source_lock_sha256: %s\n' "$LOCK_SHA256"
+  printf 'program_sha256: %s\n' "$PROGRAM_SHA256"
+  printf 'program_bytes: %s\n' "$PROGRAM_BYTES"
+  printf 'compile_result: %s\n' "$COMPILE_RESULT"
+  printf 'store_runtime_profile: amu-command-fs35\n'
+  printf 'store_runtime_source_lock_sha256: %s\n' "$STORE_LOCK_SHA256"
+  printf 'store_runtime_artifact_sha256: %s\n' "$(shasum -a 256 "$STORE_PROGRAM" | cut -d ' ' -f 1)"
+  printf 'store_runtime_compile_result: %s\n' "$STORE_COMPILE_RESULT"
+  printf 'store_runtime_positive_refusal: PASS\n'
+  printf 'codesign_verification: PASS\n'
+  printf 'native_positive_refusal_gate: PASS\n'
+  printf 'scope: standalone native positive/refusal gate for Kotoba JSON transforms, UTC timestamp formatting, and deterministic cron-store filesystem effects; clock wire and launcher route qualification remain open\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"
