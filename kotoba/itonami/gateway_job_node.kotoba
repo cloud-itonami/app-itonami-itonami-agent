@@ -1,0 +1,40 @@
+;; Native composition adapter: a verified cron envelope becomes one existing
+;; Murakumo agent-step job. The pinned schedule, previous cursor and file paths
+;; are trusted host configuration, not checkpoint or model instructions.
+;;
+;; Compose after itonami.schedule, gateway_trigger and Murakumo's
+;; fleet_job_node (including its private jn-run-with-source seam). Arguments
+;; 1..18 are the existing job-node run arguments; argument 0 is run-cron.
+;; 19 = last durably admitted slot in ms; 20 = pinned schedule CID;
+;; 21 = definition path; 22 = source path. Argument 9 must be "clock".
+;; The host must persist and reconcile the cursor, source and attempt outcome;
+;; this entry point does not claim a slot, grant effects or resolve UNKNOWN.
+(ns itonami.gateway-job-node (:export [cron-job-node-main]))
+
+(defn- cj-problem [now :i64 previous :i64 pin :string definition :vector-i64
+                  profile :string input :string policy :string rail :string
+                  wrapper :vector-i64 source :vector-i64] :string
+  (let [job (jn-bytes (job-text profile input policy rail))
+        id (job-id profile input policy rail)]
+    (cron-consume-problem true now previous pin definition id job wrapper source)))
+
+(defn- cj-read [path :string] :vector-i64 (jn-bytes (typed-cap-call 35 :string :string path)))
+(defn- cj-exists? [path :string] :bool
+  (= (typed-cap-call 35 :string :string (str path "EXISTS_SEP")) "1"))
+
+(defn cron-job-node-main [] :i64
+  (let [previous (jn-int (jn-arg 19)) pin (jn-arg 20) defpath (jn-arg 21)
+        srcpath (jn-arg 22) inpath (jn-arg 16)]
+    (cond (not (= (jn-arg 0) "run-cron")) (let [x (jn-say "cron/command-refused")] 2)
+          (not (= (jn-arg 9) "clock")) (let [x (jn-say "cron/clock-required")] 2)
+          (or (not (jn-attempt-root? defpath)) (not (jn-attempt-root? srcpath))
+              (not (jn-attempt-root? inpath)) (not (cj-exists? defpath))
+              (not (cj-exists? srcpath)) (not (cj-exists? inpath)))
+          (let [x (jn-say "cron/input-unavailable")] 2)
+          :else
+          (let [now (ln-now "clock") definition (cj-read defpath) source (cj-read srcpath)
+                wrapper (cj-read inpath)
+                problem (cj-problem now previous pin definition (jn-arg 1) (jn-arg 2)
+                                    (jn-arg 3) (jn-arg 4) wrapper source)]
+            (if (not (= problem "consume/ok")) (let [x (jn-say problem)] 2)
+              (jn-run-with-source (string-from-utf8 (bytes-from-vector-i64 source)) true))))))
