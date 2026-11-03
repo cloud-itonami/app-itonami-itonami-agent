@@ -1,0 +1,92 @@
+#!/bin/sh
+# Build the Kotoba schedule CLI as a standalone native program with the
+# Amu-native project CLI. Output stays in a new workspace directory.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-native-cli> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+AMU_CLI=$1
+OUT_DIR=$2
+EXPECTED_AMU_CLI_SHA256=16cbef76292013eae7c2324624ed5d76dd6e890acdba1f3537998d2690bc4896
+EXPECTED_CLI_SOURCE_SHA256=92d8a25d028e63b8486022eb91984c3e7097278537f3b2e9cef277290b630dd4
+EXPECTED_SCHEDULE_SOURCE_SHA256=e2420621185bd94dd1ff16cd5d9dc993abb0888b23dbf1f3e123540ea5675e5c
+AMU_CLI_COMMIT=49dccb68f1a6ef9aece7e9de30bf6224687d06fc
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$AMU_CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$AMU_CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $AMU_CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+AMU_CLI_SHA256=$(shasum -a 256 "$AMU_CLI" | cut -d ' ' -f 1)
+if [ "$AMU_CLI_SHA256" != "$EXPECTED_AMU_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected Amu CLI digest: $AMU_CLI_SHA256" >&2
+  exit 2
+fi
+
+CLI_SOURCE="$REPO_ROOT/kotoba/agent_cli/cron_schedule_cli.kotoba"
+SCHEDULE_SOURCE="$REPO_ROOT/kotoba/itonami/schedule.kotoba"
+CLI_SOURCE_SHA256=$(shasum -a 256 "$CLI_SOURCE" | cut -d ' ' -f 1)
+SCHEDULE_SOURCE_SHA256=$(shasum -a 256 "$SCHEDULE_SOURCE" | cut -d ' ' -f 1)
+if [ "$CLI_SOURCE_SHA256" != "$EXPECTED_CLI_SOURCE_SHA256" ]; then
+  printf '%s\n' "unexpected cron CLI source digest: $CLI_SOURCE_SHA256" >&2
+  exit 2
+fi
+if [ "$SCHEDULE_SOURCE_SHA256" != "$EXPECTED_SCHEDULE_SOURCE_SHA256" ]; then
+  printf '%s\n' "unexpected schedule source digest: $SCHEDULE_SOURCE_SHA256" >&2
+  exit 2
+fi
+
+mkdir -p "$OUT_DIR/src/agent_cli" "$OUT_DIR/src/itonami"
+cp "$CLI_SOURCE" "$OUT_DIR/src/agent_cli/cron_schedule_cli.kotoba"
+cp "$SCHEDULE_SOURCE" "$OUT_DIR/src/itonami/schedule.kotoba"
+ENTRY="$OUT_DIR/src/agent_cli/cron_schedule_cli.kotoba"
+SCHEDULE="$OUT_DIR/src/itonami/schedule.kotoba"
+printf 'KSL2\nentry %s\nmodule agent-cli-cron-schedule %s\nmodule itonami.schedule %s\nfile %s %s\nfile %s %s\n' \
+  "$ENTRY" "$ENTRY" "$SCHEDULE" \
+  "$CLI_SOURCE_SHA256" "$ENTRY" "$SCHEDULE_SOURCE_SHA256" "$SCHEDULE" \
+  > "$OUT_DIR/schedule.ksl"
+LOCK_SHA256=$(shasum -a 256 "$OUT_DIR/schedule.ksl" | cut -d ' ' -f 1)
+PROGRAM="$OUT_DIR/cron-schedule-cli"
+COMPILE_RESULT=$("$AMU_CLI" compile "$ENTRY" --source-lock "$OUT_DIR/schedule.ksl" \
+  --runtime-profile amu-command -o "$PROGRAM")
+codesign --verify --strict "$PROGRAM"
+PROGRAM_SHA256=$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)
+PROGRAM_BYTES=$(wc -c < "$PROGRAM" | tr -d ' ')
+SOURCE_REVISION=$(git -C "$REPO_ROOT" rev-parse HEAD)
+
+{
+  printf 'format: itonami.cron-schedule-cli.selfhost-build.v1\n'
+  printf 'source_revision: %s\n' "$SOURCE_REVISION"
+  printf 'amu_cli_commit: %s\n' "$AMU_CLI_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$AMU_CLI_SHA256"
+  printf 'cli_source_sha256: %s\n' "$CLI_SOURCE_SHA256"
+  printf 'schedule_source_sha256: %s\n' "$SCHEDULE_SOURCE_SHA256"
+  printf 'ksl2_sha256: %s\n' "$LOCK_SHA256"
+  printf 'program_sha256: %s\n' "$PROGRAM_SHA256"
+  printf 'program_bytes: %s\n' "$PROGRAM_BYTES"
+  printf 'compile_result: %s\n' "$COMPILE_RESULT"
+  printf 'runtime_profile: amu-command (stdio only; no FS35 helper)\n'
+  printf 'codesign_verification: PASS\n'
+  printf 'qualification: standalone native candidate; not packaged or runtime-qualified\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"

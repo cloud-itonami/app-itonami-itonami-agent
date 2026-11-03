@@ -22,8 +22,8 @@
   position."
   (:require [itonami.notepad-core :as core]
             [itonami.journal-core :as jc])
-  (:export [note-path note-stored-key notepad-set notepad-get notepad-delete
-            notepad-clear])
+  (:export [note-path note-stored-key notepad-set notepad-set-at notepad-get notepad-delete
+            notepad-clear notepad-has])
   (:capabilities #{:fs/app-data :hash/sha256 :fs/browse}))
 
 (def max-job-total-bytes 65536)
@@ -60,17 +60,11 @@
                                                ".txt"))))
 
 (defn note-stored-key [path :string] :string
-  ;; the entry's first line -- the stored key -- so a listing recovers keys
-  ;; from the hash-named files. Empty when the file is absent or holds no
-  ;; line break (a malformed entry lists as no key).
+  ;; Decode the stored key from either the legacy entry or KNP1 record.
   (if (= 0 (exists? path))
     ""
     (let [content (wire-read path)]
-      (let [i (string-index-of content "
-")]
-        (if (< i 0)
-          ""
-          (string-substring content 0 i))))))
+        (core/entry-key-any content))))
 
 (defn- entry-name [line :string] :string
   (jc/piece line "	" 0))
@@ -88,7 +82,7 @@
 
 (defn- other-bytes-run [base :string skip :string listing :string i :i64 n :i64 acc :i64] :i64
   ;; the store's bytes excluding the upsert target's file -- the SQL
-  ;; SUM(LENGTH(key)+LENGTH(value)) WHERE key<>? shape over file contents.
+  ;; SUM(UTF8_BYTES(key)+UTF8_BYTES(value)) WHERE key<>? shape.
   (if (>= i n)
     acc
     (let [name (entry-name (jc/piece listing "
@@ -96,8 +90,11 @@
       (let [acc2 (if (= 1 (note-file? name))
                    (if (string=? name skip)
                      acc
-                     (let [c (wire-read (string-concat base (string-concat "/" name)))]
-                       (+ acc (string-length c))))
+                     (let [content (wire-read (string-concat base (string-concat "/" name)))]
+                       (let [key (core/entry-key-any content)]
+                         (if (= 0 (core/key-ok key))
+                           (+ acc 65537)
+                           (+ acc (core/entry-bytes key (core/entry-value-any content)))))))
                    acc)]
         (other-bytes-run base skip listing (+ i 1) n acc2)))))
 
@@ -108,44 +105,52 @@
       (other-bytes-run base skip listing 0 (jc/count-pieces listing "
 ") 0))))
 
-(defn notepad-set [base :string key :string value :string] :i64
+(defn notepad-set-at [base :string key :string value :string updated-at :string] :i64
   (if (= 0 (core/key-ok key))
     0
     (if (= 0 (core/value-ok value))
       0
-      (let [p (note-path base key)]
-        (let [skip (string-concat "n" (string-concat (core/hex-encode (wire-hash key)) ".txt"))
-              entry (+ (string-length key) (string-length value))
-              others (other-bytes base skip)]
-          (if (> (+ others entry) max-job-total-bytes)
-            0
-            (let [r (wire-write p (core/entry-encode key value))]
-              1)))))))
+      (if (= 0 (core/timestamp-ok updated-at))
+        0
+        (let [p (note-path base key)]
+          (let [skip (string-concat "n" (string-concat (core/hex-encode (wire-hash key)) ".txt"))
+                entry (core/entry-bytes key value)
+                others (other-bytes base skip)]
+            (if (> (+ others entry) max-job-total-bytes)
+              0
+              (let [encoded (core/entry-encode-v1 updated-at key value)]
+                (let [written (wire-write p encoded)]
+                  (if (string=? written encoded) 1 0))))))))))
+
+(defn notepad-set [base :string key :string value :string] :i64
+  ;; Compatibility wrapper for pure probes; product CLI supplies host time.
+  (notepad-set-at base key value "1970-01-01T00:00:00Z"))
 
 (defn notepad-get [base :string key :string] :string
   (let [p (note-path base key)]
     (if (= 0 (exists? p))
       ""
       (let [content (wire-read p)]
-        (let [i (string-index-of content "
-")]
-          (if (< i 0)
-            ""
-            (let [stored (string-substring content 0 i)]
-              (if (string=? stored key)
-                (string-substring content (+ i 1) (string-length content))
-                ""))))))))
+        (if (string=? (core/entry-key-any content) key)
+          (core/entry-value-any content)
+          "")))))
+
+(defn notepad-has [base :string key :string] :i64
+  ;; Preserve the legacy distinction between an empty stored value and a
+  ;; missing key. Callers that need the value use notepad-get separately.
+  (exists? (note-path base key)))
 
 (defn- clear-run [base :string listing :string i :i64 n :i64 acc :i64] :i64
   ;; every key file unlinked -- the job reset cron performs between runs.
   (if (>= i n)
     acc
     (let [name (entry-name (jc/piece listing "\n" i))]
-      (let [acc2 (if (= 1 (note-file? name))
-                   (let [u (wire-unlink (string-concat base (string-concat "/" name)))]
-                     (+ acc 1))
-                   acc)]
-        (clear-run base listing (+ i 1) n acc2)))))
+      (if (= 1 (note-file? name))
+        (let [removed (wire-unlink (string-concat base (string-concat "/" name)))]
+          (if (string=? removed "1")
+            (clear-run base listing (+ i 1) n (+ acc 1))
+            -1))
+        (clear-run base listing (+ i 1) n acc)))))
 
 (defn notepad-clear [base :string] :i64
   (let [listing (wire-browse base)]
@@ -158,4 +163,4 @@
     (if (= 0 (exists? p))
       0
       (let [r (wire-unlink p)]
-        1))))
+        (if (string=? r "1") 1 -1)))))

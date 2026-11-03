@@ -1,0 +1,98 @@
+(ns agent-cli-cron-schedule
+  "A native, pure schedule parser surface for cron jobs. It covers interval,
+  relative-duration, natural weekday/time, and five-field cron forms. Absolute
+  ISO-time parsing remains a named refusal until its date semantics are
+  ported. The normalized output is an intermediate contract for cron create."
+  (:require [itonami.schedule :as schedule])
+  (:export [cron-schedule-cli cron-next-run-cli main])
+  (:capabilities #{:cli/args :io/write :io/write-error}))
+
+(defn- wire-arg [i :i64] :string
+  (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- wire-say [s :string] :string
+  (typed-cap-call :io/write :string :string s))
+
+(defn- wire-die [s :string] :string
+  (typed-cap-call :io/write-error :string :string s))
+
+(defn- say-line [s :string] :i64
+  (let [w (wire-say (string-concat s "\n"))]
+    0))
+
+(defn- fail [schedule-text :string] :i64
+  (let [w (wire-die (string-concat "cron: unsupported or invalid schedule: " schedule-text))]
+    2))
+
+(defn- decimal-run [s :string i :i64 end :i64 acc :i64] :i64
+  (if (>= i end) acc
+    (let [c (string-code-point-at s i)]
+      (if (or (< c 48) (> c 57)) -1
+        (let [d (- c 48)]
+          (if (or (> acc 922337203685477580)
+                  (and (= acc 922337203685477580) (> d 7))) -1
+            (recur s (inc i) end (+ (* acc 10) d))))))))
+
+(defn- decimal-i64 [s :string] :i64
+  (let [n (string-length s)]
+    (if (or (< n 1) (> n 19)) -1
+      (decimal-run s 0 n 0))))
+
+(defn- offset-minutes [s :string] :i64
+  (let [n (string-length s)]
+    (if (< n 1) 10000
+      (let [first (string-code-point-at s 0)
+            signed? (or (= first 43) (= first 45))
+            magnitude (decimal-i64 (if signed? (string-substring s 1 n) s))]
+        (if (or (< magnitude 0) (> magnitude 840)) 10000
+          (if (= first 45) (- magnitude) magnitude))))))
+
+(defn- next-run-ms [schedule-text :string after-ms :i64 offset :i64] :i64
+  (let [form (schedule/parse-schedule-form schedule-text)
+        split (string-index-of form "\n")]
+    (if (< split 0) -2
+      (let [kind (string-substring form 0 split)
+            value (string-substring form (inc split) (string-length form))]
+        (cond
+          (or (= kind "interval") (= kind "once-after"))
+            (let [minutes (decimal-i64 value)]
+              (if (< minutes 1) -2 (schedule/next-interval-ms after-ms minutes)))
+          (= kind "once-at")
+            (let [run-at (decimal-i64 value)]
+              (if (< run-at 0) -2 (schedule/next-once-ms run-at after-ms)))
+          (= kind "cron")
+            (if (= (schedule/cron-problem value) "schedule/ok")
+              (schedule/next-cron-ms value after-ms offset)
+              -2)
+          :else -2)))))
+
+(defn- next-run-output [schedule-text :string after-text :string offset-text :string] :i64
+  (let [after-ms (decimal-i64 after-text)
+        offset (offset-minutes offset-text)]
+    (if (or (< after-ms 0) (> offset 840) (< offset -840))
+      (fail "expected schedule, epoch-ms, and UTC offset minutes")
+      (let [next-ms (next-run-ms schedule-text after-ms offset)]
+        (if (= next-ms -2) (fail schedule-text)
+          (say-line (string-from-i64 next-ms)))))))
+
+(defn cron-next-run-cli [] :i64
+  ;; argv: 0 schedule text, 1 nonnegative epoch milliseconds, 2 UTC offset minutes.
+  (next-run-output (wire-arg 0) (wire-arg 1) (wire-arg 2)))
+
+(defn cron-schedule-cli [] :i64
+  (let [input (wire-arg 0)
+        form (schedule/parse-schedule-form input)
+        split (string-index-of form "\n")]
+    (if (< split 0) (fail input)
+      (let [kind (string-substring form 0 split)
+            value (string-substring form (inc split) (string-length form))]
+        (cond (= kind "interval") (say-line (string-concat "interval " value))
+              (= kind "once-after") (say-line (string-concat "once-after " value))
+              (= kind "once-at") (say-line (string-concat "once-at " value))
+              (= kind "cron") (say-line (string-concat "cron " value))
+              :else (fail input))))))
+
+(defn main [] :i64
+  (if (string=? (wire-arg 0) "--next-run")
+    (next-run-output (wire-arg 1) (wire-arg 2) (wire-arg 3))
+    (cron-schedule-cli)))

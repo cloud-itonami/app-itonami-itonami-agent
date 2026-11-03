@@ -9,7 +9,8 @@
   (the SQLite store allowed it -- a documented narrowing, matching the journal
   line discipline). Self-contained: only native-qualified ops
   (string-length / byte-length / substring / concat / code-point-at / =)."
-  (:export [key-ok value-ok entry-encode entry-value entry-bytes hex2 hex-encode
+  (:export [key-ok value-ok timestamp-ok entry-encode entry-encode-v1 entry-key-any
+            entry-updated-at-any entry-value-any entry-value entry-bytes hex2 hex-encode
             test-key-ok test-value-ok test-entry test-hex]))
 
 (defn- token-in [s :string token :string] :bool
@@ -34,6 +35,11 @@
 
 (defn value-ok [value :string] :i64
   (if (> (string-byte-length value) 16384) 0 1))
+
+(defn timestamp-ok [value :string] :i64
+  (if (= 0 (string-length value)) 0
+    (if (>= (string-index-of value "
+") 0) 0 1)))
 
 (defn entry-encode [key :string value :string] :string
   (string-concat key (string-concat "
@@ -89,3 +95,56 @@ v" (entry-encode "k" "v"))
   (and (string=? "41" (hex2 65))
        (string=? "6162" (hex-encode "ab"))
        (string=? "" (hex-encode ""))))
+
+(defn entry-encode-v1 [updated-at :string key :string value :string] :string
+  ;; Shared record: magic, timestamp, key, then the unmodified value tail.
+  ;; key-ok refuses LF so the two delimiters are unambiguous.
+  (string-concat "KNP1
+"
+    (string-concat updated-at
+      (string-concat "
+"
+        (string-concat key (string-concat "
+" value))))))
+
+(defn- v1-entry? [entry :string] :i64
+  (if (< (string-length entry) 5) 0
+    (if (string=? (string-substring entry 0 5) "KNP1
+") 1 0)))
+
+(defn- v1-timestamp-end [entry :string] :i64
+  (let [n (string-length entry)]
+    (if (= 0 (v1-entry? entry)) -1
+      (let [i (string-index-of (string-substring entry 5 n) "
+")]
+        (if (< i 0) -1 (+ 5 i))))))
+
+(defn entry-updated-at-any [entry :string] :string
+  (let [i (v1-timestamp-end entry)]
+    (if (< i 0) "" (string-substring entry 5 i))))
+
+(defn entry-key-any [entry :string] :string
+  (let [n (string-length entry)]
+    (if (= 0 (v1-entry? entry))
+      (let [i (string-index-of entry "
+")]
+        (if (< i 0) "" (string-substring entry 0 i)))
+      (let [timestamp-end (v1-timestamp-end entry)]
+        (if (< timestamp-end 0) ""
+          (let [key-start (+ timestamp-end 1)]
+            (let [i (string-index-of (string-substring entry key-start n) "
+")]
+              (if (< i 0) "" (string-substring entry key-start (+ key-start i))))))))))
+
+(defn entry-value-any [entry :string] :string
+  (let [n (string-length entry)]
+    (if (= 0 (v1-entry? entry))
+      (let [i (string-index-of entry "
+")]
+        (if (< i 0) "" (string-substring entry (+ i 1) n)))
+      (let [timestamp-end (v1-timestamp-end entry)]
+        (if (< timestamp-end 0) ""
+          (let [key-start (+ timestamp-end 1)]
+            (let [i (string-index-of (string-substring entry key-start n) "
+")]
+              (if (< i 0) "" (string-substring entry (+ key-start i 1) n)))))))))

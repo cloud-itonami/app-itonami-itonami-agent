@@ -1,0 +1,41 @@
+(ns itonami.cron-jobs-store-clock-gate
+  (:require [itonami.cron-jobs-store :as store])
+  (:export [main])
+  (:capabilities [:cli/args :clock/now :fs/app-data]))
+
+(defn- digit? [cp :i64] :bool (and (>= cp 48) (<= cp 57)))
+
+(defn- utc-iso-shape? [value :string] :bool
+  (and (= (string-length value) 24)
+       (= (string-code-point-at value 4) 45)
+       (= (string-code-point-at value 7) 45)
+       (= (string-code-point-at value 10) 84)
+       (= (string-code-point-at value 13) 58)
+       (= (string-code-point-at value 16) 58)
+       (= (string-code-point-at value 19) 46)
+       (= (string-code-point-at value 23) 90)
+       (loop [i 0]
+         (if (= i 24) true
+           (if (or (= i 4) (= i 7) (= i 10) (= i 13) (= i 16) (= i 19) (= i 23))
+             (recur (inc i))
+             (and (digit? (string-code-point-at value i)) (recur (inc i))))))))
+
+(defn- positive-output? [output :string] :bool
+  (let [prefix "{\"jobs\":[{\"id\":\"stay\",\"future\":1.25e+7}],\"unknown\":{\"n\":-0.0001},\"updated_at\":\""
+        suffix "\"}"
+        start (string-length prefix)
+        end (- (string-length output) (string-length suffix))]
+    (and (>= end start)
+         (= (string-substring output 0 start) prefix)
+         (= (string-substring output end (string-length output)) suffix)
+         (utc-iso-shape? (string-substring output start end)))))
+
+(defn main [] :i64
+  (let [dir (typed-cap-call :cli/args :string :string "0")
+        mode (typed-cap-call :cli/args :string :string "1")
+        result (store/remove-job dir "remove-me")]
+    (if (= mode "refuse")
+      (if (result-ok?-of [:result :string :string] result) 1 0)
+      (if (and (result-ok?-of [:result :string :string] result)
+               (positive-output? (result-value-of [:result :string :string] result "")))
+        0 1))))

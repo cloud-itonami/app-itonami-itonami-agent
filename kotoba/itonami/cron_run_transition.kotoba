@@ -1,0 +1,33 @@
+;; Pure state decisions from src/itonami/agent/cron.cljk/record-run-state!.
+;; This module encodes decisions as i64/bool values. The Amu native export ABI
+;; also accepts string and vector-i64; keyword and document exports are refused.
+;; kind: 0=once, 1=cron, 2=interval, 3=other. State: 0=scheduled/other,
+;; 1=paused, 2=completed, 3=removed. Status: 0=ok, 1=delivery_failed,
+;; 2=error. Action: 0=keep, 1=error, 2=completed.
+(ns itonami.cron-run-transition
+  (:require [itonami.schedule :as schedule])
+  (:export [cron-job-active? cron-job-due? cron-run-terminal? cron-run-next-error?
+            cron-run-status cron-run-state-action cron-run-failure-streak]))
+
+(defn cron-job-active? [enabled :bool state :i64] :bool
+  (and enabled (not (= state 1)) (not (= state 2)) (not (= state 3))))
+
+(defn cron-job-due? [enabled :bool state :i64 next-ms :i64 now-ms :i64] :bool
+  (schedule/due? (cron-job-active? enabled state) next-ms now-ms))
+
+(defn cron-run-terminal? [kind :i64 repeat-times :i64 completed-next :i64
+                          has-next :bool] :bool
+  (or (and (> repeat-times 0) (>= completed-next repeat-times))
+      (and (= kind 0) (not has-next))))
+
+(defn cron-run-next-error? [kind :i64 has-next :bool] :bool
+  (and (or (= kind 1) (= kind 2)) (not has-next)))
+
+(defn cron-run-status [failed :bool delivery-error :bool] :i64
+  (if failed 2 (if delivery-error 1 0)))
+
+(defn cron-run-state-action [terminal :bool next-error :bool] :i64
+  (if terminal 2 (if next-error 1 0)))
+
+(defn cron-run-failure-streak [failed :bool failure-streak :i64] :i64
+  (if failed (+ failure-streak 1) 0))
