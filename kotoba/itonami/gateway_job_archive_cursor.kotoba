@@ -3,7 +3,7 @@
 ;; The host must provide a globally serialized writer and exclusive ownership
 ;; of the cursor, definition, block store and fresh archive work directory.
 ;; This source does not itself provide receiver-side fencing or a governor.
-(ns itonami.gateway-job-archive-cursor (:export [cron-job-archive-cursor-main cron-job-archive-head-cursor-main]))
+(ns itonami.gateway-job-archive-cursor (:export [cron-job-archive-cursor-main cron-job-archive-head-cursor-main cron-serialized-job-archive-head-cursor-main]))
 
 (defn- jac-bounded [path :string maximum :i64] :vector-i64
   (let [size (cp-size path)]
@@ -14,7 +14,8 @@
 (defn- jac-cursor-overlap? [path :string cursor :string] :bool
   (or (jo-overlap? path cursor) (jo-overlap? path (str cursor ".pending"))
       (jo-overlap? path (str cursor ".intent")) (jo-overlap? path (str cursor ".last"))
-      (jo-overlap? path (str cursor ".head-intent")) (jo-overlap? path (str cursor ".head-last"))))
+      (jo-overlap? path (str cursor ".head-intent")) (jo-overlap? path (str cursor ".head-last"))
+      (jo-overlap? path (str cursor ".turn-intent")) (jo-overlap? path (str cursor ".turn-last"))))
 
 ;; The output signature is verified separately by jo-archive. Before any
 ;; archive operation, bind its signed receipt fields to the adopted lease.
@@ -57,7 +58,7 @@
 ;; argument 24. A head update can succeed while a later lease or cursor step
 ;; fails: the host must reconcile the independently read-back head and cursor,
 ;; and must not retry an unknown result. CAS is not a lease or sink fence.
-(defn- jac-run [head-cas :bool] :i64
+(defn- jac-run [head-cas :bool serialized :bool] :i64
   (let [work (jn-arg 0) store (jn-arg 1) cid (jn-arg 2) author (jn-arg 3)
         profile (jn-arg 4) policy (jn-arg 5) environment (jn-arg 6) epoch (cp-int (jn-arg 7))
         parent (jn-arg 8) task (jn-arg 9) repo (jn-arg 10) gh (jn-arg 11)
@@ -73,11 +74,13 @@
             (jac-cursor-overlap? store cursor-path) (jo-overlap? store definition-path)
             (jac-cursor-overlap? definition-path cursor-path) (jac-cursor-overlap? token-path cursor-path)
             (or (< ballot 1) (>= ballot 9007199254740991)) (= node "")
-            (and head-cas (or (not (cp-hex? expected 40)) (not (= (jn-arg 25) ""))
+            (and head-cas (or (not (cp-hex? expected 40))
+                              (if serialized (not (= (jn-arg 26) "")) (not (= (jn-arg 25) "")))
                               (>= ballot 9007199254740990)))
             (not (= (cp-fs "D" (str cursor-path ".pending") "") "0"))
             (not (= (cp-fs "D" (str cursor-path ".intent") "") "0"))
-            (not (= (cp-fs "D" (str cursor-path ".head-intent") "") "0")))
+            (not (= (cp-fs "D" (str cursor-path ".head-intent") "") "0"))
+            (and (not serialized) (not (= (cp-fs "D" (str cursor-path ".turn-intent") "") "0"))))
       (let [x (jn-say "cron-job-archive/input-refused")] 2)
       (let [definition (jac-bounded definition-path 8192) cursor (jac-bounded cursor-path 1024)
             now (ln-now "clock") plan (cc-plan-problem definition pin cursor now)
@@ -89,7 +92,10 @@
             receipt-node (if (>= receipt 0) (cp-str proof receipt "node") "")
             ready (and (= plan "trigger/ok") (jn-job-id? job) (not (= token ""))
                        (= profile (gt-str definition "profile")) (= policy (gt-str definition "policy"))
-                       (= receipt-node node) (jo-block? store proof-cid proof))]
+                       (= receipt-node node) (jo-block? store proof-cid proof)
+                       (or (not serialized)
+                           (= (cp-text (jac-bounded (str cursor-path ".turn-intent") 1024))
+                              (cc-turn-text pin cursor job slot (jn-arg 25)))))]
         (if (not ready) (let [x (jn-say "cron-job-archive/plan-refused")] 1)
           (let [chosen (lease-round ballot "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token)
                 before (ln-now "clock") guard (jn-lease-problem chosen node job before)
@@ -119,9 +125,31 @@
                         (not (= final-guard "job/lease-ok")) (not unchanged))
                   (let [x (jn-say "cron-job-archive/head-or-lease-unknown")] 1)
                   (let [result (cc-advance cursor-path cursor pin slot)
-                        complete (and (= result "cursor/advanced") (or (not head-cas) (jac-head-finalize cursor-path)))
-                        x (jn-say (if complete result (if (= result "cursor/advanced") "cursor/head-finalize-unknown" result)))]
+                        complete (and (= result "cursor/advanced") (or (not head-cas) (jac-head-finalize cursor-path))
+                                      (or (not serialized) (cc-turn-finalize cursor-path)))
+                        x (jn-say (if complete result (if (= result "cursor/advanced") "cursor/finalize-unknown" result)))]
                     (if complete 0 1)))))))))))
 
-(defn cron-job-archive-cursor-main [] :i64 (jac-run false))
-(defn cron-job-archive-head-cursor-main [] :i64 (jac-run true))
+(defn cron-job-archive-cursor-main [] :i64 (jac-run false false))
+(defn cron-job-archive-head-cursor-main [] :i64 (jac-run true false))
+
+;; The host supplies the same stable lock path used by the serialized job
+;; entry. The turn marker binds its lexical path, not inode identity. All
+;; writers must honor it, and the host must contain the complete workload.
+(defn- jac-lock-paths? [lock :string work :string store :string cursor :string definition :string token :string gh :string] :bool
+  (and (cp-safe-absolute? lock) (cp-safe-absolute? work) (cp-safe-absolute? store)
+       (cp-safe-absolute? cursor) (cp-safe-absolute? definition) (cp-safe-absolute? token) (cp-safe-absolute? gh)
+       (not (jac-cursor-overlap? lock cursor)) (not (jo-overlap? lock work)) (not (jo-overlap? lock store))
+       (not (jo-overlap? lock definition)) (not (jo-overlap? lock token)) (not (jo-overlap? lock gh))))
+
+(defn cron-serialized-job-archive-head-cursor-main [] :i64
+  (let [lock (jn-arg 25) valid (and (= (jn-arg 26) "")
+                  (jac-lock-paths? lock (jn-arg 0) (jn-arg 1) (jn-arg 20) (jn-arg 18) (jn-arg 22) (jn-arg 11)))
+        meta (if valid (cp-fs "U" lock "") "")]
+    (if (not (and valid (= (cp-meta-field meta 0) "384") (= (cp-meta-field meta 3) "0")))
+      (let [x (jn-say "cron-lock/config-refused")] 2)
+      (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+        (let [x (jn-say "cron-lock/busy-or-unknown")] 1)
+        (let [result (jac-run true true)
+              unlocked (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
+          (if unlocked result (let [x (jn-say "cron-lock/unlock-unknown")] 1)))))))

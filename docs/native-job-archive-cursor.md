@@ -40,7 +40,7 @@ or process fails: the host must quarantine the work and independently
 reconcile GitHub head/archive and the local cursor, without automatic retry.
 
 The separate opt-in `cron-guarded-job-node-main` takes a host-selected cursor
-path at argument 24, checks all three marker names, independently reads the
+path at argument 24, checks all four marker names, independently reads the
 schedule and cursor, and compares the due slot's previous cursor against the
 job arguments before invoking the existing job-node entry. The original
 job-node entry remains callable and does not read the marker. These checks are
@@ -54,12 +54,26 @@ An additional opt-in `cron-serialized-job-node-main` takes a private,
 pre-provisioned lock path at argument 25, checks that it is a mode-0600 regular
 file disjoint from the cursor, input paths and attempt tree, and makes one
 non-retrying flock attempt. It holds that cooperative local lock while invoking
-the guarded job entry, then reports unlock failure as unknown. The host must
-ensure all participating writers use the same stable, non-aliased lock and
-must establish ownership and ACL policy. This entry releases the lock before
-any later archive/head/cursor command: it does not serialize the full turn.
-The parent can die or a child can outlive it, so it is not a qualified process
-lifetime boundary, resource governor, distributed lock or permission to deploy.
+the guarded job entry, first syncing `cursor.turn-intent` with the pinned
+schedule, previous cursor, job, due slot and hash of the lock path. It requires
+captured output and retains the marker on failure or after job completion.
+Planning and other guarded jobs refuse a surviving or unreadable turn marker.
+
+The opt-in `cron-serialized-job-archive-head-cursor-main` takes the same
+lock path at argument 25, reacquires it without polling, checks that the turn
+marker exactly matches its independently derived schedule, cursor, job and
+lock path, and then performs verified archive, head CAS and cursor advancement.
+It retires the head marker and then the turn marker only after the cursor
+advances. The host must capture and verify the job output and checkpoint before
+calling this entry, and reconcile any unknown result. A failure can leave one
+or both markers; no automatic recovery is implemented.
+
+The lock is released between the two entries; the durable marker blocks only
+cooperating paths. The host must ensure every caller uses the same stable,
+non-aliased lock, exclude unguarded entries and establish ownership and ACL
+policy. A lock-path hash does not bind an inode. The parent can die or a child
+can outlive it, so neither entry provides a qualified process lifetime boundary,
+resource governor, distributed lock, sink fence or permission to deploy.
 
 The host supplies and protects all paths, the schedule pin, checkpoint pins,
 signer, authenticated quorum token, node identity, and a fresh archive work

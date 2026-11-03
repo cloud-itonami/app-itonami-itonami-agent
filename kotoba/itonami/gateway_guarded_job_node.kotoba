@@ -14,11 +14,12 @@
       (let [b (cp-range path 0 size)]
         (if (and (= (vector-count b) size) (= (cp-size path) size)) b (vector-alloc 0))))))
 
-(defn- cjg-cursor-problem [pending :string intent :string head :string definition :vector-i64
+(defn- cjg-cursor-problem [pending :string intent :string head :string turn :string definition :vector-i64
                            cursor :vector-i64 pin :string previous :i64 now :i64] :string
   (cond (not (= pending "0")) "cron-guard/pending-unknown"
         (not (= intent "0")) "cron-guard/intent-unknown"
         (not (= head "0")) "cron-guard/head-intent-unknown"
+        (not (= turn "0")) "cron-guard/turn-intent-unknown"
         (not (= (cc-plan-problem definition pin cursor now) "trigger/ok")) "cron-guard/plan-refused"
         (not (= (cp-num cursor 0 "slot") previous)) "cron-guard/cursor-changed"
         :else "cron-guard/ok"))
@@ -29,6 +30,7 @@
         cursor-path (jn-arg 24)]
     (if (or (not (= (jn-arg 0) "run-cron"))
             (if serialized (not (= (jn-arg 26) "")) (not (= (jn-arg 25) "")))
+            (and serialized (not (= (jn-arg 23) "capture-output")))
             (not (cp-safe-absolute? cursor-path)) (not (cp-safe-absolute? definition-path))
             (not (cp-safe-absolute? source-path)) (not (cp-safe-absolute? input-path))
             (not (cp-safe-absolute? attempts))
@@ -40,11 +42,16 @@
       (let [pending (cp-fs "D" (str cursor-path ".pending") "")
             intent (cp-fs "D" (str cursor-path ".intent") "")
             head (cp-fs "D" (str cursor-path ".head-intent") "")
+            turn (cp-fs "D" (str cursor-path ".turn-intent") "")
             definition (cjg-read definition-path 8192) cursor (cjg-read cursor-path 1024)
             now (ln-now "clock")
-            problem (cjg-cursor-problem pending intent head definition cursor pin previous now)]
-        (if (= problem "cron-guard/ok") (cron-job-node-main)
-          (let [x (jn-say problem)] 1))))))
+            problem (cjg-cursor-problem pending intent head turn definition cursor pin previous now)]
+        (if (not (= problem "cron-guard/ok")) (let [x (jn-say problem)] 1)
+          (let [slot (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes"))
+                job (verified-cron-job-id true now previous slot pin definition)
+                marked (if serialized (and (jn-job-id? job) (cc-turn-begin cursor-path pin cursor job slot (jn-arg 25))) true)]
+            (if marked (cron-job-node-main)
+              (let [x (jn-say "cron-guard/turn-intent-unknown")] 1))))))))
 
 ;; The lock is a stable, privately provisioned regular file outside every
 ;; cursor/journal path, the attempt tree and all input paths. All writers must

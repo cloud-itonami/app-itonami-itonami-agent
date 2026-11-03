@@ -15,7 +15,9 @@
       (cc-path-overlap? definition (str cursor ".intent"))
       (cc-path-overlap? definition (str cursor ".last"))
       (cc-path-overlap? definition (str cursor ".head-intent"))
-      (cc-path-overlap? definition (str cursor ".head-last"))))
+      (cc-path-overlap? definition (str cursor ".head-last"))
+      (cc-path-overlap? definition (str cursor ".turn-intent"))
+      (cc-path-overlap? definition (str cursor ".turn-last"))))
 
 (defn- cc-cursor-problem [cursor :vector-i64 pin :string now :i64] :string
   (cond (or (> (vector-count cursor) 1024) (not (json-valid? cursor))
@@ -60,6 +62,20 @@
 
 (defn- cc-cursor [pin :string slot :i64] :vector-i64
   (cp-bytes (str "{\"kind\":\"itonami.cron-cursor/1\",\"schedule\":\"" pin "\",\"slot\":" slot "}")))
+
+;; The whole-turn intent binds the due job and previous cursor. A host must
+;; serialize both entries and reconcile any unknown result; this marker is not
+;; a workload lock, lease, resource reservation or effect fence.
+(defn- cc-turn-text [pin :string cursor :vector-i64 job :string slot :i64 lock :string] :string
+  (str "jti1\n" pin "\n" (cp-cid cursor) "\n" job "\n" slot "\n" (sha256-hex (cp-bytes lock)) "\n"))
+(defn- cc-turn-begin [path :string pin :string cursor :vector-i64 job :string slot :i64 lock :string] :bool
+  (let [intent (str path ".turn-intent")]
+    (and (= (cp-fs "D" intent "") "0")
+         (cp-write intent (cp-bytes (cc-turn-text pin cursor job slot lock)))
+         (= (cp-fs "M" (cp-parent-dir path) "") "1"))))
+(defn- cc-turn-finalize [path :string] :bool
+  (and (= (cp-fs "L" (str path ".turn-intent") (str path ".turn-last")) "1")
+       (= (cp-fs "M" (cp-parent-dir path) "") "1")))
 
 ;; Atomic file replacement is not a multi-host CAS. The separately synced
 ;; intent survives replacement of .pending, including a crash before the
@@ -122,6 +138,8 @@
           (let [x (jn-say "cursor/command-refused")] 2)
           (not (= (cp-fs "D" (str path ".head-intent") "") "0"))
           (let [x (jn-say "cursor/head-intent-unknown")] 1)
+          (not (= (cp-fs "D" (str path ".turn-intent") "") "0"))
+          (let [x (jn-say "cursor/turn-intent-unknown")] 1)
           (= mode "recover")
           (let [cursor (cp-read path) valid (cc-cursor-problem cursor pin (ln-now "clock"))
                 result (if (= valid "cursor/ok") (cc-recover path cursor) "cursor/recovery-unknown")
@@ -145,8 +163,9 @@
             (not (cp-safe-absolute? path)) (cc-definition-overlap? definition-path path)
             (not (cp-exists? definition-path)) (not (cp-exists? path)))
       (let [x (jn-say "cursor/input-unavailable")] 2)
-      (if (not (= (cp-fs "D" (str path ".head-intent") "") "0"))
-        (let [x (jn-say "cursor/head-intent-unknown")] 1)
+      (if (or (not (= (cp-fs "D" (str path ".head-intent") "") "0"))
+              (not (= (cp-fs "D" (str path ".turn-intent") "") "0")))
+        (let [x (jn-say "cursor/turn-or-head-intent-unknown")] 1)
       (let [definition (cp-read definition-path) cursor (cp-read path) now (ln-now "clock")
             plan (cc-plan-problem definition pin cursor now)
             next (if (= plan "trigger/ok") (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes")) -1)]
