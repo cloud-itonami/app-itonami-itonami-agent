@@ -28,6 +28,16 @@ production. See [the isolated cursor fixture](evidence/awai147-cursor-unknown-20
 The rename-response loss window is exercised separately in the
 [intent fixture](evidence/awai147-cursor-intent-20261103/README.md).
 
+For a completed replacement only, `recover DEFINITION PIN CURSOR clock`
+validates the current cursor binding, requires the pending path absent and a
+well-formed intent whose proposed CID matches the current cursor, rechecks
+and syncs the cursor and directory, then retires the intent and syncs again.
+The caller must hold the same writer lock, protect the private directory,
+and independently reconcile the GitHub archive before recovery. An old or
+different cursor, pending path, malformed intent or uncertain filesystem
+response stays unknown. This operation never dispatches or replays a job.
+See the [recovery diagnostic](evidence/awai147-cursor-recovery-20261103/README.md).
+
 Advance itself does not verify GitHub. Its trusted caller must serialize
 writers and only invoke it after independently verified archive readback.
 The write is atomic on a qualified local filesystem, not a multi-host CAS.

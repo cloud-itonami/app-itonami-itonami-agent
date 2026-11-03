@@ -64,14 +64,48 @@
           (not (= (cp-fs "M" dir "") "1")) "cursor/intent-unknown"
           :else "cursor/advanced")))
 
+;; Reconcile only a completed replacement. A pending file, malformed intent,
+;; unreadable state, old cursor or any third value remains UNKNOWN. The host
+;; must hold the same writer lock and independently reconcile archive state.
+(defn- cc-recover [path :string cursor :vector-i64] :string
+  (let [intent (str path ".intent") pending (str path ".pending") dir (cp-parent-dir path)
+        pending-state (cp-fs "D" pending "") intent-state (cp-fs "D" intent "")
+        ;; Bound the read before allocation. Host-owned exclusive access is
+        ;; required because metadata and range read are not an atomic snapshot.
+        bytes (if (and (= intent-state "1") (= (cp-size intent) 125))
+                (cp-range intent 0 125) (vector-alloc 0))
+        ascii (and (= (vector-count bytes) 125)
+                   (loop [i 0]
+                     (if (= i 125) true
+                       (let [b (vector-at bytes i)]
+                         (and (or (= b 10) (and (>= b 32) (<= b 126))) (recur (+ i 1)))))))
+        text (if ascii (cp-text bytes) "")
+        original (if (= (string-length text) 125) (string-substring text 5 64) "")
+        current (cp-cid cursor)]
+    (cond (not (= pending-state "0")) "cursor/recovery-unknown"
+          (not (= intent-state "1")) "cursor/recovery-unknown"
+          (or (not (= (string-length original) 59)) (not (cp-raw? original))
+              (= original current) (not (= text (str "itc1\n" original "\n" current "\n")))) "cursor/recovery-unknown"
+          (not (= (cp-cid (cp-read path)) current)) "cursor/recovery-unknown"
+          (not (= (cp-fs "M" path "") "1")) "cursor/recovery-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/recovery-unknown"
+          (not (= (cp-fs "L" intent (str path ".last")) "1")) "cursor/recovery-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/recovery-unknown"
+          :else "cursor/recovered")))
+
 (defn cron-cursor-main [] :i64
   (let [mode (jn-arg 0) definition-path (jn-arg 1) pin (jn-arg 2) path (jn-arg 3)]
     (cond (= mode "advance") (cron-cursor-advance-main)
           (or (not (jn-attempt-root? definition-path)) (not (jn-attempt-root? path))
               (= definition-path path) (not (cp-exists? definition-path)) (not (cp-exists? path)))
           (let [x (jn-say "cursor/input-unavailable")] 2)
-          (or (not (= mode "plan")) (not (= (jn-arg 4) "clock")))
+          (or (not (or (= mode "plan") (= mode "recover"))) (not (= (jn-arg 4) "clock")))
           (let [x (jn-say "cursor/command-refused")] 2)
+          (= mode "recover")
+          (let [cursor (cp-read path) valid (cc-cursor-problem cursor pin (ln-now "clock"))
+                result (if (= valid "cursor/ok") (cc-recover path cursor) "cursor/recovery-unknown")
+                x (jn-say result)]
+            (if (= result "cursor/recovered") 0 1))
           (not (= (cp-fs "D" (str path ".pending") "") "0"))
           (let [x (jn-say "cursor/pending-unknown")] 1)
           (not (= (cp-fs "D" (str path ".intent") "") "0"))
