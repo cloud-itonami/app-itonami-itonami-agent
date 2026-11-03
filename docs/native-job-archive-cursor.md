@@ -1,7 +1,7 @@
 # Job archive and cron cursor candidate
 
 This candidate composes the current cron cursor with Murakumo job output and
-archive candidate at commit `e41be98` in [PR 583](https://github.com/kotoba-lang/murakumo/pull/583).
+archive sources at merged commit [`d6fbfab`](https://github.com/kotoba-lang/murakumo/commit/d6fbfab289dcfe272121a06b43149251e7651330).
 It derives the job ID and slot from the pinned schedule and current cursor,
 checks the proof's node and the schedule's profile/policy, and learns a live
 job lease before archiving. The signed receipt's node and epoch must match the
