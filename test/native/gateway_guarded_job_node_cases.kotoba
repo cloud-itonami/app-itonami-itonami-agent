@@ -5,7 +5,10 @@
   (let [definition (test-definition "* * * * *" "guard-test" 540)
         pin (test-pin definition) now 1792638000000 previous (- now 60000)
         cursor (cc-cursor pin previous)]
-    (and (= (cjg-cursor-problem "0" "0" "0" "0" definition cursor pin previous now) "cron-guard/ok")
+    (and (cjg-bytes-same? [65 195 169] (jn-bytes (string-from-utf8 (bytes-from-vector-i64 [65 195 169]))))
+         (not (cjg-bytes-same? [65 195 169] [65 195 168]))
+         (not (cjg-bytes-same? [65 195] [65 195 169]))
+         (= (cjg-cursor-problem "0" "0" "0" "0" definition cursor pin previous now) "cron-guard/ok")
          (cjg-lock-paths? "/p/cron.lock" "/p/cursor" "/p/definition" "/p/source" "/p/input" "/p/attempts")
          (not (cjg-lock-paths? "/p/cursor.head-intent" "/p/cursor" "/p/definition" "/p/source" "/p/input" "/p/attempts"))
          (not (cjg-lock-paths? "/p/attempts/lock" "/p/cursor" "/p/definition" "/p/source" "/p/input" "/p/attempts"))

@@ -42,7 +42,10 @@ reconcile GitHub head/archive and the local cursor, without automatic retry.
 The separate opt-in `cron-guarded-job-node-main` takes a host-selected cursor
 path at argument 24, checks all four marker names, independently reads the
 schedule and cursor, and compares the due slot's previous cursor against the
-job arguments before invoking the existing job-node entry. The original
+job arguments. It validates the source and wrapper before journaling, then
+requires the UTF-8 string passed to the node to round-trip to the exact source
+bytes. Invalid UTF-8 may trap at conversion; no runtime behavior has been
+qualified. The original
 job-node entry remains callable and does not read the marker. These checks are
 not atomic with dispatch; the trusted host must hold serialization throughout
 the check and workload lifetime and refuse alternate entries while an outcome
