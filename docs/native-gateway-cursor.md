@@ -14,13 +14,19 @@ input CID, profile, policy, and exact canonical trigger wrapper. Malformed,
 future, misbound or unverified input is refused. `advance DEFINITION PIN
 CURSOR PREVIOUS SLOT` checks that the current cursor and next due slot still
 match, then writes and fsyncs a temporary cursor, renames it and fsyncs the
-directory. A leftover pending file or uncertain write refuses further work.
-Planning and advance require an explicit FS2 D absence response for the
-pending path. The CLI exits nonzero on a refused plan or unsuccessful advance;
+directory. Before replacement, advance also writes and syncs an intent with
+the original and proposed cursor CIDs, then syncs its directory. After the
+replacement and its directory sync, it renames the intent to `.last` and syncs
+the directory again. A leftover intent or pending file refuses further work;
+neither is automatically cleared or assumed to mean the update failed.
+Planning and advance require an explicit FS2 D absence response for both
+paths. The CLI exits nonzero on a refused plan or unsuccessful advance;
 only an idle/valid plan or a confirmed advance exits zero. The FS2 provider
 must distinguish absence from lookup errors. The earlier Darwin diagnostic
 provider does not; a later diagnostic candidate does, but is not qualified for
 production. See [the isolated cursor fixture](evidence/awai147-cursor-unknown-20261103/README.md).
+The rename-response loss window is exercised separately in the
+[intent fixture](evidence/awai147-cursor-intent-20261103/README.md).
 
 Advance itself does not verify GitHub. Its trusted caller must serialize
 writers and only invoke it after independently verified archive readback.

@@ -47,15 +47,21 @@
 (defn- cc-cursor [pin :string slot :i64] :vector-i64
   (cp-bytes (str "{\"kind\":\"itonami.cron-cursor/1\",\"schedule\":\"" pin "\",\"slot\":" slot "}")))
 
-;; Atomic file replacement is not a multi-host CAS. A lost fsync/rename
-;; acknowledgement is UNKNOWN; caller re-reads before any new dispatch.
+;; Atomic file replacement is not a multi-host CAS. The separately synced
+;; intent survives replacement of .pending, including a crash before the
+;; cursor directory sync. Any surviving intent requires host reconciliation.
 (defn- cc-advance [path :string original :vector-i64 pin :string slot :i64] :string
-  (let [tmp (str path ".pending")]
+  (let [tmp (str path ".pending") intent (str path ".intent") dir (cp-parent-dir path)]
     (cond (not (= (cp-fs "D" tmp "") "0")) "cursor/pending-unknown"
+          (not (= (cp-fs "D" intent "") "0")) "cursor/intent-unknown"
+          (not (cp-write intent (cp-bytes (str "itc1\n" (cp-cid original) "\n" (cp-cid (cc-cursor pin slot)) "\n")))) "cursor/intent-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/intent-unknown"
           (not (cp-write tmp (cc-cursor pin slot))) "cursor/write-unknown"
           (not (= (cp-cid (cp-read path)) (cp-cid original))) "cursor/changed"
           (not (= (cp-fs "L" tmp path) "1")) "cursor/rename-unknown"
-          (not (= (cp-fs "M" (cp-parent-dir path) "") "1")) "cursor/fsync-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/fsync-unknown"
+          (not (= (cp-fs "L" intent (str path ".last")) "1")) "cursor/intent-unknown"
+          (not (= (cp-fs "M" dir "") "1")) "cursor/intent-unknown"
           :else "cursor/advanced")))
 
 (defn cron-cursor-main [] :i64
@@ -68,6 +74,8 @@
           (let [x (jn-say "cursor/command-refused")] 2)
           (not (= (cp-fs "D" (str path ".pending") "") "0"))
           (let [x (jn-say "cursor/pending-unknown")] 1)
+          (not (= (cp-fs "D" (str path ".intent") "") "0"))
+          (let [x (jn-say "cursor/intent-unknown")] 1)
           :else (let [result (cc-plan (cp-read definition-path) pin (cp-read path) (ln-now "clock"))]
                   (let [x (jn-say result)]
                     (if (or (= result "cursor/idle") (= (string-index-of result "cursor/plan ") 0)) 0 1))))))
