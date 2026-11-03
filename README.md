@@ -604,7 +604,8 @@ bot's side:
   this bot now. `wake/go`, or `wake/stopped` (the stop switch wins over
   everything), `wake/lease-lapsed` (the organisation's lease was not renewed:
   fail closed), `wake/over-budget`, `wake/busy` (at its work-in-progress
-  limit) and `wake/idle` (nothing takeable: no job, no cost).
+  limit), `wake/idle` (nothing takeable: no job, no cost), and `wake/invalid`
+  (negative work, in-flight or WIP-limit observation: no job).
 - `next-after` / `next-state`: what follows a turn on a claimed issue.
   `next/complete` (done, with a receipt; state 4), `next/continue` (a step
   made, with a receipt; keep the claim; 3), `next/retry` (failed, under the
@@ -616,7 +617,9 @@ bot's side:
 - `staffing-reason`: what the steward proposes to the governor. `staff/add`
   (takeable work and no worker, or more than high-per-worker per worker),
   `staff/retire` (nothing takeable and a worker idle at least
-  retire-after-ms), `staff/hold`, or `staff/limit` (the day's change limit).
+  retire-after-ms), `staff/hold`, `staff/limit` (the day's change limit), or
+  `staff/invalid` for negative observations. Invalid attempt limits escalate;
+  retry backoff is bounded even near the i64 maximum.
 
 Gate (no Node.js, nbb, JVM or babashka; not in CI, which is stopped):
 
