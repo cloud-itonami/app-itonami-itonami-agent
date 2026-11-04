@@ -92,7 +92,7 @@ def main():
         i,j=helper.form(realplan,name); edits.append((i,j,replacement))
     for i,j,replacement in sorted(edits,reverse=True): realplan=realplan[:i]+replacement+realplan[j:]
     i,j=helper.form(source,'main')
-    tokenprobe=source[:i]+'(defn main [] :i64 (if (= (lease-token (cp-arg 0)) "abcdefghijklmnopqrstuvwxyz012345") 0 1))'+source[j:]
+    tokenprobe=source[:i]+'(defn main [] :i64 (if (= (lease-token (cp-arg 0)) (if (= (cp-arg 1) "empty") "" "abcdefghijklmnopqrstuvwxyz012345")) 0 1))'+source[j:]
     keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (cr-read "/case/key")) 65) 0 1))'+source[j:]
     fs2keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (key-seed-fs2 (cp-arg 0))) 32) 0 1))'+source[j:]
     didprobe=source[:i]+'(defn main [] :i64 (let [k (key-seed-fs2 (cp-arg 0))] (if (and (= (vector-count k) 32) (= (node-did k) "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp")) 0 1)))'+source[j:]
@@ -199,8 +199,8 @@ def main():
             (case/'token').chmod(0o600)
             run([token_image,'/case/token'])
             (case/'short-token').write_text('short')
-            run([token_image,'/case/short-token'],1)
-            run([token_image,'/case/missing-token'],1)
+            run([token_image,'/case/short-token','empty'])
+            run([token_image,'/case/missing-token','empty'])
             run([fs2key_image,'/case/key'])
             run([did_image,'/case/key'])
             (case/'short-key').write_text('0'*63); run([fs2key_image,'/case/short-key'],1)
