@@ -5,7 +5,9 @@ Clock and job body are test stubs; this does not prove successful dispatch,
 workload lifetime, leases, GitHub, production host or resource governance.
 """
 import argparse
+import base64
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -47,6 +49,19 @@ def main():
     x,y=helper.form(source,'cjg-cursor-problem'); guard=source[x:y]; anchor='(not (= turn "0"))'
     if guard.count(anchor)!=1: raise ValueError('turn guard control changed')
     mutant=source[:x]+guard.replace(anchor,'false')+source[y:]
+    positive_replacements={
+        'cc-plan-problem':'(defn- cc-plan-problem [definition :vector-i64 pin :string cursor :vector-i64 now :i64] :string "trigger/ok")',
+        'cj-problem':'(defn- cj-problem [now :i64 previous :i64 pin :string definition :vector-i64 profile :string input :string policy :string rail :string wrapper :vector-i64 source :vector-i64] :string "consume/ok")',
+        'next-cron-ms':'(defn next-cron-ms [e :string after-ms :i64 offset :i64] :i64 60000)',
+        'verified-cron-job-id':'(defn verified-cron-job-id [active :bool now :i64 previous :i64 slot :i64 expected :string definition :vector-i64] :string "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")',
+        'key-seed':'(defn key-seed [key-path :string] :vector-i64 [1])',
+        'node-did':'(defn node-did [seed :vector-i64] :string "did:test")',
+        'jn-run-with-verified-input':'(defn- jn-run-with-verified-input [source :string source-admitted :bool verified-input :string use-verified-input :bool expected-signer :string] :i64 (if (and source-admitted use-verified-input (= source "source") (= verified-input "wrapper") (= expected-signer "did:test") (= (cp-fs "D" "/case/cursor.turn-intent" "") "1") (cp-write "/case/dispatched" (cp-bytes "called"))) 0 1))',
+    }
+    positive=source; edits=[]
+    for name,replacement in positive_replacements.items():
+        i,j=helper.form(positive,name); edits.append((i,j,replacement))
+    for i,j,replacement in sorted(edits,reverse=True): positive=positive[:i]+replacement+positive[j:]
     compiler=helper.verified(a.compiler,a.compiler_sha256); packager=helper.verified(a.packager,a.packager_sha256)
     with tempfile.TemporaryDirectory(prefix='awai167-serialized-',dir='/private/tmp') as tmp:
         root=Path(tmp); case=root/'case'; case.mkdir(mode=0o700)
@@ -54,6 +69,7 @@ def main():
         (case/'definition').write_text('{}'); (case/'cursor').write_text('{}')
         (root/'fixture.kotoba').write_text(source)
         (root/'mutant.kotoba').write_text(mutant)
+        (root/'positive.kotoba').write_text(positive)
         fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY); saved=None
         if fd!=3:
             try: saved=os.dup(3)
@@ -75,7 +91,7 @@ def main():
                 subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(image)],check=True,capture_output=True,timeout=30)
                 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(image)],check=True,capture_output=True,timeout=30)
                 return image
-            image=build('fixture'); mutant_image=build('mutant')
+            image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive')
             args=['run-cron','profile','input','policy','rail','node-a','/case/key','fd','admitted','clock',
                   'other','/case/policy','/case/environment','ports','x','y','/case/input','/case/token',
                   '/case/attempts','0','pin','/case/definition','/case/source','capture-output','/case/cursor','/case/cron.lock']
@@ -97,10 +113,27 @@ def main():
                 raise ValueError('turn-guard removal control not detected')
             if marker.read_text()!='synthetic' or (case/'dispatched').exists():
                 raise ValueError('negative control changed state')
+            marker.unlink()
+            cursor=b'{"kind":"itonami.cron-cursor/1","schedule":"pin","slot":0}'
+            (case/'cursor').write_bytes(cursor); (case/'source').write_text('source'); (case/'input').write_text('wrapper')
+            if run([positive_image,*args])!=b'': raise ValueError('unexpected positive output')
+            if (case/'dispatched').read_text()!='called': raise ValueError('job stub did not run')
+            cid='b'+base64.b32encode(b'\x01\x55\x12\x20'+hashlib.sha256(cursor).digest()).decode().lower().rstrip('=')
+            h=lambda x: hashlib.sha256(x.encode()).hexdigest()
+            intent=('jti4\npin\n'+cid+'\n'+'a'*64+'\n60000\n'+h('/case/cron.lock')+'\n'+h('/case/token')+'\n'+
+                    h('ports')+'\n'+h('node-a')+'\n'+h('did:test')+'\n')
+            if marker.read_text()!=intent: raise ValueError('turn marker binding mismatch')
+            (case/'dispatched').write_text('existing')
+            if run([positive_image,*args],1).decode()!='cron-guard/turn-intent-unknown\n':
+                raise ValueError('duplicate turn was not refused')
+            if marker.read_text()!=intent or (case/'dispatched').read_text()!='existing':
+                raise ValueError('duplicate turn changed state')
             print(json.dumps({'unitySha256':a.unity_sha256,'fixtureSha256':helper.digest(source.encode()),
+                              'positiveFixtureSha256':helper.digest(positive.encode()),
                               'guardSourceSha256':helper.digest(current.encode()),'compilerSha256':a.compiler_sha256,
                               'packagerSha256':a.packager_sha256,'busyAndFourMarkersRefused':True,
                               'invalidPlanRefused':True,'turnGuardRemovalDetected':True,'jobStubNotReached':True,
+                              'stubbedPositiveMarkerBeforeJob':True,'duplicateTurnRefused':True,
                               'scope':'native guard, diagnostic FS2 and flock; clock/job stubs; no production qualification'}))
         finally:
             if fd!=3:
