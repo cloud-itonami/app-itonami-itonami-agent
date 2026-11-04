@@ -1,8 +1,9 @@
 # Job archive and cron cursor candidate
 
 The selected-source composition uses Murakumo job output and archive sources
-from candidate commit [`f73deaf`](https://github.com/kotoba-lang/murakumo/commit/f73deaf2187619afe46da96fa294a0549896a134)
-in [draft PR #586](https://github.com/kotoba-lang/murakumo/pull/586), which
+from candidate commit [`53f0efe`](https://github.com/kotoba-lang/murakumo/commit/53f0efe7f55bc1b3c312a9a1ad80855f007e601f)
+in [draft PR #594](https://github.com/kotoba-lang/murakumo/pull/594), stacked on
+[draft PR #586](https://github.com/kotoba-lang/murakumo/pull/586), which
 depends on merged checkpoint sources including
 [`d6fbfab`](https://github.com/kotoba-lang/murakumo/commit/d6fbfab289dcfe272121a06b43149251e7651330).
 The Murakumo candidate adds checked checkpoint reads, closure verification,
@@ -43,8 +44,10 @@ The separate opt-in `cron-guarded-job-node-main` takes a host-selected cursor
 path at argument 24, checks all four marker names, independently reads the
 schedule and cursor, and compares the due slot's previous cursor against the
 job arguments. It validates the source and wrapper before journaling, then
-requires the UTF-8 string passed to the node to round-trip to the exact source
-bytes. Invalid UTF-8 may trap at conversion; no runtime behavior has been
+requires both source and wrapper strings to round-trip to the exact bytes.
+It passes the verified wrapper to the node rather than rereading its path
+without a size limit. The node still checks the wrapper against the pinned CID.
+Invalid UTF-8 may trap at conversion; no runtime behavior has been
 qualified. The original
 job-node entry remains callable and does not read the marker. These checks are
 not atomic with dispatch; the trusted host must hold serialization throughout
