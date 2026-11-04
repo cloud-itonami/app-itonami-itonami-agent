@@ -65,3 +65,21 @@ The unity, checkpoint, compiler and diagnostic packager pins are the same as
 above and in the associated harness invocation. This is one local provider
 sample, not short-read fault injection, metadata-race or provider qualification,
 actual cron dispatch, GitHub publication, crash recovery or a governor.
+
+## Native cursor advance and reconciliation
+
+On the same Mac, the current source-bound cursor and pinned checkpoint FS2
+functions executed against fresh private files. A successful advance produced
+the expected cursor and independently computed old/new CID intent in `.last`.
+A changed cursor and existing pending file were refused without overwriting
+their original files. A completed replacement with an exact intent was
+reconciled; old cursor, pending file and malformed intent remained
+`cursor/recovery-unknown`, with their intents retained.
+
+Fixture source SHA-256:
+`b2eca64bcfd19c0788a192217cd993d99665860aa76defc85f4a05929ef7fcd2`;
+harness SHA-256:
+`933b03e573683cde45d66d3a483163c75a0eaf9c13c99713ce7ee4acd4a94ba3`.
+The unity, component, compiler and diagnostic packager pins are as above.
+This is a local exclusive synthetic FS2 test, not a host lock, process-kill or
+power-loss test, live GitHub archive, lease check, bot run or governor gate.
