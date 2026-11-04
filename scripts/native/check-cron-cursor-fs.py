@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import re
+import select
 import shutil
 import subprocess
 import tempfile
@@ -54,6 +55,23 @@ def main():
     fixture=(source[:i]+entry+source[j:]).encode()
     with tempfile.TemporaryDirectory(prefix='awai167-cursor-fs-',dir='/private/tmp') as tmp:
         root=Path(tmp); q=root/'cases'; q.mkdir(mode=0o700); (root/'fixture.kotoba').write_bytes(fixture)
+        source_fixture=fixture.decode(); start,end=helper.form(source_fixture,'cc-advance')
+        advance=source_fixture[start:end]
+        pause=('(defn- cc-test-pause [] :bool\n'
+               '  (let [v (vector-alloc 262144) s (string-from-utf8 (bytes-from-vector-i64 v))\n'
+               '        sent (typed-cap-call 37 :string :string s)] true))\n')
+        points={
+            'after-intent-sync': '(not (= (cp-fs "M" dir "") "1")) "cursor/intent-unknown"',
+            'after-pending': '(not (cp-write tmp (cc-cursor pin slot))) "cursor/write-unknown"',
+            'after-rename': '(not (= (cp-fs "L" tmp path) "1")) "cursor/rename-unknown"',
+            'after-cursor-sync': '(not (= (cp-fs "M" dir "") "1")) "cursor/fsync-unknown"',
+            'after-archive': '(not (= (cp-fs "L" intent (str path ".last")) "1")) "cursor/intent-unknown"',
+        }
+        for phase,anchor in points.items():
+            if advance.count(anchor)!=(2 if phase=='after-intent-sync' else 1):
+                raise ValueError('pause anchor changed: '+phase)
+            changed=advance.replace(anchor,anchor+'\n          (not (cc-test-pause)) "cursor/test-pause-failed"',1)
+            (root/(phase+'.kotoba')).write_text(source_fixture[:start]+pause+changed+source_fixture[end:])
         fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY); saved=None
         if fd!=3:
             try: saved=os.dup(3)
@@ -65,14 +83,17 @@ def main():
                                  timeout=180,env={'PATH':'/nonexistent'})
                 if r.returncode!=expected or r.stderr: raise RuntimeError((str(argv[0]),r.returncode,r.stdout[-300:],r.stderr[-300:]))
                 return r.stdout
-            run([compiler,'compile','fixture.kotoba','--target','aarch64-macos','--output','fixture.kseed'])
-            out=run([compiler,'extract-native','fixture.kseed','--symbol','main','--output','fixture.raw'])
-            m=re.search(rb':offset (\d+), :length (\d+), :arity 0}',out)
-            if not m or int(m.group(2))!=(root/'fixture.raw').stat().st_size: raise ValueError('extract mismatch')
-            run([packager,'fixture-unsigned.macho','fixture.raw','fs2-cli-stdio-general',m.group(1).decode()])
-            image=root/'fixture.macho'; shutil.copyfile(root/'fixture-unsigned.macho',image); image.chmod(0o700)
-            subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(image)],check=True,capture_output=True,timeout=30)
-            subprocess.run(['/usr/bin/codesign','--verify','--strict',str(image)],check=True,capture_output=True,timeout=30)
+            def build(name):
+                run([compiler,'compile',name+'.kotoba','--target','aarch64-macos','--output',name+'.kseed'])
+                out=run([compiler,'extract-native',name+'.kseed','--symbol','main','--output',name+'.raw'])
+                m=re.search(rb':offset (\d+), :length (\d+), :arity 0}',out)
+                if not m or int(m.group(2))!=(root/(name+'.raw')).stat().st_size: raise ValueError('extract mismatch')
+                run([packager,name+'-unsigned.macho',name+'.raw','fs2-cli-stdio-general',m.group(1).decode()])
+                image=root/(name+'.macho'); shutil.copyfile(root/(name+'-unsigned.macho'),image); image.chmod(0o700)
+                subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(image)],check=True,capture_output=True,timeout=30)
+                subprocess.run(['/usr/bin/codesign','--verify','--strict',str(image)],check=True,capture_output=True,timeout=30)
+                return image
+            image=build('fixture')
             def expect(op,name,value,expected,code):
                 result=run([image,op,'/cases/'+name,value],code).decode()
                 if result!=expected+'\n': raise ValueError((op,name,result))
@@ -100,6 +121,28 @@ def main():
             expect('recover','malformed','','cursor/recovery-unknown',1)
             for name in ('old','blocked','malformed'):
                 if not (q/(name+'.intent')).exists(): raise ValueError('unknown intent lost')
+            killed=[]
+            for phase in points:
+                name='kill-'+phase; (q/name).write_bytes(old); variant=build(phase)
+                child=subprocess.Popen([str(variant),'advance','/cases/'+name,'original'],cwd=root,pass_fds=(3,),
+                                       stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={'PATH':'/nonexistent'})
+                try:
+                    if not select.select([child.stdout],[],[],10)[0] or os.read(child.stdout.fileno(),1)!=b'\0':
+                        raise RuntimeError('pause not reached: '+phase)
+                    if child.poll() is not None: raise ValueError('child exited before kill')
+                    changed=phase in ('after-rename','after-cursor-sync','after-archive')
+                    if (q/name).read_bytes()!=(new if changed else old): raise ValueError('cursor mismatch: '+phase)
+                    if (q/(name+'.intent')).exists() != (phase!='after-archive'): raise ValueError('intent mismatch: '+phase)
+                    if (q/(name+'.pending')).exists() != (phase=='after-pending'): raise ValueError('pending mismatch: '+phase)
+                    if (q/(name+'.last')).exists() != (phase=='after-archive'): raise ValueError('archive mismatch: '+phase)
+                    child.kill()
+                    if child.wait(timeout=3)!=-9: raise ValueError('child kill status mismatch')
+                    expected='cursor/recovered' if phase in ('after-rename','after-cursor-sync') else 'cursor/recovery-unknown'
+                    expect('recover',name,'',expected,0 if expected=='cursor/recovered' else 1)
+                    if (q/name).read_bytes()!=(new if changed else old): raise ValueError('recovery changed cursor')
+                    killed.append(phase)
+                finally:
+                    if child.poll() is None: child.kill(); child.wait(timeout=3)
             if helper.digest(cursor.read_bytes())!=cursor_sha or helper.digest(a.checkpoint.read_bytes())!=a.checkpoint_sha256:
                 raise ValueError('source changed')
             print(json.dumps({'unitySha256':a.unity_sha256,'checkpointSha256':a.checkpoint_sha256,
@@ -107,6 +150,7 @@ def main():
                               'compilerSha256':a.compiler_sha256,'packagerSha256':a.packager_sha256,
                               'advance':True,'changedAndPendingRefused':True,'completedRecovery':True,
                               'oldPendingMalformedRecoveryUnknown':True,
+                              'ownedChildKillPhases':killed,
                               'scope':'private local FS2; no GitHub, lock, crash or governor qualification'}))
         finally:
             if fd!=3:
