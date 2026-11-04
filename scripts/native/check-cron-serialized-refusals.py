@@ -28,6 +28,7 @@ def main():
     p.add_argument('--unity',type=Path,required=True); p.add_argument('--unity-sha256',required=True)
     p.add_argument('--compiler',type=Path,required=True); p.add_argument('--compiler-sha256',required=True)
     p.add_argument('--packager',type=Path,required=True); p.add_argument('--packager-sha256',required=True)
+    p.add_argument('--artifact-dir',type=Path,help='optional new directory for diagnostic key probes')
     a=p.parse_args()
     if (platform.system(),platform.machine())!=('Darwin','arm64'): raise ValueError('Mac ARM64 required')
     if a.unity.is_symlink(): raise ValueError('unity symlink refused')
@@ -86,6 +87,7 @@ def main():
     i,j=helper.form(source,'main')
     keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (cr-read "/case/key")) 65) 0 1))'+source[j:]
     fs2keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (key-seed-fs2 (cp-arg 0))) 32) 0 1))'+source[j:]
+    didprobe=source[:i]+'(defn main [] :i64 (let [k (key-seed-fs2 (cp-arg 0))] (if (and (= (vector-count k) 32) (= (node-did k) "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp")) 0 1)))'+source[j:]
     x,y=helper.form(fs2keyprobe,'cr-key-meta')
     metaprobe=fs2keyprobe[:x]+'(defn- cr-key-meta [path :string] :string (cp-arg 1))'+fs2keyprobe[y:]
     x,y=helper.form(metaprobe,'cr-read-fs2-key'); keybody=metaprobe[x:y]
@@ -116,6 +118,7 @@ def main():
         (root/'realplan.kotoba').write_text(realplan)
         (root/'keyprobe.kotoba').write_text(keyprobe)
         (root/'fs2keyprobe.kotoba').write_text(fs2keyprobe)
+        (root/'didprobe.kotoba').write_text(didprobe)
         (root/'metaprobe.kotoba').write_text(metaprobe)
         (root/'metamutant.kotoba').write_text(metamuser)
         (root/'changedmeta.kotoba').write_text(changedmeta)
@@ -142,7 +145,7 @@ def main():
                 subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(image)],check=True,capture_output=True,timeout=30)
                 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(image)],check=True,capture_output=True,timeout=30)
                 return image
-            image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive'); realplan_image=build('realplan'); key_image=build('keyprobe'); fs2key_image=build('fs2keyprobe'); jn_image=build('jnprobe')
+            image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive'); realplan_image=build('realplan'); key_image=build('keyprobe'); fs2key_image=build('fs2keyprobe'); did_image=build('didprobe'); jn_image=build('jnprobe')
             meta_image=build('metaprobe'); metam_image=build('metamutant'); changed_image=build('changedmeta'); short_image=build('shortframe')
             args=['run-cron','profile','input','policy','rail','node-a','/case/key','fd','admitted','clock',
                   'other','/case/policy','/case/environment','ports','x','y','/case/input','/case/token',
@@ -184,6 +187,7 @@ def main():
             (case/'key').write_text('00'*32+'\n'); (case/'key').chmod(0o600)
             run([key_image],-5)
             run([fs2key_image,'/case/key'])
+            run([did_image,'/case/key'])
             (case/'short-key').write_text('0'*63); run([fs2key_image,'/case/short-key'],1)
             (case/'bad-key').write_text('z'*64); run([fs2key_image,'/case/bad-key'],1)
             (case/'long-key').write_text('00'*32+'x'*8192); run([fs2key_image,'/case/long-key'])
@@ -223,11 +227,24 @@ def main():
             if run([realplan_image,*realargs],1).decode()!='cron-guard/turn-intent-unknown\n':
                 raise ValueError('actual-plan duplicate was not refused')
             if (case/'dispatched').read_text()!='existing': raise ValueError('actual-plan job ran twice')
+            if a.artifact_dir:
+                a.artifact_dir.mkdir(mode=0o700,parents=False,exist_ok=False)
+                pins={}
+                for name,image_path in [('fs2keyprobe',fs2key_image),('didprobe',did_image)]:
+                    target=a.artifact_dir/(name+'.macho'); shutil.copyfile(image_path,target); target.chmod(0o700)
+                    pins[name]=helper.digest(target.read_bytes())
+                    if pins[name]!=helper.digest(image_path.read_bytes()): raise ValueError('artifact copy mismatch')
+                manifest={'unitySha256':a.unity_sha256,'compilerSha256':a.compiler_sha256,
+                          'packagerSha256':a.packager_sha256,'images':pins}
+                manifest_path=a.artifact_dir/'manifest.json'
+                manifest_path.write_text(json.dumps(manifest,sort_keys=True)+'\n')
+                print('artifactManifestSha256',helper.digest(manifest_path.read_bytes()),flush=True)
             print(json.dumps({'unitySha256':a.unity_sha256,'fixtureSha256':helper.digest(source.encode()),
                               'positiveFixtureSha256':helper.digest(positive.encode()),
                               'actualPlanFixtureSha256':helper.digest(realplan.encode()),
                               'unframedKeyProbeSha256':helper.digest(keyprobe.encode()),
                               'fs2KeyProbeSha256':helper.digest(fs2keyprobe.encode()),
+                              'didProbeSha256':helper.digest(didprobe.encode()),
                               'jobKeyProbeSha256':helper.digest(jnprobe.encode()),
                               'guardSourceSha256':helper.digest(current.encode()),'compilerSha256':a.compiler_sha256,
                               'packagerSha256':a.packager_sha256,'busyAndFourMarkersRefused':True,
