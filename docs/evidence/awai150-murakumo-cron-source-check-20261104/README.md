@@ -102,3 +102,20 @@ This is one source-instrumented process-kill sample per boundary on a local
 diagnostic provider. It does not prove power-loss durability, actual I/O
 faults, concurrent locking, GitHub behavior, whole-workload termination or
 resource governor qualification.
+
+## Native turn-intent binding
+
+The extended native diagnostic invoked the current `cc-turn-begin` and
+`cc-turn-finalize` through the private FS2 root. An independent host calculation
+matched the `jti4` marker's schedule, cursor CID, job, slot and hashes of lock,
+token path, port string, node and signer. A second begin while the marker
+existed was refused without changing it. Finalization moved the same bytes to
+`.turn-last`. The previous cursor and process-death controls also passed.
+
+Extended fixture SHA-256:
+`6846a20139dba40ab5a1eda98870d80acdc5d40e1b7ce956634d3d6dc0297732`;
+harness SHA-256:
+`8d0349a1420964a596b6da2f33168b10b42c5de52041aa4251cd02f7283a445c`.
+This establishes one local marker sample, not a lock held across both calls,
+authenticated node identity, distributed fencing, complete workload lifetime,
+real GitHub publication, or recovery after power loss.
