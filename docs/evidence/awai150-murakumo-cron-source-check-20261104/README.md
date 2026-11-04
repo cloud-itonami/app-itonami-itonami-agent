@@ -23,3 +23,22 @@ This validates selected source composition only. It did not run the Itonami
 cases, compiler-generated native program, actual GitHub operations, fault or
 crash recovery, production provider, host containment, a model, or bots. The
 final merged cross-repository closure must be pinned and verified independently.
+
+## Native pure decision cases
+
+On jacob, macOS 26.3.1 (a), build 25D771280a, the selected unity above was
+compiled with the pinned diagnostic Mac compiler and packaged with the pinned
+FS2 diagnostic packager. The three current cursor, guarded-node and
+archive-cursor case functions ran and returned exit 0. A separately built
+mutant removing the pending-state refusal returned exit 1. The harness checks
+that each test function in the unity exactly matches its current checkout.
+
+The native fixture source SHA-256 was
+`576b6bb17ec867b5316537d2244bf4573b7d3a970e8f3c25eb6ee8906ede21fc`;
+the harness SHA-256 was
+`931e1420db177f16a1f957536207da7910f2c12a2885464a3831aca58dcf6b86`.
+The diagnostic compiler and packager SHA-256 values were
+`920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6` and
+`f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`.
+These are pure decision cases. No filesystem provider, lease, signed workload,
+GitHub transaction, crash recovery, bot or resource governor was exercised.
