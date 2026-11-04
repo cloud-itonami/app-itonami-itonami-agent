@@ -41,17 +41,21 @@ def main():
     if helper.digest(raw)!=a.unity_sha256 or helper.digest(checkpoint)!=a.checkpoint_sha256: raise ValueError('source pin mismatch')
     source=raw.decode(); compiler=helper.verified(a.compiler,a.compiler_sha256); packager=helper.verified(a.packager,a.packager_sha256)
     cursor=ROOT/'kotoba/itonami/gateway_cursor.kotoba'
-    for name in ('cc-cursor','cc-read-bounded','cc-advance','cc-recovery-ready?','cc-recover'):
+    for name in ('cc-cursor','cc-read-bounded','cc-advance','cc-recovery-ready?','cc-recover',
+                 'cc-turn-text','cc-turn-begin','cc-turn-finalize'):
         cursor_sha=mod.match_function(source,cursor,name)
     for name in ('cp-size','cp-range','cp-read-op','cp-fs','cp-frame','cp-write','cp-written-equal?','cp-parent-dir'):
         mod.match_function(source,a.checkpoint,name)
     i,j=helper.form(source,'main')
     entry='''(defn main [] :i64
       (let [op (cp-arg 0) path (cp-arg 1)
-            result (if (= op "advance") (cc-advance path (cp-bytes (cp-arg 2)) "pin" 60000)
-                       (if (= op "recover") (cc-recover path (cc-read-bounded path 1024)) "invalid"))
+            result (cond (= op "advance") (cc-advance path (cp-bytes (cp-arg 2)) "pin" 60000)
+                         (= op "recover") (cc-recover path (cc-read-bounded path 1024))
+                         (= op "turn-begin") (if (cc-turn-begin path "pin" (cp-bytes "original") "job-id" 60000 "/lock" "/token" "1001,1002" "node-a" "did:test") "turn/begun" "turn/unknown")
+                         (= op "turn-finalize") (if (cc-turn-finalize path) "turn/finalized" "turn/unknown")
+                         :else "invalid")
             printed (cp-say result)]
-        (if (or (= result "cursor/advanced") (= result "cursor/recovered")) 0 1)))'''
+        (if (or (= result "cursor/advanced") (= result "cursor/recovered") (= result "turn/begun") (= result "turn/finalized")) 0 1)))'''
     fixture=(source[:i]+entry+source[j:]).encode()
     with tempfile.TemporaryDirectory(prefix='awai167-cursor-fs-',dir='/private/tmp') as tmp:
         root=Path(tmp); q=root/'cases'; q.mkdir(mode=0o700); (root/'fixture.kotoba').write_bytes(fixture)
@@ -121,6 +125,16 @@ def main():
             expect('recover','malformed','','cursor/recovery-unknown',1)
             for name in ('old','blocked','malformed'):
                 if not (q/(name+'.intent')).exists(): raise ValueError('unknown intent lost')
+            expect('turn-begin','turn','','turn/begun',0)
+            h=lambda value: hashlib.sha256(value.encode()).hexdigest()
+            turn=('jti4\npin\n'+cid(old)+'\njob-id\n60000\n'+h('/lock')+'\n'+h('/token')+'\n'+
+                  h('1001,1002')+'\n'+h('node-a')+'\n'+h('did:test')+'\n').encode()
+            if (q/'turn.turn-intent').read_bytes()!=turn: raise ValueError('turn intent binding mismatch')
+            expect('turn-begin','turn','','turn/unknown',1)
+            if (q/'turn.turn-intent').read_bytes()!=turn: raise ValueError('turn intent overwritten')
+            expect('turn-finalize','turn','','turn/finalized',0)
+            if (q/'turn.turn-intent').exists() or (q/'turn.turn-last').read_bytes()!=turn:
+                raise ValueError('turn finalization mismatch')
             killed=[]
             for phase in points:
                 name='kill-'+phase; (q/name).write_bytes(old); variant=build(phase)
@@ -150,6 +164,7 @@ def main():
                               'compilerSha256':a.compiler_sha256,'packagerSha256':a.packager_sha256,
                               'advance':True,'changedAndPendingRefused':True,'completedRecovery':True,
                               'oldPendingMalformedRecoveryUnknown':True,
+                              'turnIntentBindingAndDuplicateRefusal':True,
                               'ownedChildKillPhases':killed,
                               'scope':'private local FS2; no GitHub, lock, crash or governor qualification'}))
         finally:
