@@ -77,13 +77,13 @@
 ;; The whole-turn intent binds the due job and previous cursor. A host must
 ;; serialize both entries and reconcile any unknown result; this marker is not
 ;; a workload lock, lease, resource reservation or effect fence.
-(defn- cc-turn-text [pin :string cursor :vector-i64 job :string slot :i64 lock :string token :string ports :string] :string
-  (str "jti2\n" pin "\n" (cp-cid cursor) "\n" job "\n" slot "\n" (sha256-hex (cp-bytes lock)) "\n"
-       (sha256-hex (cp-bytes token)) "\n" (sha256-hex (cp-bytes ports)) "\n"))
-(defn- cc-turn-begin [path :string pin :string cursor :vector-i64 job :string slot :i64 lock :string token :string ports :string] :bool
+(defn- cc-turn-text [pin :string cursor :vector-i64 job :string slot :i64 lock :string token :string ports :string node :string] :string
+  (str "jti3\n" pin "\n" (cp-cid cursor) "\n" job "\n" slot "\n" (sha256-hex (cp-bytes lock)) "\n"
+       (sha256-hex (cp-bytes token)) "\n" (sha256-hex (cp-bytes ports)) "\n" (sha256-hex (cp-bytes node)) "\n"))
+(defn- cc-turn-begin [path :string pin :string cursor :vector-i64 job :string slot :i64 lock :string token :string ports :string node :string] :bool
   (let [intent (str path ".turn-intent")]
     (and (= (cp-fs "D" intent "") "0")
-         (cp-write intent (cp-bytes (cc-turn-text pin cursor job slot lock token ports)))
+         (cp-write intent (cp-bytes (cc-turn-text pin cursor job slot lock token ports node)))
          (= (cp-fs "M" (cp-parent-dir path) "") "1"))))
 (defn- cc-turn-finalize [path :string] :bool
   (and (= (cp-fs "L" (str path ".turn-intent") (str path ".turn-last")) "1")
