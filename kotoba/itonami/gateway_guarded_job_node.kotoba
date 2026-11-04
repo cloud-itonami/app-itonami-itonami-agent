@@ -73,24 +73,24 @@
                     (let [x (jn-say "cron-guard/turn-intent-unknown")] 1)))))))))))
 
 ;; The lock is a stable, privately provisioned regular file outside every
-;; cursor/journal path, the attempt tree and all input paths. All writers must
-;; use the same file without replacing it. This is cooperative host-local
+;; cursor/journal path, the attempt tree and all input paths, including the
+;; fleet token. All writers must use the same file without replacing it. This is cooperative host-local
 ;; serialization only; a parent death or a detached child can release the
 ;; lock before the entire workload stops. The host must qualify that boundary
 ;; and resource limits before using it for builds, deployment or live jobs.
-(defn- cjg-lock-paths? [lock :string cursor :string definition :string source :string input :string attempts :string] :bool
+(defn- cjg-lock-paths? [lock :string cursor :string definition :string source :string input :string attempts :string token :string] :bool
   (and (cp-safe-absolute? lock) (cp-safe-absolute? cursor) (cp-safe-absolute? definition)
-       (cp-safe-absolute? source) (cp-safe-absolute? input) (cp-safe-absolute? attempts)
+       (cp-safe-absolute? source) (cp-safe-absolute? input) (cp-safe-absolute? attempts) (cp-safe-absolute? token)
        (not (cc-definition-overlap? lock cursor)) (not (cc-path-overlap? lock definition))
        (not (cc-path-overlap? lock source)) (not (cc-path-overlap? lock input))
-       (not (cc-path-overlap? lock attempts))))
+       (not (cc-path-overlap? lock attempts)) (not (cc-path-overlap? lock token))))
 
 (defn cron-guarded-job-node-main [] :i64 (cjg-run false))
 
 (defn cron-serialized-job-node-main [] :i64
   (let [lock (jn-arg 25) cursor (jn-arg 24) definition (jn-arg 21) source (jn-arg 22)
         input (jn-arg 16) attempts (jn-arg 18)
-        valid (and (= (jn-arg 26) "") (cjg-lock-paths? lock cursor definition source input attempts))
+        valid (and (= (jn-arg 26) "") (cjg-lock-paths? lock cursor definition source input attempts (jn-arg 17)))
         meta (if valid (cp-fs "U" lock "") "")]
     (if (not (and valid (= (cp-meta-field meta 0) "384") (= (cp-meta-field meta 3) "0")))
       (let [x (jn-say "cron-lock/config-refused")] 2)
