@@ -79,7 +79,7 @@
                               (cjg-bytes-same? wrapper (jn-bytes wrapper-text)))
                     slot (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes"))
                     job (verified-cron-job-id true now previous slot pin definition)
-                    marked (if (and same serialized) (and (jn-job-id? job) (cc-turn-begin cursor-path pin cursor job slot (jn-arg 25))) same)]
+                    marked (if (and same serialized) (and (jn-job-id? job) (cc-turn-begin cursor-path pin cursor job slot (jn-arg 25) (jn-arg 17) (jn-arg 13))) same)]
                 (if (not same) (let [x (jn-say "cron-guard/source-encoding")] 2)
                   (if marked (jn-run-with-verified-input text true wrapper-text true)
                     (let [x (jn-say "cron-guard/turn-intent-unknown")] 1)))))))))))

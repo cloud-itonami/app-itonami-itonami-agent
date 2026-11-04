@@ -61,14 +61,16 @@ pre-provisioned lock path at argument 25, checks that it is a mode-0600 regular
 file disjoint from the cursor, input paths and attempt tree, and makes one
 non-retrying flock attempt. It holds that cooperative local lock while invoking
 the guarded job entry, first syncing `cursor.turn-intent` with the pinned
-schedule, previous cursor, job, due slot and hash of the lock path. It requires
-captured output and retains the marker on failure or after job completion.
+schedule, previous cursor, job, due slot and hashes of the lock path, token
+path and exact quorum ports string. It requires captured output and retains the marker on failure or after job completion.
 Planning and other guarded jobs refuse a surviving or unreadable turn marker.
 
 The opt-in `cron-serialized-job-archive-head-cursor-main` takes the same
 lock path at argument 25, reacquires it without polling, checks that the turn
-marker exactly matches its independently derived schedule, cursor, job and
-lock path, and then performs verified archive, head CAS and cursor advancement.
+marker exactly matches its independently derived schedule, cursor, job, lock
+path, token path and quorum ports, and then performs verified archive, head CAS
+and cursor advancement. The `jti2` marker rejects an older `jti1` marker; a
+host must reconcile old or unknown markers, never silently upgrade them.
 It retires the head marker and then the turn marker only after the cursor
 advances. The host must capture and verify the job output and checkpoint before
 calling this entry, and reconcile any unknown result. A failure can leave one
@@ -77,8 +79,8 @@ or both markers; no automatic recovery is implemented.
 The lock is released between the two entries; the durable marker blocks only
 cooperating paths. The host must ensure every caller uses the same stable,
 non-aliased lock, exclude unguarded entries and establish ownership and ACL
-policy. A lock-path hash does not bind an inode. The parent can die or a child
-can outlive it, so neither entry provides a qualified process lifetime boundary,
+policy. Path hashes do not bind inodes, token contents, or remote quorum
+identity. The parent can die or a child can outlive it, so neither entry provides a qualified process lifetime boundary,
 resource governor, distributed lock, sink fence or permission to deploy.
 
 The host supplies and protects all paths, the schedule pin, checkpoint pins,
