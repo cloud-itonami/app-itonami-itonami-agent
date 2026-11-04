@@ -85,3 +85,26 @@ files did not match. The actual job entry, with a fixed diagnostic clock and
 an intentionally wrong expected signer, returned `job/signer-changed` with
 the token path set. This establishes neither authenticated lease traffic nor
 workload dispatch, and the diagnostic runtime is not a production host.
+
+## Bounded lease-token candidate
+
+Murakumo commit `c657785` adds `lease-token-bounded` and selects it when the
+job entry receives the serialized guard's expected signer. Itonami's
+serialized archive/head/cursor entry uses the same bounded token path; the
+older nonserialized entries retain `lease-token`. The new path rejects files
+outside 32–4096 bytes, nonregular or malformed metadata, unexpected response
+length, changed metadata, and tokens shorter than 32 bytes after trimming.
+The host must own the path and prevent replacement or same-size writes during
+reads. Providers that cannot support the required FS2 operations may refuse
+or trap; the size cap can reject previously accepted long tokens.
+
+On the diagnostic Mac, current composed source SHA-256
+`d8cadbebdd8312b265053d2103a983cb7afc13e73a479ef6165395752952c03f`
+passed the pinned compiler's `check`; the source-bound native test passed a
+synthetic normal token, a 4096-byte token, and refusal of a 4097-byte file,
+short token, whitespace-only token and missing file. The real job-entry
+fixture with its fixed clock and a deliberately wrong signer returned the
+expected signer refusal with a synthetic token path set. The archive entry was
+source-checked but was not executed in this test. Fault-injected malformed FS2
+responses, actual authenticated leases, GitHub storage, workload execution,
+production runtime and the governor are not qualified by these observations.

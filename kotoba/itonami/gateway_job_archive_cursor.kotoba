@@ -87,7 +87,7 @@
             previous (if (= plan "trigger/ok") (cp-num cursor 0 "slot") -1)
             slot (if (= plan "trigger/ok") (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes")) -1)
             job (if (= plan "trigger/ok") (verified-cron-job-id true now previous slot pin definition) "")
-            token (lease-token token-path) proof (jo-block store proof-cid)
+            token (if serialized (lease-token-bounded token-path) (lease-token token-path)) proof (jo-block store proof-cid)
             receipt (if (json-valid? proof) (json-member proof 0 "receipt") -1)
             receipt-node (if (>= receipt 0) (cp-str proof receipt "node") "")
             ready (and (= plan "trigger/ok") (jn-job-id? job) (not (= token ""))

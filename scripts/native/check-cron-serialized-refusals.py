@@ -39,8 +39,8 @@ def main():
     for name in ('cjg-run','cjg-cursor-problem','cron-serialized-job-node-main'):
         i,j=helper.form(current,name); x,y=helper.form(source,name)
         if current[i:j]!=source[x:y]: raise ValueError('guard source mismatch: '+name)
-    for filename,names in (('fleet_lease_node.kotoba',('ln-bytes','ln-frame','ln-fs','ln-exists?','ln-space?','ln-token','lease-token')),
-                           ('fleet_job_node.kotoba',('jn-token','jn-run-with-verified-input'))):
+    for filename,names in (('fleet_lease_node.kotoba',('ln-bytes','ln-frame','ln-fs','ln-int','ln-field','ln-exists?','ln-space?','ln-token','lease-token','lease-token-bounded')),
+                           ('fleet_job_node.kotoba',('jn-token','jn-token-bounded','jn-run-with-verified-input'))):
         current_m=(a.murakumo/'kotoba'/filename).read_text()
         for name in names:
             i,j=helper.form(current_m,name); x,y=helper.form(source,name)
@@ -92,7 +92,7 @@ def main():
         i,j=helper.form(realplan,name); edits.append((i,j,replacement))
     for i,j,replacement in sorted(edits,reverse=True): realplan=realplan[:i]+replacement+realplan[j:]
     i,j=helper.form(source,'main')
-    tokenprobe=source[:i]+'(defn main [] :i64 (if (= (lease-token (cp-arg 0)) (if (= (cp-arg 1) "empty") "" "abcdefghijklmnopqrstuvwxyz012345")) 0 1))'+source[j:]
+    tokenprobe=source[:i]+'(defn main [] :i64 (if (= (lease-token-bounded (cp-arg 0)) (if (= (cp-arg 1) "empty") "" (if (= (cp-arg 1) "long") (cp-text (cp-read "/case/expected-long")) "abcdefghijklmnopqrstuvwxyz012345"))) 0 1))'+source[j:]
     keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (cr-read "/case/key")) 65) 0 1))'+source[j:]
     fs2keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (key-seed-fs2 (cp-arg 0))) 32) 0 1))'+source[j:]
     didprobe=source[:i]+'(defn main [] :i64 (let [k (key-seed-fs2 (cp-arg 0))] (if (and (= (vector-count k) 32) (= (node-did k) "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp")) 0 1)))'+source[j:]
@@ -201,6 +201,12 @@ def main():
             (case/'short-token').write_text('short')
             run([token_image,'/case/short-token','empty'])
             run([token_image,'/case/missing-token','empty'])
+            (case/'expected-long').write_text('a'*4096)
+            run([token_image,'/case/expected-long','long'])
+            (case/'oversize-token').write_text('a'*4097)
+            run([token_image,'/case/oversize-token','empty'])
+            (case/'whitespace-token').write_text(' '*4096)
+            run([token_image,'/case/whitespace-token','empty'])
             run([fs2key_image,'/case/key'])
             run([did_image,'/case/key'])
             (case/'short-key').write_text('0'*63); run([fs2key_image,'/case/short-key'],1)
