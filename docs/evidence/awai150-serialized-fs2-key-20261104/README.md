@@ -36,3 +36,19 @@ and `f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`.
 This is a candidate for a host with FS2 O/E support; older runtimes can trap.
 Provider failure, concurrent replacement, real credential custody, full job
 execution, crash recovery, host containment and governor remain unqualified.
+
+## Source-injected provider observations
+
+The native key fixture was extended with test-only provider substitutions. It
+refused malformed mode, over-range mode, short file metadata, directory kind,
+non-numeric block count, extra/trailing metadata fields, a short framed range
+reply and a failed metadata recheck. A control removing the mode digit check
+accepted synthetic `-0` metadata, confirming that this specific malformed
+input is detected by the guard. The valid synthetic key, signer and cron
+controls continued to pass.
+
+Extended harness SHA-256:
+`fc68a83df09ac6e237094d8bd648142377df10da864f11ea00eabad47446f05e`.
+These are source-injected responses in a diagnostic native program, not actual
+kernel short reads, metadata races, or adversarial same-size replacement.
+A qualified provider and exclusively owned key path remain required.
