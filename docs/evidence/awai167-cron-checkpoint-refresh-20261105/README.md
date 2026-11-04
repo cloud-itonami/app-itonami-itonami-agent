@@ -32,3 +32,14 @@ decision cases do not execute `jo-put`, the live cron, GitHub, lease, workload
 or bot. The empty-output guard has separate evidence in Murakumo #594. A
 complete merged and pinned runtime, filesystem provider, governor and
 cross-repository end-to-end test remain required.
+
+After Murakumo #594 merged its dependency branch into head
+`2b9484698d3c713c76acab80daa6e0acfb773104`, the same diagnostic was rerun
+against the unchanged Itonami code. It refreshed and compared 197 selected
+functions, including the dependency's two metadata helpers. The compiler
+check and native decision cases passed; the pending-guard mutant was detected.
+The composed source SHA-256 was
+`346a166ef98fdb5ad5d6b0e8e973da804313b97d0e1211e33f1760ea7f19cd34`,
+and native case fixture SHA-256 was
+`1e0e57982988c30231da853937180399e12c4e3bdd88ae14f9da1e06ab6bb97a`.
+The limitations above still apply; the test does not execute GitHub or a bot.
