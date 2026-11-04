@@ -62,6 +62,30 @@ def main():
     for name,replacement in positive_replacements.items():
         i,j=helper.form(positive,name); edits.append((i,j,replacement))
     for i,j,replacement in sorted(edits,reverse=True): positive=positive[:i]+replacement+positive[j:]
+    setup_entry='''(defn main [] :i64
+      (if (= (cp-arg 0) "setup")
+        (let [slot 1792638000000 previous (- slot 60000) source (gt-bytes "bounded source")
+              definition (test-definition-source "* * * * *" "node-test" 540 (test-pin source))
+              pin (test-pin definition) wrapper (gt-bytes (verified-cron-input true slot previous slot pin definition))
+              input (verified-cron-input-cid true slot previous slot pin definition)
+              job (verified-cron-job-id true slot previous slot pin definition)
+              ok (and (cp-write "/case/definition" definition) (cp-write "/case/source" source)
+                      (cp-write "/case/input" wrapper) (cp-write "/case/cursor" (cc-cursor pin previous)))
+              printed (if ok (cp-say (str pin " " input " " job)) 1)]
+          (if ok 0 1))
+        (cron-serialized-job-node-main)))'''
+    real_stubs={
+        'key-seed':'(defn key-seed [key-path :string] :vector-i64 [1])',
+        'node-did':'(defn node-did [seed :vector-i64] :string "did:test")',
+        'jn-run-with-verified-input':'(defn- jn-run-with-verified-input [source :string source-admitted :bool verified-input :string use-verified-input :bool expected-signer :string] :i64 (if (and source-admitted use-verified-input (= source "bounded source") (= verified-input (cp-text (cc-read-bounded "/case/input" 8192))) (= expected-signer "did:test") (= (cp-fs "D" "/case/cursor.turn-intent" "") "1") (cp-write "/case/dispatched" (cp-bytes "called"))) 0 1))',
+        'main':setup_entry,
+    }
+    realplan=source; edits=[]
+    for name,replacement in real_stubs.items():
+        i,j=helper.form(realplan,name); edits.append((i,j,replacement))
+    for i,j,replacement in sorted(edits,reverse=True): realplan=realplan[:i]+replacement+realplan[j:]
+    i,j=helper.form(source,'main')
+    keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (cr-read "/case/key")) 65) 0 1))'+source[j:]
     compiler=helper.verified(a.compiler,a.compiler_sha256); packager=helper.verified(a.packager,a.packager_sha256)
     with tempfile.TemporaryDirectory(prefix='awai167-serialized-',dir='/private/tmp') as tmp:
         root=Path(tmp); case=root/'case'; case.mkdir(mode=0o700)
@@ -70,6 +94,8 @@ def main():
         (root/'fixture.kotoba').write_text(source)
         (root/'mutant.kotoba').write_text(mutant)
         (root/'positive.kotoba').write_text(positive)
+        (root/'realplan.kotoba').write_text(realplan)
+        (root/'keyprobe.kotoba').write_text(keyprobe)
         fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY); saved=None
         if fd!=3:
             try: saved=os.dup(3)
@@ -91,7 +117,7 @@ def main():
                 subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(image)],check=True,capture_output=True,timeout=30)
                 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(image)],check=True,capture_output=True,timeout=30)
                 return image
-            image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive')
+            image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive'); realplan_image=build('realplan'); key_image=build('keyprobe')
             args=['run-cron','profile','input','policy','rail','node-a','/case/key','fd','admitted','clock',
                   'other','/case/policy','/case/environment','ports','x','y','/case/input','/case/token',
                   '/case/attempts','0','pin','/case/definition','/case/source','capture-output','/case/cursor','/case/cron.lock']
@@ -128,12 +154,41 @@ def main():
                 raise ValueError('duplicate turn was not refused')
             if marker.read_text()!=intent or (case/'dispatched').read_text()!='existing':
                 raise ValueError('duplicate turn changed state')
+            marker.unlink(); (case/'dispatched').unlink()
+            (case/'key').write_text('00'*32+'\n'); (case/'key').chmod(0o600)
+            run([key_image],-5)
+            setup=run([realplan_image,'setup']).decode().strip().split(' ')
+            if len(setup)!=3: raise ValueError('synthetic plan setup failed')
+            pin,input_cid,job=setup
+            realargs=list(args); realargs[1]='sha256:6e5ac5ef12cd31e4889ec39bc8944e41cbca613829e5dad43c2eb401239c9ea8'
+            realargs[2]=input_cid; realargs[3]='bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq'
+            realargs[4]='murakumo'; realargs[19]=str(1792638000000-60000); realargs[20]=pin
+            (case/'source').write_text('tampered source')
+            if run([realplan_image,*realargs],2).decode()!='consume/source-cid\n':
+                raise ValueError('tampered source was not rejected')
+            if marker.exists() or (case/'dispatched').exists(): raise ValueError('tampered source caused effects')
+            (case/'source').write_text('bounded source')
+            if run([realplan_image,*realargs])!=b'': raise ValueError('actual schedule path did not reach stub')
+            if (case/'dispatched').read_text()!='called': raise ValueError('real-plan job stub not called')
+            actual_cursor=(case/'cursor').read_bytes()
+            actual_cid='b'+base64.b32encode(b'\x01\x55\x12\x20'+hashlib.sha256(actual_cursor).digest()).decode().lower().rstrip('=')
+            actual_intent=('jti4\n'+pin+'\n'+actual_cid+'\n'+job+'\n1792638000000\n'+h('/case/cron.lock')+'\n'+
+                           h('/case/token')+'\n'+h('ports')+'\n'+h('node-a')+'\n'+h('did:test')+'\n')
+            if marker.read_text()!=actual_intent: raise ValueError('actual-plan marker binding mismatch')
+            (case/'dispatched').write_text('existing')
+            if run([realplan_image,*realargs],1).decode()!='cron-guard/turn-intent-unknown\n':
+                raise ValueError('actual-plan duplicate was not refused')
+            if (case/'dispatched').read_text()!='existing': raise ValueError('actual-plan job ran twice')
             print(json.dumps({'unitySha256':a.unity_sha256,'fixtureSha256':helper.digest(source.encode()),
                               'positiveFixtureSha256':helper.digest(positive.encode()),
+                              'actualPlanFixtureSha256':helper.digest(realplan.encode()),
+                              'unframedKeyProbeSha256':helper.digest(keyprobe.encode()),
                               'guardSourceSha256':helper.digest(current.encode()),'compilerSha256':a.compiler_sha256,
                               'packagerSha256':a.packager_sha256,'busyAndFourMarkersRefused':True,
                               'invalidPlanRefused':True,'turnGuardRemovalDetected':True,'jobStubNotReached':True,
                               'stubbedPositiveMarkerBeforeJob':True,'duplicateTurnRefused':True,
+                              'actualPlanAndConsumeValidated':True,'tamperedSourceRefused':True,
+                              'unframedKeyReadDiagnosticSigtrap':True,
                               'scope':'native guard, diagnostic FS2 and flock; clock/job stubs; no production qualification'}))
         finally:
             if fd!=3:
