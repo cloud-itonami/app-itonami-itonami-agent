@@ -42,3 +42,26 @@ The diagnostic compiler and packager SHA-256 values were
 `f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`.
 These are pure decision cases. No filesystem provider, lease, signed workload,
 GitHub transaction, crash recovery, bot or resource governor was exercised.
+
+## Native bounded cursor reads
+
+On the same Mac, a source-bound fixture used the current `cc-read-bounded`
+function and the matching pinned Murakumo checkpoint read functions through a
+signed diagnostic FS2 runtime. It accepted the small input and the 1024-byte
+cursor and 8192-byte definition limits, and returned no bytes for the
+1025-byte and 8193-byte over-limit files, an empty file and a missing file. A
+separately compiled variant with the size limit removed failed the cases.
+All files were in a fresh private FD3 scope.
+
+Cursor source SHA-256:
+`bae632993f616879aead22792d7a2015992a17f2e1cdb9f3f6ee15de7795797c`;
+case source:
+`9bdfedfe9bb96e5d5d3d2e9702817c33bf112f3ddbedbed0ae1c54b5de18bcff`;
+fixture source:
+`59230acc78916e87b282713c3ccfb0a1760090d9d78847e8858ba04a84ce6a5b`;
+harness:
+`96a4a34e1271b0bc0df0b22bfa402d709f22d1378132bb3a78156f51b5d964e7`.
+The unity, checkpoint, compiler and diagnostic packager pins are the same as
+above and in the associated harness invocation. This is one local provider
+sample, not short-read fault injection, metadata-race or provider qualification,
+actual cron dispatch, GitHub publication, crash recovery or a governor.
