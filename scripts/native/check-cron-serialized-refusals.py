@@ -86,6 +86,18 @@ def main():
     i,j=helper.form(source,'main')
     keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (cr-read "/case/key")) 65) 0 1))'+source[j:]
     fs2keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (key-seed-fs2 (cp-arg 0))) 32) 0 1))'+source[j:]
+    x,y=helper.form(fs2keyprobe,'cr-key-meta')
+    metaprobe=fs2keyprobe[:x]+'(defn- cr-key-meta [path :string] :string (cp-arg 1))'+fs2keyprobe[y:]
+    x,y=helper.form(metaprobe,'cr-read-fs2-key'); keybody=metaprobe[x:y]
+    digits='(cr-key-digits? mode 3)'
+    if keybody.count(digits)!=1: raise ValueError('key metadata guard changed')
+    metamuser=metaprobe[:x]+keybody.replace(digits,'true')+metaprobe[y:]
+    meta_check='(= (cr-key-meta path) meta)'
+    if keybody.count(meta_check)!=1: raise ValueError('key metadata recheck changed')
+    changedmeta=metaprobe[:x]+keybody.replace(meta_check,'false')+metaprobe[y:]
+    frame=r'(typed-cap-call :fs/app-data :string :bytes (str "\u0000FS2\u0000E" path "\u00000:64"))'
+    if keybody.count(frame)!=1: raise ValueError('key response anchor changed')
+    shortframe=metaprobe[:x]+keybody.replace(frame,'(bytes-from-vector-i64 [0 70 83 50 0])')+metaprobe[y:]
     original=raw.decode(); x,y=helper.form(original,'jn-run-with-verified-input'); job_entry=original[x:y]
     clock='(jn-int (typed-cap-call 7 :string :string "wall"))'
     if job_entry.count(clock)!=1: raise ValueError('job clock anchor changed')
@@ -104,6 +116,10 @@ def main():
         (root/'realplan.kotoba').write_text(realplan)
         (root/'keyprobe.kotoba').write_text(keyprobe)
         (root/'fs2keyprobe.kotoba').write_text(fs2keyprobe)
+        (root/'metaprobe.kotoba').write_text(metaprobe)
+        (root/'metamutant.kotoba').write_text(metamuser)
+        (root/'changedmeta.kotoba').write_text(changedmeta)
+        (root/'shortframe.kotoba').write_text(shortframe)
         (root/'jnprobe.kotoba').write_text(jnprobe)
         fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY); saved=None
         if fd!=3:
@@ -127,6 +143,7 @@ def main():
                 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(image)],check=True,capture_output=True,timeout=30)
                 return image
             image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive'); realplan_image=build('realplan'); key_image=build('keyprobe'); fs2key_image=build('fs2keyprobe'); jn_image=build('jnprobe')
+            meta_image=build('metaprobe'); metam_image=build('metamutant'); changed_image=build('changedmeta'); short_image=build('shortframe')
             args=['run-cron','profile','input','policy','rail','node-a','/case/key','fd','admitted','clock',
                   'other','/case/policy','/case/environment','ports','x','y','/case/input','/case/token',
                   '/case/attempts','0','pin','/case/definition','/case/source','capture-output','/case/cursor','/case/cron.lock']
@@ -171,6 +188,13 @@ def main():
             (case/'bad-key').write_text('z'*64); run([fs2key_image,'/case/bad-key'],1)
             (case/'long-key').write_text('00'*32+'x'*8192); run([fs2key_image,'/case/long-key'])
             run([fs2key_image,'/case/missing-key'],1)
+            run([meta_image,'/case/key','384 65 8 0'])
+            for metadata in ('-0 65 8 0','512 65 8 0','384 63 8 0','384 65 8 1',
+                             '384 65 bad 0','384 65 8 0 extra','384 65 8 0 '):
+                run([meta_image,'/case/key',metadata],1)
+            run([metam_image,'/case/key','-0 65 8 0'])
+            run([changed_image,'/case/key','384 65 8 0'],1)
+            run([short_image,'/case/key','384 65 8 0'],1)
             setup=run([realplan_image,'setup']).decode().strip().split(' ')
             if len(setup)!=3: raise ValueError('synthetic plan setup failed')
             pin,input_cid,job=setup
@@ -213,6 +237,7 @@ def main():
                               'unframedKeyReadDiagnosticSigtrap':True,
                               'boundedKeyAndSignerValidated':True,
                               'jobEntryKeyAndSignerRefusalValidated':True,
+                              'injectedMetadataAndShortFrameRefused':True,'metadataGuardMutantAccepted':True,
                               'scope':'native guard, diagnostic FS2 and flock; clock/job stubs; no production qualification'}))
         finally:
             if fd!=3:
