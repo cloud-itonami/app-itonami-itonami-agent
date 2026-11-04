@@ -108,3 +108,15 @@ expected signer refusal with a synthetic token path set. The archive entry was
 source-checked but was not executed in this test. Fault-injected malformed FS2
 responses, actual authenticated leases, GitHub storage, workload execution,
 production runtime and the governor are not qualified by these observations.
+
+### Token read fault injection
+
+The same source-bound diagnostic on the Mac was extended with source-injected
+faults. A range request shortened by one byte was refused, while a mutant
+with the returned-length guard removed accepted the resulting synthetic
+32-byte token. Forcing the metadata recheck to disagree also refused. Injected
+metadata cases refused empty, negative, out-of-range mode, too-small or too-large
+size, nonnumeric blocks, nonregular kind, extra fields and trailing space;
+a well-formed injected metadata control succeeded. These are controlled source
+mutations, not kernel or provider fault injection, and do not qualify the
+archive execution path or a production FS2 provider.

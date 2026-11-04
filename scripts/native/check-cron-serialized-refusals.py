@@ -93,6 +93,20 @@ def main():
     for i,j,replacement in sorted(edits,reverse=True): realplan=realplan[:i]+replacement+realplan[j:]
     i,j=helper.form(source,'main')
     tokenprobe=source[:i]+'(defn main [] :i64 (if (= (lease-token-bounded (cp-arg 0)) (if (= (cp-arg 1) "empty") "" (if (= (cp-arg 1) "long") (cp-text (cp-read "/case/expected-long")) "abcdefghijklmnopqrstuvwxyz012345"))) 0 1))'+source[j:]
+    x,y=helper.form(tokenprobe,'lease-token-bounded'); tokenbody=tokenprobe[x:y]
+    token_read='(ln-fs "E" path (str "0:" n))'
+    token_length='(= count n)'
+    token_recheck='(= (ln-fs "O" path "") meta)'
+    if tokenbody.count(token_read)!=1 or tokenbody.count(token_length)!=1 or tokenbody.count(token_recheck)!=1:
+        raise ValueError('bounded token guard changed')
+    token_short=tokenprobe[:x]+tokenbody.replace(token_read,'(ln-fs "E" path (str "0:" (- n 1)))')+tokenprobe[y:]
+    x,y=helper.form(token_short,'lease-token-bounded'); body=token_short[x:y]
+    token_short_mutant=token_short[:x]+body.replace(token_length,'true')+token_short[y:]
+    x,y=helper.form(tokenprobe,'lease-token-bounded')
+    token_changed=tokenprobe[:x]+tokenbody.replace(token_recheck,'false')+tokenprobe[y:]
+    meta_call='(ln-fs "O" path "")'
+    if tokenbody.count(meta_call)!=2: raise ValueError('bounded token metadata calls changed')
+    token_meta=tokenprobe[:x]+tokenbody.replace(meta_call,'(cp-arg 2)')+tokenprobe[y:]
     keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (cr-read "/case/key")) 65) 0 1))'+source[j:]
     fs2keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (key-seed-fs2 (cp-arg 0))) 32) 0 1))'+source[j:]
     didprobe=source[:i]+'(defn main [] :i64 (let [k (key-seed-fs2 (cp-arg 0))] (if (and (= (vector-count k) 32) (= (node-did k) "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp")) 0 1)))'+source[j:]
@@ -126,6 +140,10 @@ def main():
         (root/'realplan.kotoba').write_text(realplan)
         (root/'keyprobe.kotoba').write_text(keyprobe)
         (root/'tokenprobe.kotoba').write_text(tokenprobe)
+        (root/'token-short.kotoba').write_text(token_short)
+        (root/'token-short-mutant.kotoba').write_text(token_short_mutant)
+        (root/'token-changed.kotoba').write_text(token_changed)
+        (root/'token-meta.kotoba').write_text(token_meta)
         (root/'fs2keyprobe.kotoba').write_text(fs2keyprobe)
         (root/'didprobe.kotoba').write_text(didprobe)
         (root/'metaprobe.kotoba').write_text(metaprobe)
@@ -155,6 +173,7 @@ def main():
                 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(image)],check=True,capture_output=True,timeout=30)
                 return image
             image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive'); realplan_image=build('realplan'); key_image=build('keyprobe'); token_image=build('tokenprobe'); fs2key_image=build('fs2keyprobe'); did_image=build('didprobe'); jn_image=build('jnprobe')
+            token_short_image=build('token-short'); token_short_mutant_image=build('token-short-mutant'); token_changed_image=build('token-changed'); token_meta_image=build('token-meta')
             meta_image=build('metaprobe'); metam_image=build('metamutant'); changed_image=build('changedmeta'); short_image=build('shortframe')
             args=['run-cron','profile','input','policy','rail','node-a','/case/key','fd','admitted','clock',
                   'other','/case/policy','/case/environment','ports','x','y','/case/input','/case/token',
@@ -198,6 +217,14 @@ def main():
             (case/'token').write_text('abcdefghijklmnopqrstuvwxyz012345\n')
             (case/'token').chmod(0o600)
             run([token_image,'/case/token'])
+            run([token_short_image,'/case/token','empty'])
+            run([token_short_mutant_image,'/case/token'])
+            run([token_changed_image,'/case/token','empty'])
+            run([token_meta_image,'/case/token','normal','384 33 8 0'])
+            for metadata in ('', '-0 33 8 0', '512 33 8 0', '384 31 8 0',
+                             '384 4097 8 0', '384 33 bad 0', '384 33 8 1',
+                             '384 33 8 0 extra', '384 33 8 0 '):
+                run([token_meta_image,'/case/token','empty',metadata])
             (case/'short-token').write_text('short')
             run([token_image,'/case/short-token','empty'])
             run([token_image,'/case/missing-token','empty'])
@@ -277,6 +304,7 @@ def main():
                               'actualPlanAndConsumeValidated':True,'tamperedSourceRefused':True,
                               'unframedKeyReadDiagnosticSigtrap':True,
                               'syntheticTokenAndJobSignerRefusalValidated':True,
+                              'tokenShortReadMetadataAndChangeRefused':True,'tokenLengthGuardMutantAccepted':True,
                               'boundedKeyAndSignerValidated':True,
                               'jobEntryKeyAndSignerRefusalValidated':True,
                               'injectedMetadataAndShortFrameRefused':True,'metadataGuardMutantAccepted':True,
