@@ -95,7 +95,7 @@
                        (= receipt-node node) (jo-block? store proof-cid proof)
                        (or (not serialized)
                            (= (cp-text (jac-bounded (str cursor-path ".turn-intent") 1024))
-                              (cc-turn-text pin cursor job slot (jn-arg 25) token-path ports node))))]
+                              (cc-turn-text pin cursor job slot (jn-arg 25) token-path ports node did))))]
         (if (not ready) (let [x (jn-say "cron-job-archive/plan-refused")] 1)
           (let [chosen (lease-round ballot "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token)
                 before (ln-now "clock") guard (jn-lease-problem chosen node job before)
