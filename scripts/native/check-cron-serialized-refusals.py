@@ -29,6 +29,7 @@ def main():
     p.add_argument('--compiler',type=Path,required=True); p.add_argument('--compiler-sha256',required=True)
     p.add_argument('--packager',type=Path,required=True); p.add_argument('--packager-sha256',required=True)
     p.add_argument('--artifact-dir',type=Path,help='optional new directory for diagnostic key probes')
+    p.add_argument('--murakumo',type=Path,required=True,help='checkout containing the source for lease and job entry')
     a=p.parse_args()
     if (platform.system(),platform.machine())!=('Darwin','arm64'): raise ValueError('Mac ARM64 required')
     if a.unity.is_symlink(): raise ValueError('unity symlink refused')
@@ -38,6 +39,12 @@ def main():
     for name in ('cjg-run','cjg-cursor-problem','cron-serialized-job-node-main'):
         i,j=helper.form(current,name); x,y=helper.form(source,name)
         if current[i:j]!=source[x:y]: raise ValueError('guard source mismatch: '+name)
+    for filename,names in (('fleet_lease_node.kotoba',('ln-bytes','ln-frame','ln-fs','ln-exists?','ln-space?','ln-token','lease-token')),
+                           ('fleet_job_node.kotoba',('jn-token','jn-run-with-verified-input'))):
+        current_m=(a.murakumo/'kotoba'/filename).read_text()
+        for name in names:
+            i,j=helper.form(current_m,name); x,y=helper.form(source,name)
+            if current_m[i:j]!=source[x:y]: raise ValueError('Murakumo source mismatch: '+name)
     replacements={
         'ln-now':'(defn- ln-now [s :string] :i64 1792638000000)',
         'jn-run-with-verified-input':'(defn- jn-run-with-verified-input [source :string source-admitted :bool verified-input :string use-verified-input :bool expected-signer :string] :i64 (let [w (cp-write "/case/dispatched" (cp-bytes "unexpected"))] 0))',
@@ -85,6 +92,7 @@ def main():
         i,j=helper.form(realplan,name); edits.append((i,j,replacement))
     for i,j,replacement in sorted(edits,reverse=True): realplan=realplan[:i]+replacement+realplan[j:]
     i,j=helper.form(source,'main')
+    tokenprobe=source[:i]+'(defn main [] :i64 (if (= (lease-token (cp-arg 0)) "abcdefghijklmnopqrstuvwxyz012345") 0 1))'+source[j:]
     keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (cr-read "/case/key")) 65) 0 1))'+source[j:]
     fs2keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (key-seed-fs2 (cp-arg 0))) 32) 0 1))'+source[j:]
     didprobe=source[:i]+'(defn main [] :i64 (let [k (key-seed-fs2 (cp-arg 0))] (if (and (= (vector-count k) 32) (= (node-did k) "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp")) 0 1)))'+source[j:]
@@ -117,6 +125,7 @@ def main():
         (root/'positive.kotoba').write_text(positive)
         (root/'realplan.kotoba').write_text(realplan)
         (root/'keyprobe.kotoba').write_text(keyprobe)
+        (root/'tokenprobe.kotoba').write_text(tokenprobe)
         (root/'fs2keyprobe.kotoba').write_text(fs2keyprobe)
         (root/'didprobe.kotoba').write_text(didprobe)
         (root/'metaprobe.kotoba').write_text(metaprobe)
@@ -145,7 +154,7 @@ def main():
                 subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(image)],check=True,capture_output=True,timeout=30)
                 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(image)],check=True,capture_output=True,timeout=30)
                 return image
-            image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive'); realplan_image=build('realplan'); key_image=build('keyprobe'); fs2key_image=build('fs2keyprobe'); did_image=build('didprobe'); jn_image=build('jnprobe')
+            image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive'); realplan_image=build('realplan'); key_image=build('keyprobe'); token_image=build('tokenprobe'); fs2key_image=build('fs2keyprobe'); did_image=build('didprobe'); jn_image=build('jnprobe')
             meta_image=build('metaprobe'); metam_image=build('metamutant'); changed_image=build('changedmeta'); short_image=build('shortframe')
             args=['run-cron','profile','input','policy','rail','node-a','/case/key','fd','admitted','clock',
                   'other','/case/policy','/case/environment','ports','x','y','/case/input','/case/token',
@@ -186,6 +195,12 @@ def main():
             marker.unlink(); (case/'dispatched').unlink()
             (case/'key').write_text('00'*32+'\n'); (case/'key').chmod(0o600)
             run([key_image],-5)
+            (case/'token').write_text('abcdefghijklmnopqrstuvwxyz012345\n')
+            (case/'token').chmod(0o600)
+            run([token_image,'/case/token'])
+            (case/'short-token').write_text('short')
+            run([token_image,'/case/short-token'],1)
+            run([token_image,'/case/missing-token'],1)
             run([fs2key_image,'/case/key'])
             run([did_image,'/case/key'])
             (case/'short-key').write_text('0'*63); run([fs2key_image,'/case/short-key'],1)
@@ -208,6 +223,9 @@ def main():
             jnargs=list(realargs); jnargs[17]=''
             if run([jn_image,*jnargs],1).decode()!='job/signer-changed\n':
                 raise ValueError('actual job entry did not derive signer')
+            tokenargs=list(jnargs); tokenargs[17]='/case/token'
+            if run([jn_image,*tokenargs],1).decode()!='job/signer-changed\n':
+                raise ValueError('actual job entry did not read synthetic token and derive signer')
             shortargs=list(jnargs); shortargs[6]='/case/short-key'
             if run([jn_image,*shortargs],1).decode()!='job run/bad-key\n':
                 raise ValueError('actual job entry did not reject short key')
@@ -252,6 +270,7 @@ def main():
                               'stubbedPositiveMarkerBeforeJob':True,'duplicateTurnRefused':True,
                               'actualPlanAndConsumeValidated':True,'tamperedSourceRefused':True,
                               'unframedKeyReadDiagnosticSigtrap':True,
+                              'syntheticTokenAndJobSignerRefusalValidated':True,
                               'boundedKeyAndSignerValidated':True,
                               'jobEntryKeyAndSignerRefusalValidated':True,
                               'injectedMetadataAndShortFrameRefused':True,'metadataGuardMutantAccepted':True,

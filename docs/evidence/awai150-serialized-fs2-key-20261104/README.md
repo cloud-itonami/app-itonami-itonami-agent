@@ -72,3 +72,16 @@ local builder SHA-256:
 These are local diagnostic artifacts, not a rebuilt release runtime. The tests
 do not establish real key custody, adversarial replacement resistance, live
 job or lease behavior, GPU/resource governance, GitHub or bot operation.
+
+## Synthetic lease token on diagnostic Mac
+
+A later composition refreshed `ln-frame`, `ln-fs`, `ln-exists?`, and
+`ln-token` from the current Murakumo checkout; its SHA-256 was
+`e6355c6e5e336ccddb334f901a9a887a6be151db91212cfdedf8eb98d4cb1b71`.
+The test now checks those functions, their immediate token helpers, and the
+job entry against that checkout before compiling. With a disposable synthetic
+token, the real `lease-token` returned the trimmed token; short and missing
+files did not match. The actual job entry, with a fixed diagnostic clock and
+an intentionally wrong expected signer, returned `job/signer-changed` with
+the token path set. This establishes neither authenticated lease traffic nor
+workload dispatch, and the diagnostic runtime is not a production host.
