@@ -55,6 +55,7 @@ def main():
         'next-cron-ms':'(defn next-cron-ms [e :string after-ms :i64 offset :i64] :i64 60000)',
         'verified-cron-job-id':'(defn verified-cron-job-id [active :bool now :i64 previous :i64 slot :i64 expected :string definition :vector-i64] :string "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")',
         'key-seed':'(defn key-seed [key-path :string] :vector-i64 [1])',
+        'key-seed-fs2':'(defn key-seed-fs2 [key-path :string] :vector-i64 [1])',
         'node-did':'(defn node-did [seed :vector-i64] :string "did:test")',
         'jn-run-with-verified-input':'(defn- jn-run-with-verified-input [source :string source-admitted :bool verified-input :string use-verified-input :bool expected-signer :string] :i64 (if (and source-admitted use-verified-input (= source "source") (= verified-input "wrapper") (= expected-signer "did:test") (= (cp-fs "D" "/case/cursor.turn-intent" "") "1") (cp-write "/case/dispatched" (cp-bytes "called"))) 0 1))',
     }
@@ -75,9 +76,7 @@ def main():
           (if ok 0 1))
         (cron-serialized-job-node-main)))'''
     real_stubs={
-        'key-seed':'(defn key-seed [key-path :string] :vector-i64 [1])',
-        'node-did':'(defn node-did [seed :vector-i64] :string "did:test")',
-        'jn-run-with-verified-input':'(defn- jn-run-with-verified-input [source :string source-admitted :bool verified-input :string use-verified-input :bool expected-signer :string] :i64 (if (and source-admitted use-verified-input (= source "bounded source") (= verified-input (cp-text (cc-read-bounded "/case/input" 8192))) (= expected-signer "did:test") (= (cp-fs "D" "/case/cursor.turn-intent" "") "1") (cp-write "/case/dispatched" (cp-bytes "called"))) 0 1))',
+        'jn-run-with-verified-input':'(defn- jn-run-with-verified-input [source :string source-admitted :bool verified-input :string use-verified-input :bool expected-signer :string] :i64 (if (and source-admitted use-verified-input (= source "bounded source") (= verified-input (cp-text (cc-read-bounded "/case/input" 8192))) (= expected-signer "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp") (= (cp-fs "D" "/case/cursor.turn-intent" "") "1") (cp-write "/case/dispatched" (cp-bytes "called"))) 0 1))',
         'main':setup_entry,
     }
     realplan=source; edits=[]
@@ -86,6 +85,14 @@ def main():
     for i,j,replacement in sorted(edits,reverse=True): realplan=realplan[:i]+replacement+realplan[j:]
     i,j=helper.form(source,'main')
     keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (cr-read "/case/key")) 65) 0 1))'+source[j:]
+    fs2keyprobe=source[:i]+'(defn main [] :i64 (if (= (vector-count (key-seed-fs2 (cp-arg 0))) 32) 0 1))'+source[j:]
+    original=raw.decode(); x,y=helper.form(original,'jn-run-with-verified-input'); job_entry=original[x:y]
+    clock='(jn-int (typed-cap-call 7 :string :string "wall"))'
+    if job_entry.count(clock)!=1: raise ValueError('job clock anchor changed')
+    job_entry=job_entry.replace(clock,'1792638000000')
+    x,y=helper.form(source,'jn-run-with-verified-input'); jnprobe=source[:x]+job_entry+source[y:]
+    x,y=helper.form(jnprobe,'main')
+    jnprobe=jnprobe[:x]+'(defn main [] :i64 (jn-run-with-verified-input "bounded source" true "wrapper" true "did:wrong"))'+jnprobe[y:]
     compiler=helper.verified(a.compiler,a.compiler_sha256); packager=helper.verified(a.packager,a.packager_sha256)
     with tempfile.TemporaryDirectory(prefix='awai167-serialized-',dir='/private/tmp') as tmp:
         root=Path(tmp); case=root/'case'; case.mkdir(mode=0o700)
@@ -96,6 +103,8 @@ def main():
         (root/'positive.kotoba').write_text(positive)
         (root/'realplan.kotoba').write_text(realplan)
         (root/'keyprobe.kotoba').write_text(keyprobe)
+        (root/'fs2keyprobe.kotoba').write_text(fs2keyprobe)
+        (root/'jnprobe.kotoba').write_text(jnprobe)
         fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY); saved=None
         if fd!=3:
             try: saved=os.dup(3)
@@ -117,7 +126,7 @@ def main():
                 subprocess.run(['/usr/bin/codesign','--force','--sign','-',str(image)],check=True,capture_output=True,timeout=30)
                 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(image)],check=True,capture_output=True,timeout=30)
                 return image
-            image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive'); realplan_image=build('realplan'); key_image=build('keyprobe')
+            image=build('fixture'); mutant_image=build('mutant'); positive_image=build('positive'); realplan_image=build('realplan'); key_image=build('keyprobe'); fs2key_image=build('fs2keyprobe'); jn_image=build('jnprobe')
             args=['run-cron','profile','input','policy','rail','node-a','/case/key','fd','admitted','clock',
                   'other','/case/policy','/case/environment','ports','x','y','/case/input','/case/token',
                   '/case/attempts','0','pin','/case/definition','/case/source','capture-output','/case/cursor','/case/cron.lock']
@@ -157,12 +166,23 @@ def main():
             marker.unlink(); (case/'dispatched').unlink()
             (case/'key').write_text('00'*32+'\n'); (case/'key').chmod(0o600)
             run([key_image],-5)
+            run([fs2key_image,'/case/key'])
+            (case/'short-key').write_text('0'*63); run([fs2key_image,'/case/short-key'],1)
+            (case/'bad-key').write_text('z'*64); run([fs2key_image,'/case/bad-key'],1)
+            (case/'long-key').write_text('00'*32+'x'*8192); run([fs2key_image,'/case/long-key'])
+            run([fs2key_image,'/case/missing-key'],1)
             setup=run([realplan_image,'setup']).decode().strip().split(' ')
             if len(setup)!=3: raise ValueError('synthetic plan setup failed')
             pin,input_cid,job=setup
             realargs=list(args); realargs[1]='sha256:6e5ac5ef12cd31e4889ec39bc8944e41cbca613829e5dad43c2eb401239c9ea8'
             realargs[2]=input_cid; realargs[3]='bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq'
             realargs[4]='murakumo'; realargs[19]=str(1792638000000-60000); realargs[20]=pin
+            jnargs=list(realargs); jnargs[17]=''
+            if run([jn_image,*jnargs],1).decode()!='job/signer-changed\n':
+                raise ValueError('actual job entry did not derive signer')
+            shortargs=list(jnargs); shortargs[6]='/case/short-key'
+            if run([jn_image,*shortargs],1).decode()!='job run/bad-key\n':
+                raise ValueError('actual job entry did not reject short key')
             (case/'source').write_text('tampered source')
             if run([realplan_image,*realargs],2).decode()!='consume/source-cid\n':
                 raise ValueError('tampered source was not rejected')
@@ -173,7 +193,7 @@ def main():
             actual_cursor=(case/'cursor').read_bytes()
             actual_cid='b'+base64.b32encode(b'\x01\x55\x12\x20'+hashlib.sha256(actual_cursor).digest()).decode().lower().rstrip('=')
             actual_intent=('jti4\n'+pin+'\n'+actual_cid+'\n'+job+'\n1792638000000\n'+h('/case/cron.lock')+'\n'+
-                           h('/case/token')+'\n'+h('ports')+'\n'+h('node-a')+'\n'+h('did:test')+'\n')
+                           h('/case/token')+'\n'+h('ports')+'\n'+h('node-a')+'\n'+h('did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp')+'\n')
             if marker.read_text()!=actual_intent: raise ValueError('actual-plan marker binding mismatch')
             (case/'dispatched').write_text('existing')
             if run([realplan_image,*realargs],1).decode()!='cron-guard/turn-intent-unknown\n':
@@ -183,12 +203,16 @@ def main():
                               'positiveFixtureSha256':helper.digest(positive.encode()),
                               'actualPlanFixtureSha256':helper.digest(realplan.encode()),
                               'unframedKeyProbeSha256':helper.digest(keyprobe.encode()),
+                              'fs2KeyProbeSha256':helper.digest(fs2keyprobe.encode()),
+                              'jobKeyProbeSha256':helper.digest(jnprobe.encode()),
                               'guardSourceSha256':helper.digest(current.encode()),'compilerSha256':a.compiler_sha256,
                               'packagerSha256':a.packager_sha256,'busyAndFourMarkersRefused':True,
                               'invalidPlanRefused':True,'turnGuardRemovalDetected':True,'jobStubNotReached':True,
                               'stubbedPositiveMarkerBeforeJob':True,'duplicateTurnRefused':True,
                               'actualPlanAndConsumeValidated':True,'tamperedSourceRefused':True,
                               'unframedKeyReadDiagnosticSigtrap':True,
+                              'boundedKeyAndSignerValidated':True,
+                              'jobEntryKeyAndSignerRefusalValidated':True,
                               'scope':'native guard, diagnostic FS2 and flock; clock/job stubs; no production qualification'}))
         finally:
             if fd!=3:

@@ -80,7 +80,7 @@
                               (cjg-bytes-same? wrapper (jn-bytes wrapper-text)))
                     slot (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes"))
                     job (verified-cron-job-id true now previous slot pin definition)
-                    seed (if (and same serialized) (key-seed (jn-arg 6)) (vector-alloc 0))
+                    seed (if (and same serialized) (key-seed-fs2 (jn-arg 6)) (vector-alloc 0))
                     signer (if (> (vector-count seed) 0) (node-did seed) "")
                     marked (if (and same serialized) (and (jn-job-id? job) (not (= signer "")) (cc-turn-begin cursor-path pin cursor job slot (jn-arg 25) (jn-arg 17) (jn-arg 13) (jn-arg 5) signer)) same)]
                 (if (not same) (let [x (jn-say "cron-guard/source-encoding")] 2)
