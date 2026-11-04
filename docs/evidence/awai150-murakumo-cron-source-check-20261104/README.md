@@ -119,3 +119,24 @@ harness SHA-256:
 This establishes one local marker sample, not a lock held across both calls,
 authenticated node identity, distributed fencing, complete workload lifetime,
 real GitHub publication, or recovery after power loss.
+
+## Serialized entry refusal with native FS2 and flock
+
+The current `cron-serialized-job-node-main`, `cjg-run`, and cursor guard were
+executed natively on the same Mac with the diagnostic FS2 provider and an
+owned mode-0600 lock. A separate process-held flock returned
+`cron-lock/busy-or-unknown`. With an available lock, each of `.pending`,
+`.intent`, `.head-intent`, and `.turn-intent` caused its corresponding unknown
+refusal without changing the marker or reaching the job stub. An invalid plan
+was also refused. A separately built variant with the turn-marker guard
+removed fell through to plan refusal, demonstrating that the marker control
+is actually exercised. The clock and job body were explicitly stubbed.
+
+Fixture source SHA-256:
+`6b178e397ee7abd42019b5939bb53632a22a8928c18787b4d7c70b30a1d6b67a`;
+guard source SHA-256:
+`99e0e96d0b3f5616d6e092a275d415c04c3842a4e84f5548ee79f253457542d9`;
+harness SHA-256:
+`6604ece28a4780e4bd5d5cce04a1db1ab6b50aa707c91272fe38ae5bc4aeccdf`.
+This tests refusals, not a successful job, actual clock, lease, production
+provider, cross-call lock lifetime, child containment, GitHub or a governor.
