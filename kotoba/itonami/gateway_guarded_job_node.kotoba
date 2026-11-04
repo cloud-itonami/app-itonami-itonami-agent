@@ -32,6 +32,14 @@
         (not (= (cp-num cursor 0 "slot") previous)) "cron-guard/cursor-changed"
         :else "cron-guard/ok"))
 
+;; Job inputs must remain distinct from the cursor and every recovery marker.
+;; Lexical checks do not replace host ownership or inode alias prevention.
+(defn- cjg-input-outside-cursor? [path :string cursor :string] :bool
+  (and (cp-safe-absolute? path) (not (cc-definition-overlap? path cursor))))
+
+(defn- cjg-input-outside-lock? [path :string lock :string] :bool
+  (and (cp-safe-absolute? path) (not (cc-path-overlap? path lock))))
+
 (defn- cjg-run [serialized :bool] :i64
   (let [previous (jn-int (jn-arg 19)) pin (jn-arg 20) definition-path (jn-arg 21)
         source-path (jn-arg 22) input-path (jn-arg 16) attempts (jn-arg 18)
@@ -47,7 +55,11 @@
             (cc-definition-overlap? definition-path cursor-path)
             (cc-definition-overlap? source-path cursor-path)
             (cc-definition-overlap? input-path cursor-path)
-            (cc-definition-overlap? attempts cursor-path))
+            (cc-definition-overlap? attempts cursor-path)
+            (not (cjg-input-outside-cursor? (jn-arg 6) cursor-path))
+            (not (cjg-input-outside-cursor? (jn-arg 11) cursor-path))
+            (not (cjg-input-outside-cursor? (jn-arg 12) cursor-path))
+            (and (not (= (jn-arg 17) "")) (not (cjg-input-outside-cursor? (jn-arg 17) cursor-path))))
       (let [x (jn-say "cron-guard/input-refused")] 2)
       (let [pending (cp-fs "D" (str cursor-path ".pending") "")
             intent (cp-fs "D" (str cursor-path ".intent") "")
@@ -90,7 +102,10 @@
 (defn cron-serialized-job-node-main [] :i64
   (let [lock (jn-arg 25) cursor (jn-arg 24) definition (jn-arg 21) source (jn-arg 22)
         input (jn-arg 16) attempts (jn-arg 18)
-        valid (and (= (jn-arg 26) "") (cjg-lock-paths? lock cursor definition source input attempts (jn-arg 17)))
+        valid (and (= (jn-arg 26) "") (cjg-lock-paths? lock cursor definition source input attempts (jn-arg 17))
+                   (cjg-input-outside-lock? (jn-arg 6) lock)
+                   (cjg-input-outside-lock? (jn-arg 11) lock)
+                   (cjg-input-outside-lock? (jn-arg 12) lock))
         meta (if valid (cp-fs "U" lock "") "")]
     (if (not (and valid (= (cp-meta-field meta 0) "384") (= (cp-meta-field meta 3) "0")))
       (let [x (jn-say "cron-lock/config-refused")] 2)
