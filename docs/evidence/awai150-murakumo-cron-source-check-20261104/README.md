@@ -83,3 +83,22 @@ harness SHA-256:
 The unity, component, compiler and diagnostic packager pins are as above.
 This is a local exclusive synthetic FS2 test, not a host lock, process-kill or
 power-loss test, live GitHub archive, lease check, bot run or governor gate.
+
+## Cursor process-death observations
+
+The current cursor advance was compiled with five test-only output-pipe pause
+points. On the same Mac, the observer checked the cursor, intent, pending and
+archive files, then SIGKILLed only the child it started. The uninstrumented
+fixture returned `cursor/recovery-unknown` after intent sync or pending write;
+after cursor rename or directory sync it reconciled as `cursor/recovered`.
+After intent archival, it returned `cursor/recovery-unknown` because the
+intent was gone. In every case the old or new cursor bytes remained as
+expected. The caller must still reconcile the independently archived workload;
+a recovered cursor alone is not permission to run it again.
+
+Extended harness SHA-256:
+`b13eb36bf4abeb2689b81cb44e84f806a2b6af95e836ed156ec75cf9725e729b`.
+This is one source-instrumented process-kill sample per boundary on a local
+diagnostic provider. It does not prove power-loss durability, actual I/O
+faults, concurrent locking, GitHub behavior, whole-workload termination or
+resource governor qualification.
