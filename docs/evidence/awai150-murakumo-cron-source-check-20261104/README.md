@@ -140,3 +140,22 @@ harness SHA-256:
 `6604ece28a4780e4bd5d5cce04a1db1ab6b50aa707c91272fe38ae5bc4aeccdf`.
 This tests refusals, not a successful job, actual clock, lease, production
 provider, cross-call lock lifetime, child containment, GitHub or a governor.
+
+## Serialized entry with stubbed positive dependencies
+
+The extended native fixture also reached the positive serialized guard path
+using an actual private FS2 scope and flock. Before entering the test-only job
+stub it wrote a `jti4` turn intent; the stub checked that the marker existed
+and received the expected source, input and signer. The host independently
+checked the marker's cursor CID and all bound fields. A second invocation with
+the marker present returned `cron-guard/turn-intent-unknown` and did not call
+the job stub again. The prior refusal controls also passed.
+
+For this positive path, clock, plan/consume validation, next-slot and job-ID
+selection, key loading, signer derivation and the job body were replaced by
+explicit test stubs. It therefore does not validate a real schedule, key,
+lease, workload, output, GitHub archive, cross-call locking or governor.
+Positive fixture SHA-256:
+`459f54840370e2486efbc26d3ad42eb9c50bcb722368dd078c0f6e22c4c2218c`;
+extended harness SHA-256:
+`5349a10d47072e1f8ff46a44e4daf193c686611e60bca6a10a333e664e993646`.
