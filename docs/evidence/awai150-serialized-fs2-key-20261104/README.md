@@ -52,3 +52,23 @@ Extended harness SHA-256:
 These are source-injected responses in a diagnostic native program, not actual
 kernel short reads, metadata races, or adversarial same-size replacement.
 A qualified provider and exclusively owned key path remain required.
+
+## Target Mac key and DID samples
+
+The bounded-key and DID diagnostic programs were compiled on jacob with the
+same pinned source unity, diagnostic compiler and packager. Their signed image
+hashes were included in a manifest with SHA-256
+`b79460c7644484e18fedd76f7b1c887ff1fe2391e450a762e3c7cac0ed27682e`.
+The manifest, image hashes and strict signatures were checked on naphtali,
+benjamin and judah, all Darwin ARM64 build 25G332, over pinned Tailscale SSH.
+Each host read a public synthetic zero key, derived the expected DID, refused
+short, invalid and missing keys, and accepted the legacy-compatible valid
+64-byte prefix in a longer file. Only private task-owned temporary files were
+used and removed. Host observer SHA-256:
+`677b9f933e2fb2fb2828e2a94fff58365d10d9e6ade8e56d57ec5e31018cc71e`;
+local builder SHA-256:
+`1b6442598804c5d6a7ef9227bebc233024077b8a4f1e50adc9a63d9671aba8f8`.
+
+These are local diagnostic artifacts, not a rebuilt release runtime. The tests
+do not establish real key custody, adversarial replacement resistance, live
+job or lease behavior, GPU/resource governance, GitHub or bot operation.
