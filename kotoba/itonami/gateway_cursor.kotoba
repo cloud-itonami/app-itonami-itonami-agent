@@ -3,6 +3,17 @@
 ;; Composition: existing gateway_job_node and git_checkpoint sources.
 (ns itonami.gateway-cursor (:export [cron-cursor-main]))
 
+;; Bound the requested size before reading cursor and schedule files. The host
+;; must enforce the range response limit.
+;; A missing, empty, non-regular, oversized, short or size-changing read is
+;; unknown and returns no bytes. The host must still exclude same-size races
+;; and path aliases by owning and serializing this directory.
+(defn- cc-read-bounded [path :string maximum :i64] :vector-i64
+  (let [size (cp-size path)]
+    (if (or (< size 1) (> size maximum)) (vector-alloc 0)
+      (let [data (cp-range path 0 size)]
+        (if (and (= (vector-count data) size) (= (cp-size path) size)) data (vector-alloc 0))))))
+
 ;; The advance operation writes these four names, including replacement of
 ;; .last. Lexical checks require normalized absolute paths; the trusted host
 ;; must also exclude symlink and hard-link aliases and serialize all writers.
@@ -87,7 +98,7 @@
           (not (cp-write intent (cp-bytes (str "itc1\n" (cp-cid original) "\n" (cp-cid (cc-cursor pin slot)) "\n")))) "cursor/intent-unknown"
           (not (= (cp-fs "M" dir "") "1")) "cursor/intent-unknown"
           (not (cp-write tmp (cc-cursor pin slot))) "cursor/write-unknown"
-          (not (= (cp-cid (cp-read path)) (cp-cid original))) "cursor/changed"
+          (not (= (cp-cid (cc-read-bounded path 1024)) (cp-cid original))) "cursor/changed"
           (not (= (cp-fs "L" tmp path) "1")) "cursor/rename-unknown"
           (not (= (cp-fs "M" dir "") "1")) "cursor/fsync-unknown"
           (not (= (cp-fs "L" intent (str path ".last")) "1")) "cursor/intent-unknown"
@@ -102,8 +113,7 @@
         pending-state (cp-fs "D" pending "") intent-state (cp-fs "D" intent "")
         ;; Bound the read before allocation. Host-owned exclusive access is
         ;; required because metadata and range read are not an atomic snapshot.
-        bytes (if (and (= intent-state "1") (= (cp-size intent) 125))
-                (cp-range intent 0 125) (vector-alloc 0))
+        bytes (if (= intent-state "1") (cc-read-bounded intent 125) (vector-alloc 0))
         ascii (and (= (vector-count bytes) 125)
                    (loop [i 0]
                      (if (= i 125) true
@@ -115,7 +125,7 @@
     (and (= pending-state "0") (= intent-state "1") (= (string-length original) 59)
          (cp-raw? original) (not (= original current))
          (= text (str "itc1\n" original "\n" current "\n"))
-         (= (cp-cid (cp-read path)) current))))
+         (= (cp-cid (cc-read-bounded path 1024)) current))))
 
 (defn- cc-recover [path :string cursor :vector-i64] :string
   (let [intent (str path ".intent") dir (cp-parent-dir path)]
@@ -141,7 +151,7 @@
           (not (= (cp-fs "D" (str path ".turn-intent") "") "0"))
           (let [x (jn-say "cursor/turn-intent-unknown")] 1)
           (= mode "recover")
-          (let [cursor (cp-read path) valid (cc-cursor-problem cursor pin (ln-now "clock"))
+          (let [cursor (cc-read-bounded path 1024) valid (cc-cursor-problem cursor pin (ln-now "clock"))
                 result (if (= valid "cursor/ok") (cc-recover path cursor) "cursor/recovery-unknown")
                 x (jn-say result)]
             (if (= result "cursor/recovered") 0 1))
@@ -149,7 +159,7 @@
           (let [x (jn-say "cursor/pending-unknown")] 1)
           (not (= (cp-fs "D" (str path ".intent") "") "0"))
           (let [x (jn-say "cursor/intent-unknown")] 1)
-          :else (let [result (cc-plan (cp-read definition-path) pin (cp-read path) (ln-now "clock"))]
+          :else (let [result (cc-plan (cc-read-bounded definition-path 8192) pin (cc-read-bounded path 1024) (ln-now "clock"))]
                   (let [x (jn-say result)]
                     (if (or (= result "cursor/idle") (= (string-index-of result "cursor/plan ") 0)) 0 1))))))
 
@@ -166,7 +176,7 @@
       (if (or (not (= (cp-fs "D" (str path ".head-intent") "") "0"))
               (not (= (cp-fs "D" (str path ".turn-intent") "") "0")))
         (let [x (jn-say "cursor/turn-or-head-intent-unknown")] 1)
-      (let [definition (cp-read definition-path) cursor (cp-read path) now (ln-now "clock")
+      (let [definition (cc-read-bounded definition-path 8192) cursor (cc-read-bounded path 1024) now (ln-now "clock")
             plan (cc-plan-problem definition pin cursor now)
             next (if (= plan "trigger/ok") (next-cron-ms (gt-str definition "cron") previous (gt-num definition "offsetMinutes")) -1)]
         (if (or (not (= plan "trigger/ok")) (not (= (cp-num cursor 0 "slot") previous)) (not (= next slot)))
