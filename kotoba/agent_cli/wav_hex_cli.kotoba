@@ -1,0 +1,30 @@
+(ns agent-cli.wav-hex-cli
+  "One-shot native guest that reads a WAV file (JUN-941). argv 0 is the path of the file inside the
+  directory granted on fd 3 (amu-command-fs35). Accepted: RIFF/WAVE, PCM, mono, 16 kHz, 16-bit, 4,000 to
+  64,000 samples (0.25 to 4 s), at most 262,144 bytes. It prints the samples as hex (4 digits each, the
+  signed value + 32768: the input of the audio encoder) on one line, exit 0. Any other file prints one
+  named line with the reason on stderr, nothing on stdout, exit 2."
+  (:require [itonami.wav-reader :as wr])
+  (:export [main])
+  (:capabilities #{:cli/args :io/write :io/write-error :fs/app-data}))
+
+(defn- wire-arg [i :i64] :string
+  (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- wire-say [s :string] :string
+  (typed-cap-call :io/write :string :string s))
+
+(defn- wire-die [s :string] :string
+  (typed-cap-call :io/write-error :string :string s))
+
+(defn main [] :i64
+  (let [path (wire-arg 0)]
+    (if (= (string-length path) 0)
+      (let [_ (wire-die "wav: argv 0 must be the path of a WAV file\n")] 2)
+      (let [why (wr/wav-reason path)]
+        (if (> (string-length why) 0)
+          (let [_ (wire-die (string-concat "wav: " (string-concat why "\n")))] 2)
+          (let [out (wr/wav-hex path)]
+            (if (= (string-length out) 0)
+              (let [_ (wire-die "wav: file unreadable\n")] 2)
+              (let [_ (wire-say (string-concat out "\n"))] 0))))))))

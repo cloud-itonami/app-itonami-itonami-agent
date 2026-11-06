@@ -1,0 +1,14 @@
+format: itonami.transcribe-tool-selfhost-gate.v1
+amu_cli_sha256: ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
+model_sha256: 79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
+guests:
+  356f4151598cf3996aa469639583d63066946a535aa75184785f16bd8436830d  wav_hex_cli.macho
+  48efbad666a86fa724b0763e6e6548e9f636f1aa765499a5fe46863fcfa26bdb  audio_enc_cli.macho
+  ea466af94c67e5bdd44d0d8ef886c4c0a0b34800cbb17891c17ce627ce03e204  qwen_decoder_cli.macho
+  8167c4a943163746a483d9cb4bfb5662b29cf15c83aea4821025d24ecf1f6483  qwen_detok_cli.macho
+  8ac56fcacbf541389c3b8413b25d80393a6b4f57975b858c0830e9bc1a2af1d7  qwen_calc_cli.macho
+checks_passed: 26 of 26
+english: The quick brown fox jumps over the lazy dog. | itonami-transcribe: language English (39946 samples, 33 audio tokens, 13 tokens decoded)
+japanese: 今日はとてもいい天気ですね。 | itonami-transcribe: language Japanese (38367 samples, 31 audio tokens, 10 tokens decoded)
+reader_mutations_caught: riff-tag-offset fmt-rate-offset channels-offset bits-offset chunk-padding sample-bias sample-order length-limit min-length truncation-check
+qualification: WAV (16 kHz mono 16-bit PCM, 0.25 to 4 s) in, transcript out through bin/itonami-transcribe and itonami-agent stt on the real Qwen3-ASR-0.6B weights; the English and Japanese transcripts equal the spoken sentences; not other languages or speakers, longer audio, streaming, the original model beyond the transcripts, CI

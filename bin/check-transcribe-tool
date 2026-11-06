@@ -1,0 +1,288 @@
+#!/bin/sh
+# The speech-to-text tool end to end (JUN-941): bin/build-transcribe-guests builds the five native guests
+# from this checkout, bin/itonami-transcribe turns a WAV file into its transcript with them, and
+# `itonami-agent stt` reaches it. Checked here:
+#   - the WAV reader (itonami.wav-reader) on the two real WAV files (the hex of their samples is compared with
+#     the one the earlier gates read from CPython's wave module: first and last samples and the digest of the
+#     hex) and on fourteen broken files, each of which must be refused with exit 2, a named reason and nothing on
+#     stdout;
+#   - the driver's own refusals (no argument, an unset environment, a missing file, a broken WAV);
+#   - the tool on the English and the Japanese WAV: stdout is the sentence that was spoken, stderr names the
+#     language;
+#   - the agent launcher's stt route on the English WAV, and its answers without a configuration;
+#   - mutations of the reader's header offsets and checks, which must change the answers above.
+# The model is cloned into a directory granted to the guests on fd 3; nothing is downloaded.
+
+set -eu
+
+if [ "$#" -ne 3 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir> <model-dir (model.safetensors, vocab.json)>" >&2
+  exit 2
+fi
+CLI=$1
+OUT_DIR=$2
+MODELDIR=$3
+EXPECTED_CLI_SHA256=ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
+EXPECTED_MODEL_SHA256=79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
+EXPECTED_WAV_READER_SHA256=781692061cd8d151f9f5b48cc7493d8019f802b5cb466967f04b2c772a7ec934
+EXPECTED_AUDIO_ENC_SHA256=f52b700c8bc794b902ea802bda848b3ab7209c02ac97bccc5a3bbce03fe36372
+EXPECTED_BF16_SHA256=09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b
+EXPECTED_GELU_ERF_SHA256=36b4c98a4df8fd817695a62d1602320f23d93fb38ddf97c1fb124bdcbd7c18a6
+EXPECTED_GGML_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
+EXPECTED_LOG_MEL_SHA256=daf0d273329a7b5a05aef4255b985f2e1c031c74f32596e9578add46980b1f5e
+EXPECTED_NN_OPS_SHA256=4693d227291a31b8c59378b0ab114715a983dfbfd17308d5b478181793a3604d
+EXPECTED_NN_VEC_SHA256=ee8fe6f387f2d1fc2ae7ff7b636f1faf4c72a97a4de0ae6f8dcce5fabc1b7847
+EXPECTED_QWEN_OPS_SHA256=a5a8744046a81edd21d0740395e874c89ed518e24092a5e889c78b2b2ba51576
+EXPECTED_SAFETENSORS_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
+EXPECTED_WEIGHTS_FILE_SHA256=8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
+EXPECTED_QWEN_DECODER_SHA256=84568ebda2ef9700b06b4555a7b5e0cbb4f253f59f98106dfb1b3d997387fd43
+EXPECTED_QWEN_VOCAB_SHA256=275019cabe34aeb60ab2628eab78daeae0ae15fdecd530e7984e3ecf44f4dcc9
+EXPECTED_WAV_HEX_CLI_SHA256=61250cff44ba289b70ec141eb5d6f2228cb12ace73d48bfdcbd5c32a8d68cd89
+EXPECTED_AUDIO_ENC_CLI_SHA256=925832e63e3479d6b374e349e45b62709cce208bacdf65ae11ac0bb08898d36f
+EXPECTED_QWEN_DECODER_CLI_SHA256=126aa19294928dbd3684510662d9a81233ec4c42dacd73ee84f1eb08242a68b6
+EXPECTED_QWEN_DETOK_CLI_SHA256=26a6c9c32ab12d6879fcc3f4749540caf89f3cc68799e2024f3c993e46860ae7
+EXPECTED_QWEN_CALC_CLI_SHA256=0e4c2b8cdb6388474f36996c938aaea7578b90490e8eb3c5e8e8218e7cd1cd60
+EXPECTED_DRIVER_SHA256=b5eb63f7b38c2061b5402da8c5b06a6abb6a3550addcb4c16b901b417dce73ce
+EXPECTED_BUILD_SHA256=8bdb80790ac515472397ced5d1072da0fa3305285724facb5a9524561eba72bb
+EXPECTED_AGENT_SHA256=7633c76fe0404a84d2f43083977116e7ec737b7d2dbf5bb72030ad1fea966bab
+EXPECTED_TEXT_EN="The quick brown fox jumps over the lazy dog."
+EXPECTED_TEXT_JA="今日はとてもいい天気ですね。"
+REASONS="bad_notriff.wav:not a RIFF/WAVE file
+bad_notwave.wav:not a RIFF/WAVE file
+bad_notpcm.wav:not PCM
+bad_stereo.wav:not mono
+bad_rate8k.wav:not 16 kHz
+bad_bits8.wav:not 16-bit
+bad_truncated.wav:truncated data chunk
+bad_short.wav:shorter than 0.25 s
+bad_long.wav:longer than 4 s
+bad_tiny.wav:too short to be a WAV file
+bad_nodata.wav:no data chunk
+bad_empty.wav:too short to be a WAV file
+bad_edge_64001.wav:longer than 4 s
+bad_edge_3999.wav:shorter than 0.25 s
+bad_edge_one_byte_missing.wav:truncated data chunk"
+TOTAL=26
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+for p in "$CLI" "$MODELDIR"; do
+  case "$p" in /*) ;; *) printf '%s\n' "paths must be absolute: $p" >&2; exit 2 ;; esac
+done
+[ -x "$CLI" ] || { printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2; exit 2; }
+[ -f "$MODELDIR/model.safetensors" ] && [ -f "$MODELDIR/vocab.json" ] || { printf '%s\n' "model directory incomplete: $MODELDIR" >&2; exit 2; }
+[ ! -e "$OUT_DIR" ] || { printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2; exit 2; }
+
+check_sha() {
+  actual=$(shasum -a 256 "$1" | cut -d ' ' -f 1)
+  [ "$actual" = "$2" ] || { printf 'unexpected digest for %s: %s\n' "$1" "$actual" >&2; exit 2; }
+}
+KD="$REPO_ROOT/kotoba/itonami"
+AD="$REPO_ROOT/kotoba/agent_cli"
+WD="$REPO_ROOT/test/native/wav"
+check_sha "$CLI" "$EXPECTED_CLI_SHA256"
+check_sha "$MODELDIR/model.safetensors" "$EXPECTED_MODEL_SHA256"
+for n in wav_reader audio_enc bf16 gelu_erf ggml_dequant log_mel nn_ops nn_vec qwen_ops safetensors weights_file qwen_decoder qwen_vocab; do
+  eval "want=\$EXPECTED_$(printf '%s' "$n" | tr 'a-z' 'A-Z')_SHA256"
+  check_sha "$KD/$n.kotoba" "$want"
+done
+for n in wav_hex_cli audio_enc_cli qwen_decoder_cli qwen_detok_cli qwen_calc_cli; do
+  eval "want=\$EXPECTED_$(printf '%s' "$n" | tr 'a-z' 'A-Z')_SHA256"
+  check_sha "$AD/$n.kotoba" "$want"
+done
+check_sha "$REPO_ROOT/bin/itonami-transcribe" "$EXPECTED_DRIVER_SHA256"
+check_sha "$REPO_ROOT/bin/build-transcribe-guests" "$EXPECTED_BUILD_SHA256"
+check_sha "$REPO_ROOT/bin/itonami-agent" "$EXPECTED_AGENT_SHA256"
+printf '%s\n' \
+  "edge_exact_data.wav bf2c79811e3265602b31bef45f0aeba5e9056a89d909c262294471b72305315d" \
+  "bad_edge_one_byte_missing.wav 7c69b21eb72c2af905a09df61584b400323aab092c017a78377e50ae3f7e06f3" \
+  "bad_edge_3999.wav 56291c3cb9deb712bb94f14c64341527b35c229203b7641816a3f67835600b38" \
+  "bad_edge_64001.wav 3047a95d0837bdefc16a519f32083cb28200679041972273c7125ae9958ef065" \
+  "edge_max_64000.wav 8e2347067d153e8960abbf46686c1b958ecfcaf8f1c4dfc6b7bb5614016698a6" \
+  "edge_min_4000.wav 9535d411103e9af2bc2cc3983b032167475efa8311edeae752c365854f2552d6" \
+  "bad_bits8.wav a427c921cf265861c0da4285fd7c2d82b67d02f12401e2be4c88032501a58b4a" \
+  "bad_empty.wav e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" \
+  "bad_long.wav 262d1f34f300560a4c82ba8127ddea9e1d72946f187fdbd3e8f70ee096077aec" \
+  "bad_nodata.wav ee2934b73bbf0471dd402085707387c68ed7c5ba10675450be81eb8e93f7a7b4" \
+  "bad_notpcm.wav dba2e2b1b7bb2f974e15d3231c2bc2e15a4085073860f2ff80586a76b53079b7" \
+  "bad_notriff.wav 9b2c1ab3160fa9fad2fe05cfb3e2b62e2480505f5dc71f5db8398e3d2ab2a802" \
+  "bad_notwave.wav c23c00d2c1ccb88d28cdd6561ae1f475992ed62d79dacaf8fc8008037811c47e" \
+  "bad_rate8k.wav 6fe375c639760407642115e8d34ad00c5483ea6a88b5e09e0bbd3a3b64b59ab4" \
+  "bad_short.wav 54df87e1038f4bfeaad283c9abcbe5bf01ea45baf04a796f2c7009d6da6fcf9f" \
+  "bad_stereo.wav 68d5523ea60a0642e569714b5aecef18ace963d9eb51c550d91b84965fcbda1b" \
+  "bad_tiny.wav a40ff3d5900fb7698b8c865041347cb49eccedc8f93945f89629ad104aaecce4" \
+  "bad_truncated.wav b6e193dc65985615aac8280ce2501862d6b4319f0b1f445aa1433b5306bb839b" \
+  "ja_tenki.wav 0a8075350616f6575c703311c972f43ede066d28dda67d8066c9e60bcc01b5b2" \
+  "quick_brown_fox.wav 904c039735a6eec4186bed49369408638421937fb02104729afafea8c41b266d" \
+  | while read -r name want; do check_sha "$WD/$name" "$want"; done
+
+mkdir -p "$OUT_DIR"
+PASSED=0
+ok() { PASSED=$((PASSED + 1)); }
+
+# ---- 1. build the guests ----------------------------------------------------------------------------------
+"$REPO_ROOT/bin/build-transcribe-guests" "$CLI" "$OUT_DIR/guests" > "$OUT_DIR/build.log"
+GUESTS="$OUT_DIR/guests"
+ok
+
+# a scope directory with the broken and real WAV files, for the reader on its own
+SCOPE="$OUT_DIR/scope"
+mkdir -m 700 -p "$SCOPE/d"
+cp "$WD"/*.wav "$SCOPE/d/"
+
+# reader <file>: runs wav_hex_cli on a file of the scope; sets OUT, ERR and STATUS
+reader() {
+  set +e
+  OUT=$("$1/wav_hex_cli.macho" "/d/$2" 3< "$SCOPE" 2>"$OUT_DIR/reader.err")
+  STATUS=$?
+  set -e
+  ERR=$(cat "$OUT_DIR/reader.err")
+}
+
+# ---- 2. the reader on the real files and on fourteen broken ones -----------------------------------------------
+reader "$GUESTS" quick_brown_fox.wav
+[ "$STATUS" -eq 0 ] && [ "${#OUT}" -eq $((39946 * 4)) ] && ok
+EN_FIRST=$(printf '%s' "$OUT" | cut -c1-4)
+EN_LAST=$(printf '%s' "$OUT" | rev | cut -c1-4 | rev)
+# first sample 0xffff... as the python wave module reads them: compared with the digest of the whole hex
+EN_DIGEST=$(printf '%s' "$OUT" | shasum -a 256 | cut -d ' ' -f 1)
+[ "$EN_DIGEST" = "da88b229bd89d1b027b93a80ad373ca8158d3aa8b0f741413257c5e642de20bd" ] && ok
+reader "$GUESTS" ja_tenki.wav
+[ "$STATUS" -eq 0 ] && [ "${#OUT}" -eq $((38367 * 4)) ] && ok
+JA_DIGEST=$(printf '%s' "$OUT" | shasum -a 256 | cut -d ' ' -f 1)
+[ "$JA_DIGEST" = "a4caa1a262196ce2190d06ff519af66f58df235ed7048b7f96c3fc897f1128a4" ] && ok
+printf '%s\n' "$REASONS" | {
+  n=0
+  while IFS=: read -r file why; do
+    reader "$GUESTS" "$file"
+    if [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && [ "$ERR" = "wav: $why" ]; then n=$((n + 1)); else printf 'reader: %s gave exit %s, %s\n' "$file" "$STATUS" "$ERR" >&2; fi
+  done
+  echo "$n" > "$OUT_DIR/reader.count"
+}
+[ "$(cat "$OUT_DIR/reader.count")" -eq 15 ] && ok
+reader "$GUESTS" edge_max_64000.wav
+[ "$STATUS" -eq 0 ] && [ "${#OUT}" -eq $((64000 * 4)) ] && ok
+reader "$GUESTS" edge_min_4000.wav
+[ "$STATUS" -eq 0 ] && [ "${#OUT}" -eq $((4000 * 4)) ] && ok
+reader "$GUESTS" edge_exact_data.wav
+[ "$STATUS" -eq 0 ] && [ "${#OUT}" -eq $((8000 * 4)) ] && ok
+reader "$GUESTS" missing.wav
+[ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && [ "$ERR" = "wav: file not found" ] && ok
+
+# ---- 3. the driver's refusals ------------------------------------------------------------------------------------
+DRIVER="$REPO_ROOT/bin/itonami-transcribe"
+export ITONAMI_STT_GUESTS="$GUESTS" ITONAMI_STT_MODEL="$MODELDIR"
+set +e
+"$DRIVER" > /dev/null 2>&1; [ "$?" -eq 2 ] && ok
+env -u ITONAMI_STT_GUESTS "$DRIVER" "$WD/quick_brown_fox.wav" > /dev/null 2>&1; [ "$?" -eq 78 ] && ok
+env -u ITONAMI_STT_MODEL "$DRIVER" "$WD/quick_brown_fox.wav" > /dev/null 2>&1; [ "$?" -eq 78 ] && ok
+"$DRIVER" "$OUT_DIR/no-such-file.wav" > /dev/null 2>&1; [ "$?" -eq 2 ] && ok
+"$DRIVER" "$WD/bad_stereo.wav" > "$OUT_DIR/bad.out" 2> "$OUT_DIR/bad.err"; st=$?
+[ "$st" -eq 2 ] && [ ! -s "$OUT_DIR/bad.out" ] && grep -q 'not mono' "$OUT_DIR/bad.err" && ok
+"$DRIVER" "$WD/bad_long.wav" > "$OUT_DIR/bad.out" 2> "$OUT_DIR/bad.err"; st=$?
+[ "$st" -eq 2 ] && [ ! -s "$OUT_DIR/bad.out" ] && grep -q 'longer than 4 s' "$OUT_DIR/bad.err" && ok
+env -u ITONAMI_STT_GUESTS "$REPO_ROOT/bin/itonami-agent" stt "$WD/quick_brown_fox.wav" > /dev/null 2>&1; [ "$?" -eq 78 ] && ok
+"$REPO_ROOT/bin/itonami-agent" stt > /dev/null 2>&1; [ "$?" -eq 2 ] && ok
+set -e
+
+# ---- 4. the tool on the two real WAV files --------------------------------------------------------------------------
+"$DRIVER" "$WD/quick_brown_fox.wav" > "$OUT_DIR/en.out" 2> "$OUT_DIR/en.err" || true
+[ "$(cat "$OUT_DIR/en.out")" = "$EXPECTED_TEXT_EN" ] && ok
+grep -q 'language English' "$OUT_DIR/en.err" && ok
+grep -q '39946 samples, 33 audio tokens' "$OUT_DIR/en.err" && ok
+"$DRIVER" "$WD/ja_tenki.wav" > "$OUT_DIR/ja.out" 2> "$OUT_DIR/ja.err" || true
+[ "$(cat "$OUT_DIR/ja.out")" = "$EXPECTED_TEXT_JA" ] && ok
+grep -q 'language Japanese' "$OUT_DIR/ja.err" && ok
+grep -q '38367 samples, 31 audio tokens' "$OUT_DIR/ja.err" && ok
+
+# ---- 5. the launcher's stt route on the English WAV -------------------------------------------------------------------------
+"$REPO_ROOT/bin/itonami-agent" stt "$WD/quick_brown_fox.wav" > "$OUT_DIR/agent.out" 2> "$OUT_DIR/agent.err" || true
+[ "$(cat "$OUT_DIR/agent.out")" = "$EXPECTED_TEXT_EN" ] && ok
+grep -q 'language English' "$OUT_DIR/agent.err" && ok
+
+# ---- 6. mutations of the reader: each must break one of the reader checks in 2. -------------------------------
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+NEG_RESULTS=""
+# mutate <name> <pattern> <replacement>: the reader is rebuilt with one change and run on the real and broken files
+mutate() {
+  name=$1
+  pattern=$2
+  replacement=$3
+  sed "s/$pattern/$replacement/" "$KD/wav_reader.kotoba" > "$NEG/$name.kotoba"
+  if cmp -s "$KD/wav_reader.kotoba" "$NEG/$name.kotoba"; then
+    printf 'negative control %s did not change the source\n' "$name" >&2
+    exit 1
+  fi
+  d="$NEG/$name"
+  mkdir -p "$d/src"
+  cp "$KD/wav_reader.kotoba" "$d/src/wav_reader.kotoba"
+  cp "$NEG/$name.kotoba" "$d/src/wav_reader.kotoba"
+  cp "$AD/wav_hex_cli.kotoba" "$d/src/wav_hex_cli.kotoba"
+  {
+    printf 'KSL2\nentry %s/src/wav_hex_cli.kotoba\n' "$d"
+    printf 'module agent-cli.wav-hex-cli %s/src/wav_hex_cli.kotoba\n' "$d"
+    printf 'module itonami.wav-reader %s/src/wav_reader.kotoba\n' "$d"
+    for f in wav_hex_cli wav_reader; do
+      printf 'file %s %s/src/%s.kotoba\n' "$(shasum -a 256 "$d/src/$f.kotoba" | cut -d ' ' -f 1)" "$d" "$f"
+    done
+  } > "$d/lock.ksl"
+  "$CLI" compile "$d/src/wav_hex_cli.kotoba" --source-lock "$d/lock.ksl" --runtime-profile amu-command-fs35 -o "$d/wav_hex_cli.macho" > /dev/null
+  mkdir -p "$d/g"
+  cp "$d/wav_hex_cli.macho" "$d/g/wav_hex_cli.macho"
+  bad=0
+  reader "$d/g" quick_brown_fox.wav
+  if [ "$STATUS" -ne 0 ] || [ "$(printf '%s' "$OUT" | shasum -a 256 | cut -d ' ' -f 1)" != "$EN_DIGEST" ]; then bad=1; fi
+  printf '%s\n' "$REASONS" | {
+    n=0
+    while IFS=: read -r file why; do
+      reader "$d/g" "$file"
+      if [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && [ "$ERR" = "wav: $why" ]; then n=$((n + 1)); fi
+    done
+    echo "$n" > "$d/count"
+  }
+  [ "$(cat "$d/count")" -ne 15 ] && bad=1
+  reader "$d/g" edge_max_64000.wav
+  if [ "$STATUS" -ne 0 ] || [ "${#OUT}" -ne $((64000 * 4)) ]; then bad=1; fi
+  reader "$d/g" edge_min_4000.wav
+  if [ "$STATUS" -ne 0 ] || [ "${#OUT}" -ne $((4000 * 4)) ]; then bad=1; fi
+  reader "$d/g" edge_exact_data.wav
+  if [ "$STATUS" -ne 0 ] || [ "${#OUT}" -ne $((8000 * 4)) ]; then bad=1; fi
+  if [ "$bad" -ne 1 ]; then
+    printf 'negative control %s still passed the reader checks\n' "$name" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name"
+}
+mutate riff-tag-offset '(tag? r 8 87 65 86 69)' '(tag? r 9 87 65 86 69)'
+mutate fmt-rate-offset '(le r (+ fmt 12) 3 0) 16000' '(le r (+ fmt 13) 3 0) 16000'
+mutate channels-offset '(le r (+ fmt 10) 1 0) 1)' '(le r (+ fmt 11) 1 0) 1)'
+mutate bits-offset '(le r (+ fmt 22) 1 0) 16)' '(le r (+ fmt 21) 1 0) 16)'
+mutate chunk-padding '(mod (le r (+ p 4) 3 0) 2)' '(mod (le r (+ p 4) 3 0) 3)'
+mutate sample-bias '(+ (+ lo (\* 256 hi)) 32768)' '(+ (+ lo (* 256 hi)) 32767)'
+mutate sample-order '(+ lo (\* 256 hi))' '(+ hi (* 256 lo))'
+mutate length-limit '(> n 64000) "longer than 4 s"' '(> n 64001) "longer than 4 s"'
+mutate min-length '(< n 4000) "shorter than 0.25 s"' '(< n 3999) "shorter than 0.25 s"'
+mutate truncation-check '(> (+ data (+ 8 (\* n 2))) size)' '(> (+ data (+ 7 (* n 2))) size)'
+
+if [ "$PASSED" -ne "$TOTAL" ]; then
+  printf 'transcribe-tool: %s of %s checks passed\n' "$PASSED" "$TOTAL" >&2
+  exit 1
+fi
+{
+  printf 'format: itonami.transcribe-tool-selfhost-gate.v1\n'
+  printf 'amu_cli_sha256: %s\n' "$EXPECTED_CLI_SHA256"
+  printf 'model_sha256: %s\n' "$EXPECTED_MODEL_SHA256"
+  printf 'guests:\n'
+  sed 's/^/  /' "$OUT_DIR/guests/guests.sha256"
+  printf 'checks_passed: %s of %s\n' "$PASSED" "$TOTAL"
+  printf 'english: %s | %s\n' "$(cat "$OUT_DIR/en.out")" "$(cat "$OUT_DIR/en.err" | tail -1)"
+  printf 'japanese: %s | %s\n' "$(cat "$OUT_DIR/ja.out")" "$(cat "$OUT_DIR/ja.err" | tail -1)"
+  printf 'reader_mutations_caught:%s\n' "$NEG_RESULTS"
+  printf 'qualification: WAV (16 kHz mono 16-bit PCM, 0.25 to 4 s) in, transcript out through bin/itonami-transcribe and itonami-agent stt on the real Qwen3-ASR-0.6B weights; the English and Japanese transcripts equal the spoken sentences; not other languages or speakers, longer audio, streaming, the original model beyond the transcripts, CI\n'
+} > "$OUT_DIR/build-receipt.txt"
+cat "$OUT_DIR/build-receipt.txt"

@@ -98,6 +98,8 @@ Selfhost routes:
   session-search <base> <query> [limit] [after] [before] [detail] [sort] [sid] [pbase]
   turn <base> <job-id> <task>
   turn-loop <base> <job-id> <task>
+  stt <file.wav>  (16 kHz mono 16-bit PCM WAV, 0.25 to 4 s; native Qwen3-ASR, minutes per file;
+                   needs ITONAMI_STT_GUESTS and ITONAMI_STT_MODEL, see bin/itonami-transcribe)
 
 Other routes are blocked until their Kotoba/Amu selfhost port is qualified.
 EOF
@@ -379,6 +381,18 @@ case "$1" in
     shift
     # argv: <base> <job-id> <task>
     run_guest turn-loop.raw 61004 3,34,35,37,38,11 "$@"
+    ;;
+  stt)
+    shift
+    # argv: <file.wav>; a native route (Qwen3-ASR on the Amu runtime, JUN-941), not a loader guest. The
+    # driver reports a missing or unconfigured piece itself (exit 78) and refuses a bad WAV (exit 2).
+    if [ "$#" -ne 1 ]; then
+      printf '%s\n' "usage: itonami-agent stt <file.wav>" >&2
+      exit 2
+    fi
+    driver="$HERE/itonami-transcribe"
+    [ -x "$driver" ] || blocked "stt (bin/itonami-transcribe missing)"
+    exec "$driver" "$1"
     ;;
   *)
     blocked "$@"

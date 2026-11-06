@@ -1,0 +1,171 @@
+#!/bin/sh
+# Transcribe a WAV file with the native Qwen3-ASR-0.6B path (JUN-941): WAV reader -> log-mel -> audio
+# encoder -> decoder with the audio embeddings -> greedy decoding -> vocabulary reader. Every stage is a
+# separate native guest; this script only chains them. It builds nothing: the compiled guests, the Amu
+# CLI's runtime profile and the model come from the environment.
+#
+#   itonami-transcribe <file.wav>
+#
+# Environment (all required):
+#   ITONAMI_STT_GUESTS  directory with the compiled guests wav_hex_cli.macho, audio_enc_cli.macho,
+#                       qwen_decoder_cli.macho, qwen_detok_cli.macho and qwen_calc_cli.macho (each built
+#                       with --runtime-profile amu-command-fs35; bin/check-transcribe-tool shows how)
+#   ITONAMI_STT_MODEL   directory with model.safetensors and vocab.json of Qwen/Qwen3-ASR-0.6B
+# Optional: ITONAMI_STT_MAX_NEW (default 64 tokens), ITONAMI_STT_KEEP=1 keeps the work directory.
+#
+# stdout: the transcript. stderr: the language the model reports. Exit 0 on success, 2 for a refused input
+# (the WAV reader says why), 78 when the guests or the model are not configured, 1 when a stage fails.
+# Input: 16 kHz mono 16-bit PCM WAV, 0.25 to 4 s. One transcription takes minutes on a laptop: the
+# decoder reads about 1.2 GB of weights for every token it writes.
+
+set -eu
+
+if [ "$#" -ne 1 ]; then
+  printf '%s\n' "usage: itonami-transcribe <file.wav>" >&2
+  exit 2
+fi
+WAV=$1
+GUESTS=${ITONAMI_STT_GUESTS:-}
+MODELDIR=${ITONAMI_STT_MODEL:-}
+MAX_NEW=${ITONAMI_STT_MAX_NEW:-64}
+
+blocked() {
+  printf '%s\n' "itonami-transcribe: $1" >&2
+  exit 78
+}
+[ -n "$GUESTS" ] || blocked "ITONAMI_STT_GUESTS is not set (the compiled native guests)"
+[ -n "$MODELDIR" ] || blocked "ITONAMI_STT_MODEL is not set (the model directory)"
+for g in wav_hex_cli audio_enc_cli qwen_decoder_cli qwen_detok_cli qwen_calc_cli; do
+  [ -x "$GUESTS/$g.macho" ] || blocked "native guest missing: $GUESTS/$g.macho"
+done
+[ -f "$MODELDIR/model.safetensors" ] || blocked "model missing: $MODELDIR/model.safetensors"
+[ -f "$MODELDIR/vocab.json" ] || blocked "vocabulary missing: $MODELDIR/vocab.json"
+[ -f "$WAV" ] || { printf '%s\n' "itonami-transcribe: no such file: $WAV" >&2; exit 2; }
+case "$MAX_NEW" in ''|*[!0-9]*) blocked "ITONAMI_STT_MAX_NEW must be a number" ;; esac
+
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/itonami-stt.XXXXXX")
+cleanup() { if [ "${ITONAMI_STT_KEEP:-0}" != "1" ]; then rm -rf "$WORK"; fi; }
+trap cleanup EXIT INT TERM
+chmod 700 "$WORK"
+SCOPE="$WORK/scope"
+mkdir -m 700 -p "$SCOPE/d/st"
+/bin/cp -c "$MODELDIR/model.safetensors" "$SCOPE/d/model.safetensors" 2>/dev/null \
+  || cp "$MODELDIR/model.safetensors" "$SCOPE/d/model.safetensors"
+cp "$MODELDIR/vocab.json" "$SCOPE/d/vocab.json"
+cp "$WAV" "$SCOPE/d/input.wav"
+
+# run <guest> <args...>: the guest sees the scope directory on fd 3; its stdout goes to $OUT, its status to $STATUS
+run() {
+  guest=$1
+  shift
+  set +e
+  OUT=$("$GUESTS/$guest.macho" "$@" 3< "$SCOPE" 2>"$WORK/stderr")
+  STATUS=$?
+  set -e
+}
+fail() {
+  printf 'itonami-transcribe: %s failed (exit %s)%s\n' "$1" "$STATUS" "$(sed 's/^/: /' "$WORK/stderr" | head -1)" >&2
+  exit 1
+}
+
+run wav_hex_cli /d/input.wav
+if [ "$STATUS" -eq 2 ]; then
+  printf 'itonami-transcribe: %s\n' "$(cat "$WORK/stderr")" >&2
+  exit 2
+fi
+[ "$STATUS" -eq 0 ] || fail "the WAV reader"
+CLIPHEX=$OUT
+SAMPLES=$(( ${#CLIPHEX} / 4 ))
+
+M=/d/model.safetensors
+run audio_enc_cli mel "$CLIPHEX"; [ "$STATUS" -eq 0 ] || fail "the mel"
+run audio_enc_cli front "$M"; [ "$STATUS" -eq 0 ] || fail "the front end"
+l=0
+while [ "$l" -lt 18 ]; do
+  run audio_enc_cli layer "$M" "$l"; [ "$STATUS" -eq 0 ] || fail "audio encoder layer $l"
+  l=$((l + 1))
+done
+run audio_enc_cli tail "$M"; [ "$STATUS" -eq 0 ] || fail "the projector"
+ROWS=$(( $(wc -c < "$SCOPE/d/st/audio.bin" | tr -d ' ') / 8192 ))
+
+# the chat prompt: <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|> ROWS x <|audio_pad|>
+# <|audio_end|><|im_end|>\n<|im_start|>assistant\n
+pads=""
+i=0
+while [ "$i" -lt "$ROWS" ]; do
+  pads="${pads}151676,"
+  i=$((i + 1))
+done
+PROMPT="151644,8948,198,151645,198,151644,872,198,151669,${pads}151670,151645,198,151644,77091,198"
+NPROMPT=$((ROWS + 15))
+
+run qwen_decoder_cli embedaudio "$M" "$PROMPT" "$ROWS"; [ "$STATUS" -eq 0 ] || fail "the prompt embedding"
+l=0
+while [ "$l" -lt 28 ]; do
+  run qwen_decoder_cli layer "$M" "$l" 0 "$NPROMPT"; [ "$STATUS" -eq 0 ] || fail "decoder layer $l"
+  l=$((l + 1))
+done
+
+# the token with the largest logit over the five vocabulary slices
+best_row() {
+  BEST=""
+  bv=""
+  for range in 0:30000 30000:60000 60000:90000 90000:120000 120000:151936; do
+    run qwen_decoder_cli head "$M" "${range%%:*}" "${range##*:}"; [ "$STATUS" -eq 0 ] || fail "the output head"
+    set -- $OUT
+    if [ -z "$bv" ]; then
+      BEST=$1
+      bv=$2
+    else
+      set +e
+      "$GUESTS/qwen_calc_cli.macho" greater "$2" "$bv" 3< "$SCOPE" > /dev/null 2>&1
+      g=$?
+      set -e
+      # 1 = larger, 0 = not larger; anything else means the comparison itself failed (for example an
+      # older qwen_calc_cli without `greater`), which must stop the run rather than pick a wrong token
+      case "$g" in
+        1) BEST=$1; bv=$2 ;;
+        0) ;;
+        *) STATUS=$g; fail "the logit comparison (qwen_calc_cli greater)" ;;
+      esac
+    fi
+  done
+}
+
+best_row
+tok=$BEST
+IDS=$tok
+pos=$NPROMPT
+n=0
+while [ "$tok" != "151645" ] && [ "$n" -lt "$MAX_NEW" ]; do
+  run qwen_decoder_cli embed "$M" "$tok"; [ "$STATUS" -eq 0 ] || fail "token embedding"
+  l=0
+  while [ "$l" -lt 28 ]; do
+    run qwen_decoder_cli layer "$M" "$l" "$pos" 1; [ "$STATUS" -eq 0 ] || fail "decoder layer $l"
+    l=$((l + 1))
+  done
+  pos=$((pos + 1))
+  best_row
+  tok=$BEST
+  IDS="$IDS,$tok"
+  n=$((n + 1))
+done
+
+if [ "${ITONAMI_STT_DEBUG:-0}" = "1" ]; then printf 'itonami-transcribe: token ids %s\n' "$IDS" >&2; fi
+run qwen_detok_cli /d/vocab.json "$IDS"; [ "$STATUS" -eq 0 ] || fail "the vocabulary reader"
+RAW=$OUT
+# the model writes "language <Name><asr_text><transcript><|im_end|>": the language goes to stderr, the
+# transcript to stdout; without the <asr_text> marker the whole text is printed as it came
+case "$RAW" in
+  language\ *"<asr_text>"*)
+    LANG_PART=${RAW%%"<asr_text>"*}
+    TEXT=${RAW#*"<asr_text>"}
+    printf '%s\n' "itonami-transcribe: ${LANG_PART} (${SAMPLES} samples, ${ROWS} audio tokens, ${n} tokens decoded)" >&2
+    ;;
+  *) TEXT=$RAW ;;
+esac
+TEXT=${TEXT%"<|im_end|>"}
+if [ "$n" -ge "$MAX_NEW" ] && [ "$tok" != "151645" ]; then
+  printf '%s\n' "itonami-transcribe: stopped after $MAX_NEW tokens without an end marker (ITONAMI_STT_MAX_NEW)" >&2
+fi
+printf '%s\n' "$TEXT"
