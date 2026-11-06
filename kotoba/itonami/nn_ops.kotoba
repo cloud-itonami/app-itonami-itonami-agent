@@ -1,0 +1,168 @@
+;; Scalar neural-net ops for the native whisper path (JUN-867): wide-range exp
+;; (range reduction by powers of two, on top of itonami.log-mel's series), tanh,
+;; the ggml/whisper.cpp tanh-approximation GELU, and the LayerNorm building
+;; blocks (inverse standard deviation, normalise-scale-shift). The seed has no
+;; vectors, so LayerNorm is exposed as scalar steps; a host or later unit
+;; drives the reductions over a row. Every f64 value is an i64 bit pattern.
+;; GELU here is the tanh form whisper.cpp uses (ggml_gelu), not the erf form of
+;; the PyTorch reference; weights from a ggml file are matched to it.
+(ns itonami.nn-ops
+  (:require [itonami.log-mel :as lm])
+  (:export [exp-wide tanh-f gelu inv-std ln-normalize match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- one [] :i64 (f64-to-bits 1.0))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+
+;; v * 2^k by repeated doubling / halving
+(defn- scale2 [v :i64 k :i64] :i64
+  (cond (= k 0) v
+        (> k 0) (scale2 (fmul v (f64-to-bits 2.0)) (- k 1))
+        :else (scale2 (fdiv v (f64-to-bits 2.0)) (+ k 1))))
+
+;; exp(x) for any finite x, clamped to [-60, 60]: x = k*ln2 + r, |r| < ln2
+(defn exp-wide [x :i64] :i64
+  (let [xc (f64-to-bits (f64-max (f64-neg 60.0) (f64-min 60.0 (f64-from-bits x))))
+        k (f64-to-i64-truncating (f64-from-bits (fmul xc 4609176140021203710)))
+        r (fsub xc (fmul (itof k) 4604418534313441775))]
+    (scale2 (lm/exp-series r) k)))
+
+;; tanh(y) = 1 - 2/(exp(2y) + 1), y clamped to [-20, 20]
+(defn tanh-f [y :i64] :i64
+  (let [yc (f64-to-bits (f64-max (f64-neg 20.0) (f64-min 20.0 (f64-from-bits y))))]
+    (fsub (one) (fdiv (f64-to-bits 2.0) (fadd (exp-wide (fmul yc (f64-to-bits 2.0))) (one))))))
+
+;; 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3)))
+(defn gelu [x :i64] :i64
+  (let [x3 (fmul x (fmul x x))
+        inner (fmul 4605361924766709329 (fadd x (fmul (f64-to-bits 0.044715) x3)))]
+    (fmul (fmul (f64-to-bits 0.5) x) (fadd (one) (tanh-f inner)))))
+
+;; 1 / sqrt(var + eps)
+(defn inv-std [var :i64 eps :i64] :i64
+  (fdiv (one) (f64-to-bits (f64-sqrt (f64-from-bits (fadd var eps))))))
+
+;; (x - mean) * inv * g + b
+(defn ln-normalize [x :i64 mean :i64 inv :i64 g :i64 b :i64] :i64
+  (fadd (fmul (fmul (fsub x mean) inv) g) b))
+
+;; ---- gate fixtures ------------------------------------------------------------
+(defn- exp-x [i :i64] :i64
+  (cond (= i 0) -4594234569871327232
+        (= i 1) -4614838538166547251
+        (= i 2) 0
+        (= i 3) 4604480259023595110
+        (= i 4) 4617315517961601024
+        :else 4626322717216342016))
+(defn- tanh-x [i :i64] :i64
+  (cond (= i 0) -4602115869219225600
+        (= i 1) -4620693217682128896
+        (= i 2) 0
+        (= i 3) 4596373779694328218
+        (= i 4) 4613937818241073152
+        :else 4622945017495814144))
+(defn- gelu-x [i :i64] :i64
+  (cond (= i 0) -4604930618986332160
+        (= i 1) -4610560118520545280
+        (= i 2) -4620693217682128896
+        (= i 3) 0
+        (= i 4) 4599075939470750515
+        (= i 5) 4610334938539176755
+        (= i 6) 4616189618054758400
+        :else 4621256167635550208))
+(defn- want-exp [i :i64] :i64
+  (cond
+        (= i 0) 4411934308301569909
+        (= i 1) 4598581116244124289
+        (= i 2) 4607182418800017408
+        (= i 3) 4611716986771507591
+        (= i 4) 4639425840376984463
+        (= i 5) 4736919330018093060
+        :else (zero)))
+
+(defn- want-tanh [i :i64] :i64
+  (cond
+        (= i 0) -4616189618329117320
+        (= i 1) -4621375654307919117
+        (= i 2) 0
+        (= i 3) 4596279215639471504
+        (= i 4) 4607137875981110016
+        (= i 5) 4607182418799337340
+        :else (zero)))
+
+(defn- want-gelu [i :i64] :i64
+  (cond
+        (= i 0) -4767285742894317568
+        (= i 1) -4643522927695536768
+        (= i 2) -4628645277941360626
+        (= i 3) 0
+        (= i 4) 4595846711668075385
+        (= i 5) 4609993141878661324
+        (= i 6) 4616189459874945348
+        (= i 7) 4621256167635550208
+        :else (zero)))
+
+(defn- want-y [i :i64] :i64
+  (cond
+        (= i 0) -4612939541633726952
+        (= i 1) -4612691915324684312
+        (= i 2) -4615286996740708041
+        (= i 3) 4596425809924660006
+        (= i 4) 4611257388087697577
+        (= i 5) -4623965506441173717
+        (= i 6) -4615014306010787638
+        (= i 7) 4609341415403271206
+        (= i 8) 4608687687990647659
+        (= i 9) 4607285211668296809
+        (= i 10) 4608440695477797107
+        (= i 11) -4612400030156485534
+        (= i 12) -4633022200741478149
+        (= i 13) 4610807028124960528
+        (= i 14) 4600015682068973454
+        (= i 15) -4616188350462374227
+        :else (zero)))
+
+;; LayerNorm fixture, 16 elements: x = ((i*i mod 17) - 8)/3, g = 1 + (i mod 3)/4,
+;; b = (i mod 5)/10 - 0.2
+(defn- fx [i :i64] :i64 (fdiv (itof (- (mod (* i i) 17) 8)) (f64-to-bits 3.0)))
+(defn- fg [i :i64] :i64 (fadd (one) (fmul (itof (mod i 3)) (f64-to-bits 0.25))))
+(defn- fb [i :i64] :i64 (fsub (fmul (itof (mod i 5)) (f64-to-bits 0.1)) (f64-to-bits 0.2)))
+
+(defn- sum-run [i :i64 acc :i64] :i64
+  (if (>= i 16) acc (sum-run (+ i 1) (fadd acc (fx i)))))
+(defn- var-run [i :i64 mean :i64 acc :i64] :i64
+  (if (>= i 16)
+    acc
+    (var-run (+ i 1) mean (fadd acc (fmul (fsub (fx i) mean) (fsub (fx i) mean))))))
+
+(defn- close? [a :i64 b :i64] :bool
+  (f64-le (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b)))
+          (f64-mul 0.000000001 (f64-max 1.0 (f64-abs (f64-from-bits b))))))
+
+(defn- exp-run [i :i64 acc :i64] :i64
+  (if (>= i 6) acc (exp-run (+ i 1) (if (close? (exp-wide (exp-x i)) (want-exp i)) (+ acc 1) acc))))
+(defn- tanh-run [i :i64 acc :i64] :i64
+  (if (>= i 6) acc (tanh-run (+ i 1) (if (close? (tanh-f (tanh-x i)) (want-tanh i)) (+ acc 1) acc))))
+(defn- gelu-run [i :i64 acc :i64] :i64
+  (if (>= i 8) acc (gelu-run (+ i 1) (if (close? (gelu (gelu-x i)) (want-gelu i)) (+ acc 1) acc))))
+(defn- y-run [i :i64 mean :i64 inv :i64 acc :i64] :i64
+  (if (>= i 16)
+    acc
+    (y-run (+ i 1) mean inv
+           (if (close? (ln-normalize (fx i) mean inv (fg i) (fb i)) (want-y i)) (+ acc 1) acc))))
+
+;; 6 exp + 6 tanh + 8 gelu + mean + variance + 16 layernorm outputs = 38
+(defn match-count [] :i64
+  (let [mean (fdiv (sum-run 0 (zero)) (f64-to-bits 16.0))
+        var (fdiv (var-run 0 mean (zero)) (f64-to-bits 16.0))
+        inv (inv-std var (f64-to-bits 0.00001))]
+    (+ (exp-run 0 0)
+    (+ (tanh-run 0 0)
+    (+ (gelu-run 0 0)
+    (+ (if (close? mean 4594422219855801003) 1 0)
+    (+ (if (close? var 4614875090819772871) 1 0)
+       (y-run 0 mean inv 0))))))))
