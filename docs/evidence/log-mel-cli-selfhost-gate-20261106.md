@@ -80,3 +80,32 @@ returns 89 with ten mutations caught (two new for the recurrence: rotation sign
 7), `check-nn-ops-selfhost` 38 and `check-attention-selfhost` 50 on the new
 core, and all four gate scripts are repinned to the new source digest. The O(N^2)
 DFT remains (an FFT needs arrays, JUN-876); real-time is not reached.
+
+## Update — 128 filters (2026-11-06, JUN-878)
+
+Qwen3-ASR (selected in JUN-877) reads 128-mel features (`audio_config.num_mel_bins`
+= 128 in its config.json), where the earlier unit had 80 fixed. `log_mel.kotoba`
+(SHA-256 `daf0d273329a7b5a05aef4255b985f2e1c031c74f32596e9578add46980b1f5e`) now takes the filter count: `mel-weight-n` and `log-mel-bin-n`;
+`mel-weight` and `log-mel-bin` remain the 80-filter wrappers and their outputs
+are unchanged. The guest (`log_mel_cli.kotoba`, SHA-256 `fb6226d90ad561e2002f7cd974de24758adb764e123d7cdf305fea57d68c5c61`) takes an
+optional argv 1, 80 (default) or 128; any other count exits 2 with
+`log-mel: argv 1 must be 80 or 128 (filter count)`.
+
+Results: `check-log-mel-selfhost` returns **222** (the 89 80-filter checks plus
+128 log-mel values of the fixed frame against a 128-filter run of the same stdlib
+f64 reference, four filterbank weights within 1e-9 of llama.cpp's
+`fill_mel_filterbank_matrix(128, 400, 16000)`, and an invalid-frame refusal) with
+eleven mutations caught (new: the filter-count divisor, 7);
+`check-nn-ops-selfhost` 38 and `check-attention-selfhost` 50 on the new core;
+`check-log-mel-cli-selfhost` passes with the 128-filter output byte-identical to
+`test/native/log_mel_expected_128.txt` (the f64 reference, rounded to millionths)
+and the bad filter count refused.
+
+One-off cross-check against llama.cpp's real `mtmd_audio_log_mel_frame` (float32,
+commit 749db7f, same harness as before with 128 filters): 127 of 128 values within
+3 millionths of the native output; one valley value (index 23) differs by 17
+millionths, which is float32 rounding in llama.cpp's FFT (the native output equals
+the f64 reference exactly for all 128 values). The harness is not in this repo.
+
+Not covered: Qwen3-ASR's own feature-extractor details (its normalisation and
+padding), real audio.

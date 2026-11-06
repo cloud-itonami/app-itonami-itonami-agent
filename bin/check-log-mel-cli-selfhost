@@ -19,8 +19,8 @@ CLI="$CLI_DIR/amu-cli.macho"
 EXPECTED_CLI_SHA256=16cbef76292013eae7c2324624ed5d76dd6e890acdba1f3537998d2690bc4896
 EXPECTED_COMPILER_SHA256=0df05effcc0624e94403e8aaf1780feab564de1b44b322680f5535582adb6c04
 EXPECTED_PACKAGER_SHA256=1f7134ea8a6921bcc07b9439b8c54497a4031bf0b67bfcb6464d5fdb000eba77
-EXPECTED_LOGMEL_SHA256=c8fe6a1035f5ef2c7681a3175702f0240c2764eb4db8d8335bfa194311389b69
-EXPECTED_GUEST_SHA256=a881e40935e67c8c59a2a848e5567ba23af8f3e02a62e3c2d6de28e6c82c2869
+EXPECTED_LOGMEL_SHA256=daf0d273329a7b5a05aef4255b985f2e1c031c74f32596e9578add46980b1f5e
+EXPECTED_GUEST_SHA256=fb6226d90ad561e2002f7cd974de24758adb764e123d7cdf305fea57d68c5c61
 AMU_CLI_COMMIT=49dccb68f1a6ef9aece7e9de30bf6224687d06fc
 
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
@@ -87,6 +87,23 @@ set -e
 cmp -s "$OUT_DIR/ok.stdout" "$EXPECTED_LINE" || { printf '%s\n' "fixed frame output differs from the reference line" >&2; exit 1; }
 [ ! -s "$OUT_DIR/ok.stderr" ] || { printf '%s\n' "fixed frame wrote to stderr" >&2; exit 1; }
 
+# 128 filters (argv 1): byte-identical to the 128-filter reference line
+set +e
+"$PROGRAM" "$FRAME" 128 > "$OUT_DIR/ok128.stdout" 2> "$OUT_DIR/ok128.stderr"
+OK128_EXIT=$?
+set -e
+[ "$OK128_EXIT" = 0 ] || { printf '128-filter run exited %s\n' "$OK128_EXIT" >&2; exit 1; }
+cmp -s "$OUT_DIR/ok128.stdout" "$REPO_ROOT/test/native/log_mel_expected_128.txt" || { printf '%s\n' "128-filter output differs from the reference line" >&2; exit 1; }
+[ ! -s "$OUT_DIR/ok128.stderr" ] || { printf '%s\n' "128-filter run wrote to stderr" >&2; exit 1; }
+# an unsupported filter count is refused with its own named line
+set +e
+"$PROGRAM" "$FRAME" 64 > "$OUT_DIR/badn.stdout" 2> "$OUT_DIR/badn.stderr"
+BADN_EXIT=$?
+set -e
+[ "$BADN_EXIT" = 2 ] || { printf 'filter count 64 exited %s, expected 2\n' "$BADN_EXIT" >&2; exit 1; }
+[ ! -s "$OUT_DIR/badn.stdout" ] || { printf '%s\n' "filter count 64 wrote to stdout" >&2; exit 1; }
+grep -q 'log-mel: argv 1 must be 80 or 128' "$OUT_DIR/badn.stderr" || { printf '%s\n' "filter count refusal lacks the named message" >&2; exit 1; }
+
 # malformed input: named stderr line, empty stdout, exit 2
 refuse() {
   name=$1
@@ -146,7 +163,8 @@ grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr" || { printf '
   printf 'program_sha256: %s\n' "$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)"
   printf 'program_bytes: %s\n' "$(wc -c < "$PROGRAM" | tr -d ' ')"
   printf 'fixed_frame_output: IDENTICAL exit 0\n'
-  printf 'refusals: no-argument short-frame non-hex -> exit 2, empty stdout, named stderr\n'
+  printf 'filter_count_128_output: IDENTICAL exit 0\n'
+  printf 'refusals: no-argument short-frame non-hex bad-filter-count -> exit 2, empty stdout, named stderr\n'
   printf 'undeclared_capability: refused at compile\n'
   printf 'mutated_core_output: differs\n'
   printf 'changed_source_refusal: PASS\n'
