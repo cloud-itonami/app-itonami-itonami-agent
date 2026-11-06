@@ -77,3 +77,21 @@ output or real activations. Not covered: multi-head, larger d and sequence
 lengths (1500 encoder frames), the output projection, f16 or quantised weights,
 GPU kernels. The Amu CLI is an unmerged candidate. No CLJK, EDN, JVM or Node
 was used; the reference is Python, as stated.
+
+## Update — two heads (2026-11-06, JUN-870)
+
+`attention-at` now takes a head index: head h reads columns 2h and 2h+1 of
+Q, K and V (head width 2, two heads, model width 4) and the heads' outputs sit
+side by side. Head 0 reproduces the earlier 28 values unchanged; head 1 adds 22
+more (non-causal 8, causal 8, cross 6), so the gate returns **50** (direct,
+source-locked and artifact runs). The reference script's `attn` function was
+extended with the same head offset (values are pasted as f64 bit patterns).
+Eight mutations each stopped the gate returning 50: no 1/sqrt(d) scale (10),
+dropping the max shift from the numerator (7), mask direction (34), no bias (44),
+value head offset (28), query head offset (30), key head offset (34), doubled
+denominator (7). A source changed after locking was refused.
+
+New attention source SHA-256
+`e66eaec2c210cb7aa2201ec82cac55cf49cae65197fb519bbae821971f13173a`.
+Still not covered: real shapes (head width 64, 1500 encoder frames), the output
+projection after the heads, weights, GPU kernels.
