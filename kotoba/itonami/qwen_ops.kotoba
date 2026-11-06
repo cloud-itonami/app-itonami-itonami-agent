@@ -1,0 +1,234 @@
+;; Qwen3 decoder building blocks for the native Qwen3-ASR LLM and Qwen3-TTS talker
+;; (JUN-882; config: hidden_act silu, rms_norm_eps 1e-6, rope_theta 1e6, head_dim
+;; 128): weighted RMSNorm steps, SiLU, and RoPE in the NeoX / rotate_half layout
+;; (rotate the pair (i, i + D/2) by pos * theta^(-2i/D)). RoPE needs cos/sin of an
+;; arbitrary real angle, so the angle is reduced by the nearest multiple of pi/2
+;; (single-constant reduction, error about 6e-17 per multiple, fine to a few thousand
+;; positions) and a 12-term Taylor series evaluated on |r| <= pi/4. Built on
+;; itonami.nn-ops (exp-wide) and itonami.log-mel (ln-pos). Scalar steps: the seed has
+;; no vectors, so a host or later unit drives them over rows. Every f64 value is an
+;; i64 bit pattern.
+(ns itonami.qwen-ops
+  (:require [itonami.log-mel :as lm]
+            [itonami.nn-ops :as nn])
+  (:export [rms-inv rms-apply silu cos-real sin-real rope-first rope-second match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- one [] :i64 (f64-to-bits 1.0))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+(defn- neg [a :i64] :i64 (f64-to-bits (f64-neg (f64-from-bits a))))
+
+;; ---- RMSNorm and SiLU ---------------------------------------------------------------
+;; 1 / sqrt(sum_sq / n + eps)
+(defn rms-inv [sum-sq :i64 n :i64 eps :i64] :i64
+  (fdiv (one) (f64-to-bits (f64-sqrt (f64-from-bits (fadd (fdiv sum-sq (itof n)) eps))))))
+
+;; x * inv * w
+(defn rms-apply [x :i64 inv :i64 w :i64] :i64 (fmul (fmul x inv) w))
+
+;; x / (1 + exp(-x))
+(defn silu [x :i64] :i64
+  (fdiv x (fadd (one) (nn/exp-wide (neg x)))))
+
+;; ---- cos / sin of a real angle x >= 0 -----------------------------------------------
+(defn- half-pi [] :i64 4609753056924675352)
+(defn- two-over-pi [] :i64 4603909380684499075)
+
+;; Taylor on r (|r| <= ~0.8): sin = r*(1 - r2/(2*3)*(1 - r2/(4*5)*(...))), cos likewise
+(defn- sin-poly [r2 :i64 k :i64 acc :i64] :i64
+  (if (< k 1)
+    acc
+    (sin-poly r2 (- k 1) (fsub (one) (fmul (fdiv r2 (itof (* (* 2 k) (+ (* 2 k) 1)))) acc)))))
+(defn- cos-poly [r2 :i64 k :i64 acc :i64] :i64
+  (if (< k 1)
+    acc
+    (cos-poly r2 (- k 1) (fsub (one) (fmul (fdiv r2 (itof (* (- (* 2 k) 1) (* 2 k)))) acc)))))
+
+;; nearest multiple of pi/2 (x >= 0)
+(defn- near-k [x :i64] :i64
+  (f64-to-i64-truncating (f64-from-bits (fadd (fmul x (two-over-pi)) (f64-to-bits 0.5)))))
+(defn- reduced [x :i64 k :i64] :i64 (fsub x (fmul (itof k) (half-pi))))
+
+(defn- sin-r [r :i64] :i64 (fmul r (sin-poly (fmul r r) 12 (one))))
+(defn- cos-r [r :i64] :i64 (cos-poly (fmul r r) 12 (one)))
+
+(defn cos-real [x :i64] :i64
+  (let [k (near-k x)
+        r (reduced x k)
+        q (mod k 4)]
+    (cond (= q 0) (cos-r r)
+          (= q 1) (neg (sin-r r))
+          (= q 2) (neg (cos-r r))
+          :else (sin-r r))))
+
+(defn sin-real [x :i64] :i64
+  (let [k (near-k x)
+        r (reduced x k)
+        q (mod k 4)]
+    (cond (= q 0) (sin-r r)
+          (= q 1) (cos-r r)
+          (= q 2) (neg (sin-r r))
+          :else (neg (cos-r r)))))
+
+;; ---- RoPE (NeoX layout) ---------------------------------------------------------------
+;; angle of pair i of a head of width d at position pos: pos * theta^(-2i/d)
+(defn- rope-angle [pos :i64 i :i64 d :i64 theta :i64] :i64
+  (fmul (itof pos)
+        (nn/exp-wide (neg (fmul (fdiv (itof (* 2 i)) (itof d)) (lm/ln-pos theta))))))
+
+;; x0 = element i, x1 = element i + d/2 of the head
+(defn rope-first [x0 :i64 x1 :i64 pos :i64 i :i64 d :i64 theta :i64] :i64
+  (let [a (rope-angle pos i d theta)]
+    (fsub (fmul x0 (cos-real a)) (fmul x1 (sin-real a)))))
+
+(defn rope-second [x0 :i64 x1 :i64 pos :i64 i :i64 d :i64 theta :i64] :i64
+  (let [a (rope-angle pos i d theta)]
+    (fadd (fmul x1 (cos-real a)) (fmul x0 (sin-real a)))))
+
+;; ---- gate fixtures (reference: stdlib Python) -------------------------------------------
+(defn- xv [i :i64] :i64 (fdiv (itof (- (mod (+ (* i 7) 3) 13) 6)) (f64-to-bits 4.0)))
+(defn- wv [i :i64] :i64 (fadd (f64-to-bits 0.5) (fmul (itof (mod i 5)) (f64-to-bits 0.25))))
+(defn- sumsq-run [i :i64 acc :i64] :i64
+  (if (>= i 16) acc (sumsq-run (+ i 1) (fadd acc (fmul (xv i) (xv i))))))
+(defn- rms-want [i :i64] :i64
+  (cond
+        (= i 0) -4622259447424321488
+        (= i 1) 4605616189057824816
+        (= i 2) -4620236170967800459
+        (= i 3) 4610429829081551494
+        (= i 4) -4622259447424321488
+        (= i 5) 4605616189057824816
+        (= i 6) 0
+        (= i 7) -4613252248169580496
+        (= i 8) 4599872427845029586
+        (= i 9) -4611539012109415650
+        (= i 10) 4598632266259604853
+        (= i 11) -4617755847796950992
+        (= i 12) 4605616189057824816
+        (= i 13) -4616042611736786146
+        (= i 14) 4610119788685195312
+        (= i 15) -4624739770595170955
+        :else (zero)))
+
+(defn- silu-x [i :i64] :i64
+  (cond
+        (= i 0) -4601552919265804288
+        (= i 1) -4607182418800017408
+        (= i 2) -4613937818241073152
+        (= i 3) -4626998257160447590
+        (= i 4) 0
+        (= i 5) 4596373779694328218
+        (= i 6) 4609434218613702656
+        (= i 7) 4616189618054758400
+        (= i 8) 4621819117588971520
+        (= i 9) 4629137466983448576
+        :else (zero)))
+(defn- silu-want [i :i64] :i64
+  (cond
+        (= i 0) -4666361984556118089
+        (= i 1) -4633523444128693565
+        (= i 2) -4624770987810646844
+        (= i 3) -4632220040377344030
+        (= i 4) 0
+        (= i 5) 4592588363656483668
+        (= i 6) 4608201861332146895
+        (= i 7) 4616027612677792234
+        (= i 8) 4621818862021690805
+        (= i 9) 4629137466983447787
+        :else (zero)))
+
+(defn- rx [j :i64] :i64 (fdiv (itof (- (mod (+ (* j 5) 1) 9) 4)) (f64-to-bits 3.0)))
+(defn- case-pos [c :i64] :i64
+  (cond
+        (= c 0) 0
+        (= c 1) 1
+        (= c 2) 7
+        (= c 3) 1234
+        (= c 4) 5
+        :else 0))
+(defn- case-theta [c :i64] :i64
+  (cond
+        (= c 0) 4696837146684686336
+        (= c 1) 4696837146684686336
+        (= c 2) 4696837146684686336
+        (= c 3) 4696837146684686336
+        (= c 4) 4666723172467343360
+        :else (zero)))
+(defn- rope-want [i :i64] :i64
+  (cond
+        (= i 0) -4616189618054758400
+        (= i 1) 4604180019048437077
+        (= i 2) -4619192017806338731
+        (= i 3) 4607182418800017408
+        (= i 4) -4623695617433709227
+        (= i 5) 4608683618675807573
+        (= i 6) 0
+        (= i 7) -4614688418178968235
+        (= i 8) -4625020060434867761
+        (= i 9) 4603797303325404110
+        (= i 10) -4619192020808738232
+        (= i 11) 4607182608686198803
+        (= i 12) -4616092467514046578
+        (= i 13) 4608775544919615888
+        (= i 14) -4664083899916786899
+        (= i 15) -4614688560598295531
+        (= i 16) -4620378805886815724
+        (= i 17) 4600114622015128342
+        (= i 18) -4619192164923325829
+        (= i 19) 4607183747908700947
+        (= i 20) -4617015692165988507
+        (= i 21) 4609196295991930382
+        (= i 22) -4651341758285272826
+        (= i 23) -4614689415240352119
+        (= i 24) 4607175151568055713
+        (= i 25) -4615606497532333806
+        (= i 26) -4626266509697196154
+        (= i 27) 4607413253155279247
+        (= i 28) -4623652188677867732
+        (= i 29) 4606938164132369677
+        (= i 30) -4619529378194772607
+        (= i 31) -4614868686667454297
+        (= i 32) -4619762741479963864
+        (= i 33) -4635403197572512080
+        (= i 34) -4619199522242098118
+        (= i 35) 4607212386377555317
+        (= i 36) 4605960774282207759
+        (= i 37) 4609387953622275207
+        (= i 38) -4638409377566102147
+        (= i 39) -4614711011143117628
+        :else (zero)))
+
+(defn- close? [a :i64 b :i64] :bool
+  (f64-le (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b)))
+          (f64-mul 0.000000001 (f64-max 1.0 (f64-abs (f64-from-bits b))))))
+
+(defn- rms-run [i :i64 inv :i64 acc :i64] :i64
+  (if (>= i 16)
+    acc
+    (rms-run (+ i 1) inv (if (close? (rms-apply (xv i) inv (wv i)) (rms-want i)) (+ acc 1) acc))))
+(defn- silu-run [i :i64 acc :i64] :i64
+  (if (>= i 10) acc (silu-run (+ i 1) (if (close? (silu (silu-x i)) (silu-want i)) (+ acc 1) acc))))
+;; element e (0..7) of case c is output index c*8 + e: first half from rope-first,
+;; second half from rope-second
+(defn- rope-run [n :i64 acc :i64] :i64
+  (if (>= n 40)
+    acc
+    (let [c (quot n 8)
+          e (mod n 8)
+          i (mod e 4)
+          v (if (< e 4)
+              (rope-first (rx i) (rx (+ i 4)) (case-pos c) i 8 (case-theta c))
+              (rope-second (rx i) (rx (+ i 4)) (case-pos c) i 8 (case-theta c)))]
+      (rope-run (+ n 1) (if (close? v (rope-want n)) (+ acc 1) acc)))))
+
+;; 16 rmsnorm outputs + 1 inverse rms + 10 silu + 40 rope = 67
+(defn match-count [] :i64
+  (let [inv (rms-inv (sumsq-run 0 (zero)) 16 (f64-to-bits 0.000001))]
+    (+ (rms-run 0 inv 0)
+    (+ (if (close? inv 4607639465514345845) 1 0)
+    (+ (silu-run 0 0)
+       (rope-run 0 0))))))
