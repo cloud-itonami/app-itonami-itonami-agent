@@ -87,7 +87,7 @@
 (defn enc-mel [clip :string] :i64
   (let [len (string-length clip)
         n (quot len 4)]
-    (if (or (not (= (mod len 4) 0)) (< n 4000) (> n 64000) (not (all-hex? clip 0 len)))
+    (if (or (not (= (mod len 4) 0)) (< n 4000) (> n 128000) (not (all-hex? clip 0 len)))
       2
       (let [tt (quot n 160)
             tp (* 100 (quot (+ tt 99) 100))

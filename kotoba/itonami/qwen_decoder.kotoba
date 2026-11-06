@@ -317,7 +317,7 @@
 ;; status 0 = layer applied to /d/st/h.bin (n tokens at positions pos0 ..) and the caches
 ;; extended; 1 = a file or tensor unreadable; 2 = bad arguments
 (defn dec-layer [path :string layer :i64 pos0 :i64 n :i64] :i64
-  (if (or (< layer 0) (> layer 27) (< pos0 0) (< n 1) (> n 64))
+  (if (or (< layer 0) (> layer 27) (< pos0 0) (< n 1) (> n 128))
     2
     (let [hdr (wf/wf-header-text path)
           hl (wf/wf-header-len path)
@@ -402,7 +402,7 @@
 
 (defn- embed-all [path :string ids :string aud :vector-i64] :i64
   (let [n (+ (ids-count ids 0 0) 1)]
-    (if (or (= (string-length ids) 0) (> n 64))
+    (if (or (= (string-length ids) 0) (> n 128))
       2
       (let [hdr (wf/wf-header-text path)
             hl (wf/wf-header-len path)
@@ -420,7 +420,7 @@
 ;; the same, with the <|audio_pad|> (151676) positions filled from /d/st/audio.bin, which holds
 ;; `audio-rows` rows of 1024 values (the audio encoder's output)
 (defn dec-embed-audio [path :string ids :string audio-rows :i64] :i64
-  (if (or (< audio-rows 1) (> audio-rows 60))
+  (if (or (< audio-rows 1) (> audio-rows 110))
     2
     (let [aud (read-f64 "/d/st/audio.bin" 0 (* audio-rows 1024))]
       (if (= (vector-count aud) (* audio-rows 1024))

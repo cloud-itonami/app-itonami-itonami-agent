@@ -2,7 +2,7 @@
   "One-shot native guest for the Qwen3-ASR audio encoder on one 100-frame chunk (JUN-928). The model
   and the state directory (/d/st, holding mel.bin, a.bin and audio.bin as f64 files) come from the
   granted directory on fd 3 (amu-command-fs35). Subcommands, argv 0 first:
-    mel <hex>                  16,000 samples (4 hex digits each: int16 + 32768, 64,000 characters)
+    mel <hex>                  4,000 to 128,000 samples (4 hex digits each: int16 + 32768)
                                -> /d/st/mel.bin (128 x 100 log-mel), prints ok
     front <model>              mel.bin -> three conv2d blocks, conv_out, positions -> a.bin (13 x 896)
     layer <model> <l>          encoder layer l (0..17) on the 13 tokens of a.bin
