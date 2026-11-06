@@ -27,9 +27,9 @@ EXPECTED_NNOPS_SHA256=4693d227291a31b8c59378b0ab114715a983dfbfd17308d5b478181793
 EXPECTED_GELU_SHA256=36b4c98a4df8fd817695a62d1602320f23d93fb38ddf97c1fb124bdcbd7c18a6
 EXPECTED_ST_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
 EXPECTED_WF_SHA256=8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
-EXPECTED_SOURCE_SHA256=34a8acd0d611d2171ef8059bb5ef841f93987519fcfb942c7dceaff566f7134c
-EXPECTED_GATE_SHA256=d82d4c7e6ff7661c483f489d30d47c840e52743fd4faf77d93bbdc0403cd0eb0
-CASES=11
+EXPECTED_SOURCE_SHA256=4ef939f1cd451702693ba5901c295685a2bfc52423468015ddb3d38a000fcd89
+EXPECTED_GATE_SHA256=1cc69c7e34b999c0b5f80233a137c8a66d0677671f1d3162c9175f9bdca01bf9
+CASES=22
 
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
 GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
@@ -184,9 +184,17 @@ mutate ln-gamma-beta '(ln-run x g b 0 mean inv' '(ln-run x b g 0 mean inv'
 mutate bias-dropped '(f64-to-bits (vector-f64-at bias r))' '(zero)'
 mutate activation-identity '(ge\/gelu-erf (f64-to-bits (vector-f64-at v i)))' '(f64-to-bits (vector-f64-at v i))'
 mutate residual '(add-run x c 0' '(add-run c c 0'
-mutate input-vector '(mod (+ (\* 3 i) 1) 11)' '(mod (+ (* 3 i) 2) 11)'
+mutate input-vector '(\* 3 i) (+ 1' '(* 2 i) (+ 1'
 mutate row-offset '(+ woff (\* r (\* cols 2)))' '(+ woff (* r cols))'
 mutate fc2-weight 'linear-run path w2 896 3584' 'linear-run path w1 896 3584'
+mutate attn-scale '(f64-to-bits 0.125)' '(f64-to-bits 0.25)'
+mutate attn-heads '(>= h 14)' '(>= h 13)'
+mutate attn-softmax-sum 'z (fadd e0 (fadd e1 e2))' 'z (fadd e0 e1)'
+mutate attn-bias '(read-vec path boff 896)' '(read-vec path (+ boff 2) 896)'
+mutate attn-residual '(add-run x o 0' '(add-run o o 0'
+mutate attn-value-mix '(fmul p2 (f64-to-bits (vector-f64-at v2 j)))' '(fmul p2 (f64-to-bits (vector-f64-at v1 j)))'
+mutate attn-key 'k2 (project path wk bk h2)' 'k2 (project path wk bk h1)'
+mutate attn-token-offset '(+ 1 (\* 5 t))' '(+ 1 (* 4 t))'
 
 # negative control: a source changed after locking is refused
 printf '\n' >> "$POS/src/audio_ffn.kotoba"
@@ -220,7 +228,7 @@ rm -f "$SCOPE/d/model.safetensors"
   printf 'cases: %s\n' "$POS_LINES"
   printf 'negative_control_cases_passed:%s\n' "$NEG_RESULTS"
   printf 'changed_source_refusal: PASS\n'
-  printf 'qualification: layers 0 and 5 feed-forward sublayer of one 896-wide token on the real weights to 1e-12 relative against CPython float64; not the attention half, the conv front end, an equality claim with the original model implementation, a model run, turn or launcher\n'
+  printf 'qualification: layers 0 and 5 feed-forward sublayer of one 896-wide token and self-attention sublayer of three on the real weights to 1e-12 relative against CPython float64; not the conv front end, positional handling, chunking, an equality claim with the original model implementation, a model run, turn or launcher\n'
 } > "$OUT_DIR/build-receipt.txt"
 
 cat "$OUT_DIR/build-receipt.txt"

@@ -1,13 +1,13 @@
 format: itonami.audio-ffn-selfhost-gate.v1
 amu_cli_sha256: ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
 model_sha256: 79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
-audio_ffn_source_sha256: 34a8acd0d611d2171ef8059bb5ef841f93987519fcfb942c7dceaff566f7134c
+audio_ffn_source_sha256: 4ef939f1cd451702693ba5901c295685a2bfc52423468015ddb3d38a000fcd89
 weights_file_source_sha256: 8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
-gate_source_sha256: d82d4c7e6ff7661c483f489d30d47c840e52743fd4faf77d93bbdc0403cd0eb0
+gate_source_sha256: 1cc69c7e34b999c0b5f80233a137c8a66d0677671f1d3162c9175f9bdca01bf9
 runtime_profile: amu-command-fs35 (directory on fd 3), one process per case
-program_sha256: e63f99334a6febf1dd8417f11f14194d0c32b429a605ea915ed78d3e7bbd0e4a
-cases_passed: 11 of 11
-cases: case 0 pass;case 1 pass;case 2 pass;case 3 pass;case 4 pass;case 5 pass;case 6 pass;case 7 pass;case 8 pass;case 9 pass;case 10 pass;
-negative_control_cases_passed: ln-eps=3/11 ln-variance=3/11 ln-gamma-beta=3/11 bias-dropped=3/11 activation-identity=3/11 residual=3/11 input-vector=3/11 row-offset=3/11 fc2-weight=3/11
+program_sha256: 2f591d9c23421c1ff9a92ee5092285b8704d14dc5399242244d4ad474c915671
+cases_passed: 22 of 22
+cases: case 0 pass;case 1 pass;case 2 pass;case 3 pass;case 4 pass;case 5 pass;case 6 pass;case 7 pass;case 8 pass;case 9 pass;case 10 pass;case 11 pass;case 12 pass;case 13 pass;case 14 pass;case 15 pass;case 16 pass;case 17 pass;case 18 pass;case 19 pass;case 20 pass;case 21 pass;
+negative_control_cases_passed: ln-eps=6/22 ln-variance=6/22 ln-gamma-beta=6/22 bias-dropped=6/22 activation-identity=14/22 residual=14/22 input-vector=6/22 row-offset=6/22 fc2-weight=14/22 attn-scale=14/22 attn-heads=13/22 attn-softmax-sum=14/22 attn-bias=14/22 attn-residual=14/22 attn-value-mix=14/22 attn-key=14/22 attn-token-offset=14/22
 changed_source_refusal: PASS
-qualification: layers 0 and 5 feed-forward sublayer of one 896-wide token on the real weights to 1e-12 relative against CPython float64; not the attention half, the conv front end, an equality claim with the original model implementation, a model run, turn or launcher
+qualification: layers 0 and 5 feed-forward sublayer of one 896-wide token and self-attention sublayer of three on the real weights to 1e-12 relative against CPython float64; not the conv front end, positional handling, chunking, an equality claim with the original model implementation, a model run, turn or launcher
