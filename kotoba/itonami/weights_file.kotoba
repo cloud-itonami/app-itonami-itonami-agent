@@ -9,7 +9,7 @@
 (ns itonami.weights-file
   (:require [itonami.bf16 :as bf]
             [itonami.safetensors :as st])
-  (:export [wf-size wf-header-len wf-header-text wf-bf16 wf-row-dot])
+  (:export [wf-size wf-header-len wf-header-text wf-bf16 wf-row-dot wf-matvec-sum wf-fast-matches-exact])
   (:capabilities [:fs/app-data]))
 
 (defn- frame [op :string path :string tail :string] :string
@@ -78,6 +78,29 @@
                 (if (bf/bf16-finite? v) (bf/bf16-to-f64 v) -1))
               -1)))))))
 
+;; Integer BF16 -> f64 for the hot loop: a normal bfloat16 (exponent 1..254) maps to the f64 with
+;; exponent e + 896 and the 7 mantissa bits shifted to the top of the 52. Zero and subnormals
+;; (exponent 0) take the exact decoder. Equal to itonami.bf16/bf16-to-f64 on every finite pattern
+;; (wf-fast-matches-exact checks all 65536 patterns).
+(defn- bf16-fast [v :i64] :i64
+  (let [e (mod (quot v 128) 256)]
+    (if (= e 0)
+      (bf/bf16-to-f64 v)
+      (let [pos (+ (i64-shift-left (+ e 896) 52) (i64-shift-left (mod v 128) 45))]
+        (if (>= v 32768)
+          (f64-to-bits (f64-neg (f64-from-bits pos)))
+          pos)))))
+
+(defn- fast-run [v :i64] :i64
+  (if (>= v 65536)
+    1
+    (if (and (bf/bf16-finite? v) (not (= (bf16-fast v) (bf/bf16-to-f64 v))))
+      0
+      (fast-run (+ v 1)))))
+
+;; 1 when the fast decoder equals the exact one for every finite bfloat16 pattern
+(defn wf-fast-matches-exact [] :i64 (fast-run 0))
+
 ;; x[i] = (((i + seed) mod 7) - 3) / 8, a deterministic dyadic input vector (exact in f64)
 (defn- x-at [i :i64 seed :i64] :i64
   (f64-to-bits (f64-div (i64-to-f64-rounded (- (mod (+ i seed) 7) 3)) 8.0)))
@@ -91,12 +114,21 @@
       (if (bf/bf16-finite? v)
         (dot-run r (+ i 1) c seed
           (f64-to-bits (f64-add (f64-from-bits acc)
-                                (f64-mul (f64-from-bits (bf/bf16-to-f64 v))
+                                (f64-mul (f64-from-bits (bf16-fast v))
                                          (f64-from-bits (x-at i seed))))))
         -1))))
 
-;; dot product of one row of a 2-D BF16 weight (one E request, so at most 131072 columns)
-;; with the vector x above, as f64 bits; -1 when the file, tensor, shape or row is unusable
+;; one row: cols BF16 elements at absolute file offset off, dotted with x; -1 on a short read
+(defn- row-at [path :string off :i64 cols :i64 seed :i64] :i64
+  (let [r (typed-cap-call :fs/app-data :string :bytes
+            (frame "E" path (string-concat (string-from-i64 off)
+                              (string-concat ":" (string-from-i64 (* cols 2))))))]
+    (if (= (bytes-count r) (+ 5 (* cols 2)))
+      (dot-run r 0 cols seed 0)
+      -1)))
+
+;; Dot product of one row of a 2-D BF16 weight (one E request, so at most 131072 columns)
+;; with the vector x above, as f64 bits; -1 when the file, tensor, shape or row is unusable.
 (defn wf-row-dot [path :string name :string row :i64 seed :i64] :i64
   (let [h (wf-header-text path)
         n (wf-header-len path)]
@@ -112,9 +144,32 @@
                 (> (+ (+ b (* row (* cols 2))) (* cols 2)) e)
                 (> (+ off (* cols 2)) (wf-size path)))
           -1
-          (let [r (typed-cap-call :fs/app-data :string :bytes
-                    (frame "E" path (string-concat (string-from-i64 off)
-                                      (string-concat ":" (string-from-i64 (* cols 2))))))]
-            (if (= (bytes-count r) (+ 5 (* cols 2)))
-              (dot-run r 0 cols seed 0)
-              -1)))))))
+          (row-at path off cols seed))))))
+
+;; sum of y[r] over rows r in index order, y = W x; each y[r] is the row dot above
+(defn- rows-run [path :string base :i64 r :i64 rows :i64 cols :i64 seed :i64 acc :i64] :i64
+  (if (>= r rows)
+    acc
+    (let [y (row-at path (+ base (* r (* cols 2))) cols seed)]
+      (if (= y -1)
+        -1
+        (rows-run path base (+ r 1) rows cols seed
+          (f64-to-bits (f64-add (f64-from-bits acc) (f64-from-bits y))))))))
+
+;; Checksum of the whole product W x for a 2-D BF16 weight: the header is parsed once, then
+;; every row is read with one E request. f64 bits of the sequential sum of all outputs, or -1.
+(defn wf-matvec-sum [path :string name :string seed :i64] :i64
+  (let [h (wf-header-text path)
+        n (wf-header-len path)]
+    (if (or (= (string-length h) 0) (not (string=? (st/st-dtype h name) "BF16"))
+            (not (= (st/st-ndim h name) 2)))
+      -1
+      (let [rows (st/st-dim h name 0)
+            cols (st/st-dim h name 1)
+            b (st/st-begin h name)
+            e (st/st-end h name)]
+        (if (or (< rows 1) (< cols 1) (> (* cols 2) 262144)
+                (not (= (- e b) (* rows (* cols 2))))
+                (> (+ (+ 8 n) e) (wf-size path)))
+          -1
+          (rows-run path (+ (+ 8 n) b) 0 rows cols seed 0))))))

@@ -7,7 +7,7 @@ reads: `F` for the size, `E` (`"<offset>:<count>"`, at most 262,144 bytes per re
 read by `itonami.safetensors`, an element is decoded by `itonami.bf16`. Nothing but the
 requested bytes is read.
 
-Gate: `bin/check-weights-file-selfhost <cli> <out-dir> <model.safetensors>`, 36 checks, run
+Gate: `bin/check-weights-file-selfhost <cli> <out-dir> <model.safetensors>`, 44 checks, run
 as an `amu-command-fs35` artifact with the model cloned (`cp -c`) into a directory granted
 on fd 3. Expected values come from a one-off CPython `struct`/`json` read of the same file
 (this is a reference measurement, not part of the gate): file size, header length, the header
@@ -45,3 +45,20 @@ as f64 bits, summed in index order. BF16 weights and these x values are exact in
 CPython sum in the same order matches bit for bit. Three real rows
 (`layers.0.fc1.weight` rows 0 and 3583, `layers.1.fc2.weight` row 7) match, and a row past the
 end, a 1-D tensor and an unknown tensor return -1.
+
+## Whole matrix-vector product (JUN-915)
+
+`wf-matvec-sum path name seed` parses the header once, reads every row of a 2-D BF16 weight with
+one E request each, computes y = W x as above and returns the f64 bits of the sequential sum of
+all outputs. On `thinker.audio_tower.layers.0.fc1.weight` (3584 x 896, 3,211,264 multiply-adds)
+with seed 3 the sum and three single outputs (rows 0, 1791, 3583) match a CPython computation in
+the same order bit for bit; a second, unpinned run with seed 4 matched too. The whole product
+takes about 0.5 s as a native artifact. The hot loop uses an integer BF16 -> f64 decoder
+(exponent + 896, mantissa shifted to the top, exact decoder for zero and subnormals);
+`wf-fast-matches-exact` checks it against `itonami.bf16` on all 65,536 patterns. The first
+version used the exact decoder per element, whose repeated halving costs about 0.2 ms per
+element in this seed (measured on 2,700 multiply-adds), which would have been about ten minutes
+for this matrix.
+
+A mutation that only changes one input (`v >= 32768` -> `v >= 32769`) was behaviour-preserving
+(the one value it affects, negative zero, takes the exact path) and was replaced by `v >= 40000`.

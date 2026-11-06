@@ -21,9 +21,9 @@ EXPECTED_MODEL_SHA256=79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b835384
 EXPECTED_BF16_SHA256=09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b
 EXPECTED_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
 EXPECTED_ST_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
-EXPECTED_SOURCE_SHA256=708c6dff5f022757be7250e7b7c6e4c99c311df865527fd7ea05b86ed92b2263
-EXPECTED_GATE_SHA256=42a315cd76dc7d531f308d4609e3de8fa9db03aa67350201bfa9bcde0a0af538
-EXPECTED_RESULT=36
+EXPECTED_SOURCE_SHA256=8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
+EXPECTED_GATE_SHA256=908cf5eafe38a4c5510f99b4e712121275fa27b3cfd3cb9c1ced432e002184c0
+EXPECTED_RESULT=44
 
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
 GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
@@ -163,7 +163,12 @@ mutate data-base '(+ (+ 8 n) (+ b (\* 2 idx)))' '(+ (+ 9 n) (+ b (* 2 idx)))'
 mutate header-reply-size '(= (bytes-count r) 13)' '(= (bytes-count r) 12)'
 mutate x-vector '(mod (+ i seed) 7)' '(mod i 7)'
 mutate row-stride '(\* row (\* cols 2))' '(* row cols)'
-mutate dot-order '(f64-mul (f64-from-bits (bf\/bf16-to-f64 v))' '(f64-add (f64-from-bits (bf\/bf16-to-f64 v))'
+mutate dot-order '(f64-mul (f64-from-bits (bf16-fast v))' '(f64-add (f64-from-bits (bf16-fast v))'
+mutate fast-exponent '(+ e 896)' '(+ e 895)'
+mutate fast-sign '(>= v 32768)' '(>= v 40000)'
+mutate skip-last-row '(>= r rows)' '(>= r (- rows 1))'
+mutate shape-check '(- e b) (\* rows (\* cols 2))' '(- e b) (* rows (* cols 3))'
+mutate row-sum-order '(f64-add (f64-from-bits acc) (f64-from-bits y))' '(f64-add (f64-from-bits y) (f64-from-bits y))'
 mutate element-bound '(> (+ (+ b (\* 2 idx)) 2) e)' '(> (+ (+ b (* 2 idx)) 2) (+ e 4))'
 
 # negative control: a source changed after locking is refused
@@ -200,7 +205,7 @@ rm -f "$SCOPE/d/model.safetensors"
   printf 'amu_run_without_fs35_status: %s (not the full count)\n' "$NO_FS_STATUS"
   printf 'negative_control_results:%s\n' "$NEG_RESULTS"
   printf 'changed_source_refusal: PASS\n'
-  printf 'qualification: bounded native reads of the real Qwen3-ASR-0.6B header and nine BF16 elements and three row dot products; no tensor-sized reads, no model run, turn or launcher\n'
+  printf 'qualification: bounded native reads of the real Qwen3-ASR-0.6B header and nine BF16 elements, three row dot products and one whole 3584x896 matrix-vector product; no activations, no model run, turn or launcher\n'
 } > "$OUT_DIR/build-receipt.txt"
 
 cat "$OUT_DIR/build-receipt.txt"
