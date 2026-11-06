@@ -1,0 +1,111 @@
+;; BF16 weight-row linear steps and the SiLU-gated MLP of Qwen3 (JUN-884):
+;; y = down(silu(gate(x)) * up(x)) (hidden 1024 -> intermediate 3072 -> 1024 in
+;; Qwen3-ASR's LLM; the weights are BF16 matrices). A weight row arrives as a hex
+;; string of its BF16 elements (2 little-endian bytes each) and is decoded while it
+;; is multiplied in: bf16-mac adds w[j] * x to an accumulator. The seed has no
+;; vectors, so the rows and the inputs of the gate are a small analytic MLP (hidden 4,
+;; intermediate 3, three input vectors) plus three real rows of
+;; thinker.model.layers.0.mlp.gate_proj.weight from the downloaded Qwen3-ASR-0.6B.
+;; Built on itonami.bf16 (decoding) and itonami.qwen-ops (SiLU). Every f64 value is an
+;; i64 bit pattern.
+(ns itonami.qwen-mlp
+  (:require [itonami.bf16 :as bf]
+            [itonami.qwen-ops :as qo])
+  (:export [bf16-mac match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+
+;; acc + w[j] * x, with w the BF16 row given as hex
+(defn bf16-mac [acc :i64 w :string j :i64 x :i64] :i64
+  (fadd acc (fmul (bf/bf16-to-f64 (bf/bf16-bits w (* 2 j))) x)))
+
+;; ---- real rows: first 16 elements of rows 0..2 of thinker.model.layers.0.mlp.gate_proj.weight [3072, 1024] ------------
+(defn- real-row [r :i64] :string
+  (cond
+        (= r 0) "97bc3aba2bbd41bdfebc333d4dbd003e8abdfc3cd4bc033d983c833ca63c9bbc"
+        (= r 1) "a1bbbfba1dbdadba8a3ac3bcfe3c673d18bd6f3ddabc17bd433d1fbd31bd2e3c"
+        (= r 2) "89bd4cbb0c3d203d08bd49bc91bd653d82bdb53d6ebd3f3dd43dc33c793dacbc"
+        :else ""))
+
+(defn- xr [c :i64] :i64
+  (fdiv (itof (- (mod (+ (* c 5) 2) 9) 4)) (f64-to-bits 4.0)))
+(defn- real-dot [r :i64 j :i64 acc :i64] :i64
+  (if (>= j 16)
+    acc
+    (real-dot r (+ j 1) (bf16-mac acc (real-row r) j (xr j)))))
+(defn- real-want [r :i64] :i64
+  (cond
+        (= r 0) -4625000863721586688
+        (= r 1) 4585044576808468480
+        (= r 2) -4632984658169036800
+        :else (zero)))
+
+;; ---- tiny MLP: hidden 4, intermediate 3 (weights exact in bf16) -------------------------
+(defn- gate-row [r :i64] :string
+  (cond
+        (= r 0) "00bf403f803e80be"
+        (= r 1) "803e80be40bf003f"
+        (= r 2) "40bf003f000000bf"
+        :else ""))
+
+(defn- up-row [r :i64] :string
+  (cond
+        (= r 0) "00be803e80be003e"
+        (= r 1) "c0be0000c03e00be"
+        (= r 2) "803e80be003ec0be"
+        :else ""))
+
+(defn- down-row [r :i64] :string
+  (cond
+        (= r 0) "80be803e403f"
+        (= r 1) "40bf80be803e"
+        (= r 2) "803f40bf80be"
+        (= r 3) "003f803f40bf"
+        :else ""))
+
+(defn- xin [k :i64 c :i64] :i64
+  (fdiv (itof (- (mod (+ (+ (* k 3) (* c 7)) 1) 11) 5)) (f64-to-bits 4.0)))
+
+(defn- gate-run [k :i64 r :i64 c :i64 acc :i64] :i64
+  (if (>= c 4) acc (gate-run k r (+ c 1) (bf16-mac acc (gate-row r) c (xin k c)))))
+(defn- up-run [k :i64 r :i64 c :i64 acc :i64] :i64
+  (if (>= c 4) acc (up-run k r (+ c 1) (bf16-mac acc (up-row r) c (xin k c)))))
+;; silu(gate_r) * up_r
+(defn- act [k :i64 r :i64] :i64
+  (fmul (qo/silu (gate-run k r 0 (zero))) (up-run k r 0 (zero))))
+(defn- down-run [k :i64 o :i64 r :i64 acc :i64] :i64
+  (if (>= r 3) acc (down-run k o (+ r 1) (bf16-mac acc (down-row o) r (act k r)))))
+
+(defn- mlp-want [n :i64] :i64
+  (cond
+        (= n 0) -4632603408394811053
+        (= n 1) -4629105598338478319
+        (= n 2) 4599268591031026038
+        (= n 3) 4557527831077577984
+        (= n 4) -4633741181867593910
+        (= n 5) -4633715830145646254
+        (= n 6) 4594417738883731666
+        (= n 7) 4583501277956657290
+        (= n 8) -4632434613593544760
+        (= n 9) -4634601966497540931
+        (= n 10) 4593804263742975414
+        (= n 11) 4586091537435654432
+        :else (zero)))
+(defn- close? [a :i64 b :i64] :bool
+  (f64-le (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b)))
+          (f64-mul 0.000000001 (f64-max 1.0 (f64-abs (f64-from-bits b))))))
+
+(defn- real-run [r :i64 acc :i64] :i64
+  (if (>= r 3) acc (real-run (+ r 1) (if (close? (real-dot r 0 (zero)) (real-want r)) (+ acc 1) acc))))
+(defn- mlp-run [n :i64 acc :i64] :i64
+  (if (>= n 12)
+    acc
+    (mlp-run (+ n 1) (if (close? (down-run (quot n 4) (mod n 4) 0 (zero)) (mlp-want n)) (+ acc 1) acc))))
+
+;; 3 real-weight dots + 12 MLP outputs = 15
+(defn match-count [] :i64
+  (+ (real-run 0 0) (mlp-run 0 0)))
