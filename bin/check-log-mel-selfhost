@@ -14,9 +14,9 @@ fi
 CLI=$1
 OUT_DIR=$2
 EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
-EXPECTED_SOURCE_SHA256=01a83e67602e1270c2b0637d504f3fbe827eeabfd9a8fb493d9990e320805bef
+EXPECTED_SOURCE_SHA256=19f892cd437a994661354c3ec90963c3b5ef84ee4885cc157e3a96595049fcd4
 AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
-EXPECTED_RESULT=83
+EXPECTED_RESULT=89
 
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
 GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
@@ -114,6 +114,10 @@ mutate hann-coefficient '(fmul (f64-to-bits 0.5) (turn-cos n 400))' '(fmul (f64-
 mutate quadrant-sign '(= q 1) (neg (sin-first s quarter))' '(= q 1) (sin-first s quarter)'
 mutate ln-terms '(atanh-run (fmul z z) 15 ' '(atanh-run (fmul z z) 1 '
 mutate filter-norm '(fmul tri (f64-to-bits 2.0))' '(fmul tri (f64-to-bits 1.0))'
+mutate sample-offset '(- v 32768)' '(- v 32000)'
+mutate hex-weight '(\* 256 (hex-digit' '(* 255 (hex-digit'
+mutate frame-length '(= (string-length frame) 1600)' '(>= (string-length frame) 1600)'
+mutate hex-letters '(and (>= c 97) (<= c 102)) (- c 87)' '(and (>= c 97) (<= c 101)) (- c 87)'
 
 # negative control: a source changed after locking is refused
 SOURCE_PATH="$POS/src/log_mel.kotoba"
@@ -144,7 +148,7 @@ fi
   printf 'artifact_run_result: %s\n' "$ARTIFACT_RESULT"
   printf 'negative_control_results:%s\n' "$NEG_RESULTS"
   printf 'changed_source_refusal: PASS\n'
-  printf 'qualification: bounded scalar log-mel core on a synthetic frame; no audio, model, vector frame input, turn or launcher\n'
+  printf 'qualification: bounded scalar log-mel core on a hex-string frame; no real audio, 30 s window, model, host wiring, turn or launcher\n'
 } > "$OUT_DIR/build-receipt.txt"
 
 cat "$OUT_DIR/build-receipt.txt"
