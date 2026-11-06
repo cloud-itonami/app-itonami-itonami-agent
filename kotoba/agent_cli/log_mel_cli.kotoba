@@ -1,0 +1,42 @@
+(ns agent-cli.log-mel-cli
+  "One-shot native guest for the log-mel front end (JUN-869). argv 0 is one
+  frame: 1600 hex characters (400 x 4-digit offset-binary int16, see
+  itonami.log-mel). Prints the 80 log10 mel energies of that frame on one line
+  as space-separated integers in millionths (round half away from zero), exit
+  0. A missing or malformed frame prints one named line on stderr, nothing on
+  stdout, exit 2. The window max-8 clamp and the (x+4)/4 normalisation are
+  across-frame steps and stay with the caller. Capabilities are exactly argv,
+  stdout and stderr: the amu-command profile has no :io/read, so the frame
+  comes in on argv."
+  (:require [itonami.log-mel :as lm])
+  (:export [main])
+  (:capabilities #{:cli/args :io/write :io/write-error}))
+
+(defn- wire-arg [i :i64] :string
+  (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- wire-say [s :string] :string
+  (typed-cap-call :io/write :string :string s))
+
+(defn- wire-die [s :string] :string
+  (typed-cap-call :io/write-error :string :string s))
+
+;; round(v * 1e6) half away from zero, as an integer
+(defn- micro [v :i64] :i64
+  (let [x (f64-mul (f64-from-bits v) 1000000.0)]
+    (f64-to-i64-truncating
+      (if (f64-lt x 0.0) (f64-sub x 0.5) (f64-add x 0.5)))))
+
+(defn- mel-run [frame :string m :i64 acc :string] :string
+  (if (>= m 80)
+    acc
+    (mel-run frame (+ m 1)
+             (string-concat
+               (if (= m 0) acc (string-concat acc " "))
+               (string-from-i64 (micro (lm/log-mel-bin frame m)))))))
+
+(defn main [] :i64
+  (let [frame (wire-arg 0)]
+    (if (lm/frame-valid? frame)
+      (let [_ (wire-say (string-concat (mel-run frame 0 "") "\n"))] 0)
+      (let [_ (wire-die "log-mel: argv 0 must be 1600 hex characters (400 x int16 offset-binary)\n")] 2))))

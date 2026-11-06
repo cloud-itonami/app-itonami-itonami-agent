@@ -1,0 +1,156 @@
+#!/bin/sh
+# Build the log-mel guest as a standalone native program with the pinned
+# Amu-native project CLI (runtime profile amu-command: stdio and argv only),
+# run it on a fixed frame and on malformed ones, and check capability and
+# source-lock refusals. It does not read audio, run a model, or touch the
+# launcher.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <cli-dir> <absolute-workspace-output-dir>" >&2
+  printf '%s\n' "  <cli-dir> holds amu-cli.macho, amu-full-root.macho and kotoba-packager-root.macho" >&2
+  exit 2
+fi
+
+CLI_DIR=$1
+OUT_DIR=$2
+CLI="$CLI_DIR/amu-cli.macho"
+EXPECTED_CLI_SHA256=16cbef76292013eae7c2324624ed5d76dd6e890acdba1f3537998d2690bc4896
+EXPECTED_COMPILER_SHA256=0df05effcc0624e94403e8aaf1780feab564de1b44b322680f5535582adb6c04
+EXPECTED_PACKAGER_SHA256=1f7134ea8a6921bcc07b9439b8c54497a4031bf0b67bfcb6464d5fdb000eba77
+EXPECTED_LOGMEL_SHA256=19f892cd437a994661354c3ec90963c3b5ef84ee4885cc157e3a96595049fcd4
+EXPECTED_GUEST_SHA256=a881e40935e67c8c59a2a848e5567ba23af8f3e02a62e3c2d6de28e6c82c2869
+AMU_CLI_COMMIT=49dccb68f1a6ef9aece7e9de30bf6224687d06fc
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI_DIR" in
+  /*) ;;
+  *) printf '%s\n' "cli dir must be absolute" >&2; exit 2 ;;
+esac
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+check_sha() {
+  actual=$(shasum -a 256 "$1" | cut -d ' ' -f 1)
+  if [ "$actual" != "$2" ]; then
+    printf 'unexpected digest for %s: %s\n' "$1" "$actual" >&2
+    exit 2
+  fi
+}
+[ -x "$CLI" ] || { printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2; exit 2; }
+check_sha "$CLI" "$EXPECTED_CLI_SHA256"
+check_sha "$CLI_DIR/amu-full-root.macho" "$EXPECTED_COMPILER_SHA256"
+check_sha "$CLI_DIR/kotoba-packager-root.macho" "$EXPECTED_PACKAGER_SHA256"
+LOGMEL="$REPO_ROOT/kotoba/itonami/log_mel.kotoba"
+GUEST="$REPO_ROOT/kotoba/agent_cli/log_mel_cli.kotoba"
+check_sha "$LOGMEL" "$EXPECTED_LOGMEL_SHA256"
+check_sha "$GUEST" "$EXPECTED_GUEST_SHA256"
+FRAME=$(cat "$REPO_ROOT/test/native/log_mel_frame.hex")
+EXPECTED_LINE="$REPO_ROOT/test/native/log_mel_expected.txt"
+
+# build <dir> <log-mel-source> <guest-source>: stage, lock (modules sorted by
+# name, files sorted by path), compile to a standalone program
+build() {
+  dir=$1
+  mkdir -p "$dir"
+  cp "$2" "$dir/log_mel.kotoba"
+  cp "$3" "$dir/log_mel_cli.kotoba"
+  lm="$dir/log_mel.kotoba"
+  gu="$dir/log_mel_cli.kotoba"
+  printf 'KSL2\nentry %s\nmodule agent-cli.log-mel-cli %s\nmodule itonami.log-mel %s\nfile %s %s\nfile %s %s\n' \
+    "$gu" "$gu" "$lm" \
+    "$(shasum -a 256 "$lm" | cut -d ' ' -f 1)" "$lm" \
+    "$(shasum -a 256 "$gu" | cut -d ' ' -f 1)" "$gu" > "$dir/log-mel-cli.ksl"
+  "$CLI" compile "$gu" --source-lock "$dir/log-mel-cli.ksl" \
+    --runtime-profile amu-command -o "$dir/log-mel-cli.macho"
+  codesign --verify --strict "$dir/log-mel-cli.macho"
+}
+
+POS="$OUT_DIR/positive"
+build "$POS" "$LOGMEL" "$GUEST"
+PROGRAM="$POS/log-mel-cli.macho"
+
+# positive: the fixed frame prints the expected line, exit 0, nothing on stderr
+set +e
+"$PROGRAM" "$FRAME" > "$OUT_DIR/ok.stdout" 2> "$OUT_DIR/ok.stderr"
+OK_EXIT=$?
+set -e
+[ "$OK_EXIT" = 0 ] || { printf 'fixed frame exited %s\n' "$OK_EXIT" >&2; exit 1; }
+cmp -s "$OUT_DIR/ok.stdout" "$EXPECTED_LINE" || { printf '%s\n' "fixed frame output differs from the reference line" >&2; exit 1; }
+[ ! -s "$OUT_DIR/ok.stderr" ] || { printf '%s\n' "fixed frame wrote to stderr" >&2; exit 1; }
+
+# malformed input: named stderr line, empty stdout, exit 2
+refuse() {
+  name=$1
+  shift
+  set +e
+  "$PROGRAM" "$@" > "$OUT_DIR/$name.stdout" 2> "$OUT_DIR/$name.stderr"
+  code=$?
+  set -e
+  [ "$code" = 2 ] || { printf 'refusal %s exited %s, expected 2\n' "$name" "$code" >&2; exit 1; }
+  [ ! -s "$OUT_DIR/$name.stdout" ] || { printf 'refusal %s wrote to stdout\n' "$name" >&2; exit 1; }
+  grep -q 'log-mel: argv 0 must be 1600 hex characters' "$OUT_DIR/$name.stderr" || { printf 'refusal %s lacks the named message\n' "$name" >&2; exit 1; }
+}
+SHORT=$(printf '%s' "$FRAME" | cut -c1-1599)
+NONHEX=z$(printf '%s' "$FRAME" | cut -c2-)
+refuse no-argument
+refuse short-frame "$SHORT"
+refuse non-hex "$NONHEX"
+
+# negative control: dropping a declared capability must be refused at compile
+mkdir -p "$OUT_DIR/negative"
+sed 's/(:capabilities #{:cli\/args :io\/write :io\/write-error})/(:capabilities #{:cli\/args :io\/write})/' "$GUEST" > "$OUT_DIR/negative/no-stderr-cap.kotoba"
+cmp -s "$GUEST" "$OUT_DIR/negative/no-stderr-cap.kotoba" && { printf '%s\n' "capability control did not change the source" >&2; exit 1; }
+if build "$OUT_DIR/negative/cap" "$LOGMEL" "$OUT_DIR/negative/no-stderr-cap.kotoba" > "$OUT_DIR/negative/cap.stdout" 2> "$OUT_DIR/negative/cap.stderr"; then
+  printf '%s\n' "a guest using an undeclared capability compiled" >&2
+  exit 1
+fi
+grep -q 'capability not declared in namespace' "$OUT_DIR/negative/cap.stderr" || { printf '%s\n' "capability refusal did not name the declaration" >&2; exit 1; }
+
+# negative control: a mutated core must change the output
+sed 's/(- v 32768)/(- v 32000)/' "$LOGMEL" > "$OUT_DIR/negative/log_mel_offset.kotoba"
+cmp -s "$LOGMEL" "$OUT_DIR/negative/log_mel_offset.kotoba" && { printf '%s\n' "core control did not change the source" >&2; exit 1; }
+build "$OUT_DIR/negative/core" "$OUT_DIR/negative/log_mel_offset.kotoba" "$GUEST" > /dev/null
+"$OUT_DIR/negative/core/log-mel-cli.macho" "$FRAME" > "$OUT_DIR/negative/core.stdout"
+if cmp -s "$OUT_DIR/negative/core.stdout" "$EXPECTED_LINE"; then
+  printf '%s\n' "mutated core still printed the reference line" >&2
+  exit 1
+fi
+
+# negative control: a source changed after locking is refused
+printf '\n' >> "$POS/log_mel.kotoba"
+if "$CLI" compile "$POS/log_mel_cli.kotoba" --source-lock "$POS/log-mel-cli.ksl" \
+  --runtime-profile amu-command -o "$OUT_DIR/should-not-exist.macho" > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr" || { printf '%s\n' "changed source refusal did not identify the locked input" >&2; exit 1; }
+[ ! -e "$OUT_DIR/should-not-exist.macho" ] || { printf '%s\n' "refused compile left an output artifact" >&2; exit 1; }
+
+{
+  printf 'format: itonami.log-mel-cli-selfhost-gate.v1\n'
+  printf 'amu_cli_commit: %s\n' "$AMU_CLI_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$EXPECTED_CLI_SHA256"
+  printf 'amu_compiler_sha256: %s\n' "$EXPECTED_COMPILER_SHA256"
+  printf 'amu_packager_sha256: %s\n' "$EXPECTED_PACKAGER_SHA256"
+  printf 'log_mel_source_sha256: %s\n' "$EXPECTED_LOGMEL_SHA256"
+  printf 'guest_source_sha256: %s\n' "$EXPECTED_GUEST_SHA256"
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)"
+  printf 'program_bytes: %s\n' "$(wc -c < "$PROGRAM" | tr -d ' ')"
+  printf 'fixed_frame_output: IDENTICAL exit 0\n'
+  printf 'refusals: no-argument short-frame non-hex -> exit 2, empty stdout, named stderr\n'
+  printf 'undeclared_capability: refused at compile\n'
+  printf 'mutated_core_output: differs\n'
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: standalone argv-in/stdout-out guest for one frame; no audio, window driver, model, turn or launcher\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"
