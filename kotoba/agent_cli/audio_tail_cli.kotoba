@@ -1,0 +1,28 @@
+(ns agent-cli.audio-tail-cli
+  "One-shot native guest for the tail of the Qwen3-ASR audio encoder (JUN-923). argv 0 is the model
+  path inside the granted directory, argv 1 the activations of three 896-wide tokens as 43,008 hex
+  characters. It applies ln_post, proj1, the exact GELU and proj2 and prints the three 1024-wide
+  projected embeddings as 49,152 hex characters (16 per f64 bit pattern), exit 0. A missing
+  argument, a malformed input or an unreadable model prints one named line on stderr, nothing on
+  stdout, exit 2. Weights are read with FS2 range requests from fd 3 (amu-command-fs35)."
+  (:require [itonami.audio-ffn :as af])
+  (:export [main])
+  (:capabilities #{:cli/args :io/write :io/write-error :fs/app-data}))
+
+(defn- wire-arg [i :i64] :string
+  (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- wire-say [s :string] :string
+  (typed-cap-call :io/write :string :string s))
+
+(defn- wire-die [s :string] :string
+  (typed-cap-call :io/write-error :string :string s))
+
+(defn main [] :i64
+  (let [path (wire-arg 0)]
+    (if (= (string-length path) 0)
+      (let [_ (wire-die "audio-tail: argv 0 must be the model path\n")] 2)
+      (let [out (af/tail-hex path (wire-arg 1))]
+        (if (= (string-length out) 0)
+          (let [_ (wire-die "audio-tail: input or model unreadable\n")] 2)
+          (let [_ (wire-say (string-concat out "\n"))] 0))))))
