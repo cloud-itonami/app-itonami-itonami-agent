@@ -1,0 +1,166 @@
+;; bf16 weight decoding for the native Qwen3-ASR / Qwen3-TTS path (JUN-879).
+;; bfloat16 is the high 16 bits of an IEEE binary32 (1 sign, 8 exponent with bias
+;; 127, 7 mantissa bits), so the widening to f64 is exact: normal values are
+;; (128 + m) * 2^(e - 134), subnormals m * 2^-133, exponent 255 (inf / nan) is
+;; refused. An element arrives as 2 little-endian bytes in a hex string, the same
+;; string route as the other weight formats; the 16-bit reader is
+;; itonami.ggml-dequant's. Every f64 value is an i64 bit pattern.
+(ns itonami.bf16
+  (:require [itonami.ggml-dequant :as gd])
+  (:export [bf16-bits bf16-finite? bf16-to-f64 match-count]))
+
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- neg [a :i64] :i64 (f64-to-bits (f64-neg (f64-from-bits a))))
+
+;; the bfloat16 stored at byte offset i of a hex string (little-endian), or -1
+(defn bf16-bits [s :string i :i64] :i64 (gd/half-bits s i))
+
+(defn- bf16-exp [h :i64] :i64 (mod (quot h 128) 256))
+
+;; false for inf / nan (exponent 255) and for an unreadable element (-1)
+(defn bf16-finite? [h :i64] :bool
+  (and (>= h 0) (< (bf16-exp h) 255)))
+
+;; v * 2^k by repeated doubling / halving
+(defn- scale2 [v :i64 k :i64] :i64
+  (cond (= k 0) v
+        (> k 0) (scale2 (fmul v (f64-to-bits 2.0)) (- k 1))
+        :else (scale2 (fdiv v (f64-to-bits 2.0)) (+ k 1))))
+
+;; exact value of a finite bfloat16
+(defn bf16-to-f64 [h :i64] :i64
+  (let [e (bf16-exp h)
+        m (mod h 128)
+        mag (if (= e 0)
+              (scale2 (itof m) -133)
+              (scale2 (itof (+ 128 m)) (- e 134)))]
+    (if (>= h 32768) (neg mag) mag)))
+
+;; ---- gate fixtures --------------------------------------------------------------
+(defn- special [i :i64] :i64
+  (cond
+        (= i 0) 0
+        (= i 1) 32768
+        (= i 2) 16256
+        (= i 3) 49024
+        (= i 4) 32639
+        (= i 5) 1
+        (= i 6) 128
+        (= i 7) 255
+        (= i 8) 16457
+        (= i 9) 65407
+        :else 0))
+(defn- special-want [i :i64] :i64
+  (cond
+        (= i 0) 0
+        (= i 1) -9223372036854775808
+        (= i 2) 4607182418800017408
+        (= i 3) -4616189618054758400
+        (= i 4) 5183607986731352064
+        (= i 5) 4008203668359741440
+        (= i 6) 4039728865751334912
+        (= i 7) 4044197281006616576
+        (= i 8) 4614254477589872640
+        (= i 9) -4039764050123423744
+        :else 0))
+(defn- nonfinite [i :i64] :i64
+  (cond
+        (= i 0) 32640
+        (= i 1) 65408
+        (= i 2) 32704
+        :else 0))
+;; the first 64 elements of thinker.audio_tower.conv2d1.bias in the real Qwen3-ASR-0.6B model.safetensors
+(defn- real [] :string
+  "7fbd673dad393f3a9db995bdedb7ce3d6e3b183973bc9b3dedbcc137a83a96b93439093a85bc41beffbcb3bd9a39e7bcd3beab3cf13d7f3955bc943a4439a03dd13d4b3eaa3da3399bbd10bb6e3b7639aebc85ba6bb89f3bd23d8539ba3d64397e3d313c41ba65bdffbe8fbd1bb9a53873bab13a35bd65be7e3d01bd09390eb9")
+(defn- real-want [i :i64] :i64
+  (cond
+        (= i 0) -4634239200936329216
+        (= i 1) 4588288410988314624
+        (= i 2) 4554722520015568896
+        (= i 3) 4559859438340538368
+        (= i 4) -4669212466792628224
+        (= i 5) -4633465144750374912
+        (= i 6) -4684412115535003648
+        (= i 7) 4591912401313464320
+        (= i 8) 4570520303083454464
+        (= i 9) 4549480048574332928
+        (= i 10) -4643668612656136192
+        (= i 11) 4590117998336933888
+        (= i 12) -4639376119261298688
+        (= i 13) 4537411808947863552
+        (= i 14) 4563553797409865728
+        (= i 15) -4669458757397250048
+        (= i 16) 4550465210992820224
+        (= i 17) 4557959482247741440
+        (= i 18) -4643035293958537216
+        (= i 19) -4627413432751095808
+        (= i 20) -4638742800563699712
+        (= i 21) -4632409613587709952
+        (= i 22) 4554054016945881088
+        (= i 23) -4639587225493831680
+        (= i 24) -4622276514426126336
+        (= i 25) 4581673749035614208
+        (= i 26) 4593143854336573440
+        (= i 27) 4553104038899482624
+        (= i 28) -4644724143818801152
+        (= i 29) 4562850109968089088
+        (= i 30) 4551028160946241536
+        (= i 31) 4590293920197378048
+        (= i 32) 4592017954429730816
+        (= i 33) 4596310447824568320
+        (= i 34) 4590645763918266368
+        (= i 35) 4554370676294680576
+        (= i 36) -4633254038517841920
+        (= i 37) -4656159064747671552
+        (= i 38) 4570520303083454464
+        (= i 39) 4552787379550683136
+        (= i 40) -4641592734702895104
+        (= i 41) -4661049692468019200
+        (= i 42) -4679978884651810816
+        (= i 43) 4572244337315807232
+        (= i 44) 4592053138801819648
+        (= i 45) 4553315145132015616
+        (= i 46) 4591208713871687680
+        (= i 47) 4552154060853084160
+        (= i 48) 4589097651546357760
+        (= i 49) 4577381255640776704
+        (= i 50) -4663442229770059776
+        (= i 51) -4635153994610638848
+        (= i 52) -4620728402054217728
+        (= i 53) -4633676250982907904
+        (= i 54) -4673786435164176384
+        (= i 55) 4545433845784117248
+        (= i 56) -4661683011165618176
+        (= i 57) 4563870456758665216
+        (= i 58) -4636842844470902784
+        (= i 59) -4626146795355897856
+        (= i 60) 4589097651546357760
+        (= i 61) -4638672431819522048
+        (= i 62) 4548952282993000448
+        (= i 63) -4674243832001331200
+        :else 0))
+
+(defn- special-run [i :i64 acc :i64] :i64
+  (if (>= i 10)
+    acc
+    (special-run (+ i 1) (if (= (bf16-to-f64 (special i)) (special-want i)) (+ acc 1) acc))))
+(defn- nonfinite-run [i :i64 acc :i64] :i64
+  (if (>= i 3)
+    acc
+    (nonfinite-run (+ i 1) (if (bf16-finite? (nonfinite i)) acc (+ acc 1)))))
+(defn- real-run [i :i64 acc :i64] :i64
+  (if (>= i 64)
+    acc
+    (real-run (+ i 1)
+              (if (= (bf16-to-f64 (bf16-bits (real) (* 2 i))) (real-want i)) (+ acc 1) acc))))
+
+;; 10 special values + 3 refused non-finite + 1 accepted max finite + 64 real weights
+;; + 1 unreadable element refused = 79
+(defn match-count [] :i64
+  (+ (special-run 0 0)
+  (+ (nonfinite-run 0 0)
+  (+ (if (bf16-finite? 32639) 1 0)
+  (+ (real-run 0 0)
+     (if (bf16-finite? (bf16-bits "00" 0)) 0 1))))))
