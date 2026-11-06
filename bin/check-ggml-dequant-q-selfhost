@@ -1,0 +1,166 @@
+#!/bin/sh
+# Compile and execute the q4_0 and q5_0 block dequantisation (built on
+# itonami.ggml-dequant) with the pinned Amu multi-module project CLI, against
+# the values printed by ggml's own dequantize_row_q4_0 / q5_0 compiled from the
+# local llama.cpp checkout (expected values are pasted into the module). It does
+# not read a model file, run a model, or exercise the agent turn or launcher.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
+EXPECTED_SOURCE_SHA256=4b32b8064dc9195f181b46a694eefba3e86aaaa36ce28e1a5cefef1ec8903f21
+EXPECTED_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
+AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
+EXPECTED_RESULT=204
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+CLI_SHA256=$(shasum -a 256 "$CLI" | cut -d ' ' -f 1)
+if [ "$CLI_SHA256" != "$EXPECTED_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected Amu CLI digest: $CLI_SHA256" >&2
+  exit 2
+fi
+DEQUANT="$REPO_ROOT/kotoba/itonami/ggml_dequant.kotoba"
+SOURCE="$REPO_ROOT/kotoba/itonami/ggml_dequant_q.kotoba"
+DEQUANT_SHA256=$(shasum -a 256 "$DEQUANT" | cut -d ' ' -f 1)
+if [ "$DEQUANT_SHA256" != "$EXPECTED_DEQUANT_SHA256" ]; then
+  printf '%s\n' "unexpected ggml-dequant source digest: $DEQUANT_SHA256" >&2
+  exit 2
+fi
+SOURCE_SHA256=$(shasum -a 256 "$SOURCE" | cut -d ' ' -f 1)
+if [ "$SOURCE_SHA256" != "$EXPECTED_SOURCE_SHA256" ]; then
+  printf '%s\n' "unexpected ggml-dequant-q source digest: $SOURCE_SHA256" >&2
+  exit 2
+fi
+
+# run_gate <dir> <source-file>: lock + compile
+run_gate() {
+  dir=$1
+  src=$2
+  gate="$dir/src/ggml_dequant_q_gate.kotoba"
+  mkdir -p "$dir/src"
+  cp "$DEQUANT" "$dir/src/ggml_dequant.kotoba"
+  cp "$src" "$dir/src/ggml_dequant_q.kotoba"
+  cat > "$gate" <<'EOF2'
+(ns itonami.ggml-dequant-q-gate
+  (:require [itonami.ggml-dequant-q :as q])
+  (:export [main]))
+(defn main [] :i64 (q/match-count))
+EOF2
+  s="$dir/src/ggml_dequant_q.kotoba"
+  # module lines sorted by name: itonami.ggml-dequant-q < itonami.ggml-dequant-q-gate
+  gd="$dir/src/ggml_dequant.kotoba"
+  # modules sorted by name, files sorted by path
+  printf 'KSL2\nentry %s\nmodule itonami.ggml-dequant %s\nmodule itonami.ggml-dequant-q %s\nmodule itonami.ggml-dequant-q-gate %s\nfile %s %s\nfile %s %s\nfile %s %s\n' \
+    "$gate" "$gd" "$s" "$gate" \
+    "$(shasum -a 256 "$gd" | cut -d ' ' -f 1)" "$gd" \
+    "$(shasum -a 256 "$s" | cut -d ' ' -f 1)" "$s" \
+    "$(shasum -a 256 "$gate" | cut -d ' ' -f 1)" "$gate" > "$dir/ggml-dequant-q.ksl"
+  "$CLI" compile "$gate" --source-lock "$dir/ggml-dequant-q.ksl" -o "$dir/ggml-dequant-q-tests.macho"
+  codesign --verify --strict "$dir/ggml-dequant-q-tests.macho"
+}
+
+POS="$OUT_DIR/positive"
+run_gate "$POS" "$SOURCE"
+GATE_PATH="$POS/src/ggml_dequant_q_gate.kotoba"
+LOCK="$POS/ggml-dequant-q.ksl"
+PROGRAM="$POS/ggml-dequant-q-tests.macho"
+DIRECT_RESULT=$("$PROGRAM")
+LOCKED_RESULT=$("$CLI" run "$GATE_PATH" --source-lock "$LOCK")
+ARTIFACT_RESULT=$("$CLI" run "$PROGRAM")
+for result in "$DIRECT_RESULT" "$LOCKED_RESULT" "$ARTIFACT_RESULT"; do
+  if [ "$result" != "$EXPECTED_RESULT" ]; then
+    printf 'ggml-dequant-q result mismatch: expected %s, got %s\n' "$EXPECTED_RESULT" "$result" >&2
+    exit 1
+  fi
+done
+
+# negative controls: each mutation must change the source and stop the gate
+# from returning the full match count
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+NEG_RESULTS=""
+mutate() {
+  name=$1
+  pattern=$2
+  replacement=$3
+  sed "s/$pattern/$replacement/" "$SOURCE" > "$NEG/$name.kotoba"
+  if cmp -s "$SOURCE" "$NEG/$name.kotoba"; then
+    printf 'negative control %s did not change the source\n' "$name" >&2
+    exit 1
+  fi
+  run_gate "$NEG/$name" "$NEG/$name.kotoba"
+  result=$("$NEG/$name/ggml-dequant-q-tests.macho")
+  if [ "$result" = "$EXPECTED_RESULT" ]; then
+    printf 'negative control %s still passed the gate\n' "$name" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name=$result"
+}
+mutate q4-bias '(itof (- nib 8))' '(itof (- nib 7))'
+mutate high-nibble '(mod b 16) (quot b 16))\]' '(mod b 16) (mod b 16))]'
+mutate q5-bit-low '(pow2 (if (< i 16) j (+ j 16)))' '(pow2 (if (< i 16) j (+ j 12)))'
+mutate q5-bit-weight '(itof (- (+ nib (\* 16 bit)) 16))' '(itof (- (+ nib (* 8 bit)) 16))'
+mutate q5-qh-order '(+ (gd\/byte-at block 2)' '(+ (gd\/byte-at block 5)'
+mutate scale-finite '(gd\/half-finite? (gd\/half-bits block 0))' 'true'
+mutate length-q4 '(defn q4-0-valid? \[block :string\] :bool (valid? block 36))' '(defn q4-0-valid? [block :string] :bool (valid? block 44))'
+
+# negative control: a source changed after locking is refused
+SOURCE_PATH="$POS/src/ggml_dequant_q.kotoba"
+printf '\n' >> "$SOURCE_PATH"
+if "$CLI" compile "$GATE_PATH" --source-lock "$LOCK" \
+  -o "$OUT_DIR/should-not-exist.macho" > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+{
+  printf 'format: itonami.ggml-dequant-q-selfhost-gate.v1\n'
+  printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$CLI_SHA256"
+  printf 'ggml_dequant_source_sha256: %s\n' "$DEQUANT_SHA256"
+  printf 'ggml_dequant_q_source_sha256: %s\n' "$SOURCE_SHA256"
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)"
+  printf 'direct_result: %s\n' "$DIRECT_RESULT"
+  printf 'locked_run_result: %s\n' "$LOCKED_RESULT"
+  printf 'artifact_run_result: %s\n' "$ARTIFACT_RESULT"
+  printf 'negative_control_results:%s\n' "$NEG_RESULTS"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: bounded q4_0 and q5_0 block decoding from hex strings; no model file, K-quants, turn or launcher\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"
