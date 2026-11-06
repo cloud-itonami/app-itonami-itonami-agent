@@ -47,3 +47,27 @@ at the end) or the original model beyond these transcripts (mrope as plain RoPE;
 tokens unchecked); audio over 8 s (one attention window, 104 tokens; prompts over 64 tokens are refused);
 the decoder with audio against CPython (about half an hour per prefill). The 33-token decoder logits
 are a regression pin. The gate needs the 1.88 GB model and is not CI-runnable.
+
+## A Japanese sentence (JUN-936)
+
+`say -v Kyoko -o ja.aiff "今日はとてもいい天気ですね。"` converted with `afconvert -f WAVE -d LEI16@16000 -c 1`
+(38,367 samples, 2.4 s, WAV sha256 `0a807535...f657`, zero-padded to 38,400 = 240 frames): three chunks
+(100, 100, 40 frames), 5 tokens in the last (ceil(40 / 8)), 31 audio tokens, a 46-token prompt.
+Result: ids `11528 10769 151704 133165 129235 126224 35727 94121 128797 1773 151645`, text
+`language Japanese<asr_text>今日はとてもいい天気ですね。<|im_end|>`: the sentence that was spoken, character
+for character; the model names the language (Japanese) itself, and the vocabulary reader restores the
+multi-byte characters. The run took about 5 minutes for the decoder (prefill and 10 tokens) after the
+encoder.
+
+The gate (`bin/check-asr-transcribe-selfhost`, full tier) takes the clip as a seventh argument
+(`test/native/speech_clip_ja.hex`) and checks the token count of the encoder's output, the first token and
+its logit (a native regression pin), the ids and the text: 53 checks in all, 13 mutations caught, 30 min 54 s
+(jobs 4). The Japanese encoder values are not compared with CPython: the two English clips do that, and
+the transcript here is compared with the sentence spoken.
+
+Counting error found on the way: the first run printed "53 of 54" because the Japanese stage has 7 checks,
+not 8 (mel, token count after the front end, token count of the output, first token, its logit, ids,
+text); the expected total is 53. That run stopped before the mutations, so a second full run was needed.
+
+Not claimed: any other language or speaker, audio with several sentences or noise, and everything listed
+for the English clips (HF padding to 30 s, the original model beyond the transcripts, mrope, more than 8 s).
