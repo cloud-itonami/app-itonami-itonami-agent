@@ -1,0 +1,185 @@
+;; One Qwen3 decoder layer wired end to end (JUN-886), pre-norm:
+;;   h  = rmsnorm(x; attn_norm)
+;;   q,k,v = Wq h, Wk h, Wv h           (BF16 weight rows, decoded while multiplied)
+;;   QK-norm (per head, weights over head width), NeoX RoPE (position i for q, j for k),
+;;   grouped-query causal attention (query heads share the KV head), weighted v
+;;   x2 = x + Wo . attention
+;;   h2 = rmsnorm(x2; mlp_norm);  x3 = x2 + Wd . (silu(Wg h2) * (Wu h2))
+;; Every weight, the norm weights included, is a BF16 hex row. The seed has no vectors and
+;; no memoisation, so each value is recomputed where it is used; the gate sizes are small
+;; (hidden 4, 2 query heads over 1 KV head of width 2, sequence 2, intermediate 3). Built
+;; on itonami.bf16 (decoding), itonami.qwen-ops (RMSNorm steps, RoPE, SiLU) and
+;; itonami.nn-ops (exp-wide). Every f64 value is an i64 bit pattern.
+(ns itonami.qwen-layer
+  (:require [itonami.bf16 :as bf]
+            [itonami.nn-ops :as nn]
+            [itonami.qwen-ops :as qo])
+  (:export [layer-out match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- flt [a :i64 b :i64] :bool (f64-lt (f64-from-bits a) (f64-from-bits b)))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+(defn- theta [] :i64 (f64-to-bits 1000000.0))
+(defn- eps [] :i64 (f64-to-bits 0.000001))
+
+;; acc + w[j] * x with w a BF16 hex row; the j-th element of a BF16 hex row
+(defn- mac [acc :i64 w :string j :i64 x :i64] :i64
+  (fadd acc (fmul (bf/bf16-to-f64 (bf/bf16-bits w (* 2 j))) x)))
+(defn- dec [w :string j :i64] :i64 (bf/bf16-to-f64 (bf/bf16-bits w (* 2 j))))
+(defn- sq [x :i64] :i64 (fmul x x))
+
+;; ---- weights (BF16 hex rows) -------------------------------------------------------------
+(defn- wq-row [r :i64] :string
+  (cond
+        (= r 0) "00bf403f803e80be"
+        (= r 1) "803e80be40bf003f"
+        (= r 2) "40bf003f000000bf"
+        (= r 3) "000000bf403f803e"
+        :else ""))
+
+(defn- wk-row [r :i64] :string
+  (cond
+        (= r 0) "80be003f00bf803e"
+        (= r 1) "40bf0000403f80be"
+        :else ""))
+
+(defn- wv-row [r :i64] :string
+  (cond
+        (= r 0) "000000bf403f803e"
+        (= r 1) "000000bf403f803e"
+        :else ""))
+
+(defn- wo-row [r :i64] :string
+  (cond
+        (= r 0) "00bf803e803f00bf"
+        (= r 1) "403f40bf0000403f"
+        (= r 2) "80be003f80bf80be"
+        (= r 3) "803f00bf803e803f"
+        :else ""))
+
+(defn- wg-row [r :i64] :string
+  (cond
+        (= r 0) "40bf0000403f40bf"
+        (= r 1) "803f00bf803e803f"
+        (= r 2) "003f80bf80be003f"
+        :else ""))
+
+(defn- wu-row [r :i64] :string
+  (cond
+        (= r 0) "00be00be00be00be"
+        (= r 1) "c0bec0bec0bec0be"
+        (= r 2) "803e803e803e803e"
+        :else ""))
+
+(defn- wd-row [r :i64] :string
+  (cond
+        (= r 0) "80be803f0000"
+        (= r 1) "003f00bf403f"
+        (= r 2) "80bf803e40bf"
+        (= r 3) "80be803f0000"
+        :else ""))
+
+(defn- an-row [] :string "403f603f803f903f")
+(defn- mn-row [] :string "a03f903f803f603f")
+(defn- qn-row [] :string "003f403f")
+(defn- kn-row [] :string "803f403f")
+
+;; ---- input and the attention branch ---------------------------------------------------------
+(defn- xv [i :i64 c :i64] :i64
+  (fdiv (itof (- (mod (+ (+ (* i 5) (* c 3)) 1) 9) 4)) (f64-to-bits 4.0)))
+
+(defn- h1-inv [i :i64] :i64
+  (qo/rms-inv (fadd (fadd (fadd (sq (xv i 0)) (sq (xv i 1))) (sq (xv i 2))) (sq (xv i 3))) 4 (eps)))
+(defn- h1 [i :i64 c :i64] :i64 (qo/rms-apply (xv i c) (h1-inv i) (dec (an-row) c)))
+
+;; dot of a BF16 row with h1(i, .) over 4 columns
+(defn- lin-h1 [row :string i :i64 j :i64 acc :i64] :i64
+  (if (>= j 4) acc (lin-h1 row i (+ j 1) (mac acc row j (h1 i j)))))
+(defn- q-raw [i :i64 r :i64] :i64 (lin-h1 (wq-row r) i 0 (zero)))
+(defn- k-raw [j :i64 r :i64] :i64 (lin-h1 (wk-row r) j 0 (zero)))
+(defn- v-raw [j :i64 r :i64] :i64 (lin-h1 (wv-row r) j 0 (zero)))
+
+;; QK-norm over the head's two elements, then RoPE (head width 2: one pair)
+(defn- q-inv [i :i64 h :i64] :i64
+  (qo/rms-inv (fadd (sq (q-raw i (* 2 h))) (sq (q-raw i (+ (* 2 h) 1)))) 2 (eps)))
+(defn- q-norm [i :i64 h :i64 e :i64] :i64
+  (qo/rms-apply (q-raw i (+ (* 2 h) e)) (q-inv i h) (dec (qn-row) e)))
+(defn- q-rot [i :i64 h :i64 e :i64] :i64
+  (if (= e 0)
+    (qo/rope-first (q-norm i h 0) (q-norm i h 1) i 0 2 (theta))
+    (qo/rope-second (q-norm i h 0) (q-norm i h 1) i 0 2 (theta))))
+
+(defn- k-inv [j :i64] :i64
+  (qo/rms-inv (fadd (sq (k-raw j 0)) (sq (k-raw j 1))) 2 (eps)))
+(defn- k-norm [j :i64 e :i64] :i64
+  (qo/rms-apply (k-raw j e) (k-inv j) (dec (kn-row) e)))
+(defn- k-rot [j :i64 e :i64] :i64
+  (if (= e 0)
+    (qo/rope-first (k-norm j 0) (k-norm j 1) j 0 2 (theta))
+    (qo/rope-second (k-norm j 0) (k-norm j 1) j 0 2 (theta))))
+
+;; the single KV head is shared by every query head
+(defn- score [i :i64 h :i64 j :i64] :i64
+  (fdiv (fadd (fmul (q-rot i h 0) (k-rot j 0)) (fmul (q-rot i h 1) (k-rot j 1)))
+        (f64-to-bits (f64-sqrt 2.0))))
+(defn- max-run [i :i64 h :i64 j :i64 acc :i64] :i64
+  (cond (> j i) acc
+        :else (max-run i h (+ j 1) (let [s (score i h j)] (if (flt acc s) s acc)))))
+(defn- denom-run [i :i64 h :i64 mx :i64 j :i64 acc :i64] :i64
+  (cond (> j i) acc
+        :else (denom-run i h mx (+ j 1) (fadd acc (nn/exp-wide (fsub (score i h j) mx))))))
+(defn- mix-run [i :i64 h :i64 e :i64 mx :i64 z :i64 j :i64 acc :i64] :i64
+  (cond (> j i) acc
+        :else (mix-run i h e mx z (+ j 1)
+                       (fadd acc (fmul (fdiv (nn/exp-wide (fsub (score i h j) mx)) z) (v-raw j e))))))
+(defn- attn-out [i :i64 h :i64 e :i64] :i64
+  (let [mx (max-run i h 0 (fsub (zero) (f64-to-bits 1000000000.0)))
+        z (denom-run i h mx 0 (zero))]
+    (mix-run i h e mx z 0 (zero))))
+;; the concatenated head outputs: element r = head r/2, element r%2
+(defn- cat [i :i64 r :i64] :i64 (attn-out i (quot r 2) (mod r 2)))
+
+(defn- o-run [row :string i :i64 r :i64 acc :i64] :i64
+  (if (>= r 4) acc (o-run row i (+ r 1) (mac acc row r (cat i r)))))
+(defn- o-proj [i :i64 c :i64] :i64 (o-run (wo-row c) i 0 (zero)))
+(defn- x2 [i :i64 c :i64] :i64 (fadd (xv i c) (o-proj i c)))
+
+;; ---- the MLP branch ------------------------------------------------------------------------------
+(defn- h2-inv [i :i64] :i64
+  (qo/rms-inv (fadd (fadd (fadd (sq (x2 i 0)) (sq (x2 i 1))) (sq (x2 i 2))) (sq (x2 i 3))) 4 (eps)))
+(defn- h2 [i :i64 c :i64] :i64 (qo/rms-apply (x2 i c) (h2-inv i) (dec (mn-row) c)))
+(defn- lin-h2 [row :string i :i64 j :i64 acc :i64] :i64
+  (if (>= j 4) acc (lin-h2 row i (+ j 1) (mac acc row j (h2 i j)))))
+(defn- act [i :i64 r :i64] :i64
+  (fmul (qo/silu (lin-h2 (wg-row r) i 0 (zero))) (lin-h2 (wu-row r) i 0 (zero))))
+(defn- d-run [row :string i :i64 r :i64 acc :i64] :i64
+  (if (>= r 3) acc (d-run row i (+ r 1) (mac acc row r (act i r)))))
+
+;; output element c of position i: x2 + down(...)
+(defn layer-out [i :i64 c :i64] :i64
+  (fadd (x2 i c) (d-run (wd-row c) i 0 (zero))))
+
+;; ---- gate: 2 positions x 4 elements = 8 -------------------------------------------------------------
+(defn- want [n :i64] :i64
+  (cond
+        (= n 0) -4619866772561173589
+        (= n 1) 4600451886026043340
+        (= n 2) 4598106790834946102
+        (= n 3) 4597099544271895109
+        (= n 4) 4591468549417647664
+        (= n 5) -4635461924779762320
+        (= n 6) -4615217106265069538
+        (= n 7) 4606847769971140444
+        :else (zero)))
+(defn- close? [a :i64 b :i64] :bool
+  (f64-le (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b)))
+          (f64-mul 0.000000001 (f64-max 1.0 (f64-abs (f64-from-bits b))))))
+(defn- out-run [n :i64 acc :i64] :i64
+  (if (>= n 8)
+    acc
+    (out-run (+ n 1) (if (close? (layer-out (quot n 4) (mod n 4)) (want n)) (+ acc 1) acc))))
+(defn match-count [] :i64 (out-run 0 0))
