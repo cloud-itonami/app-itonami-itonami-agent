@@ -14,7 +14,7 @@ fi
 CLI=$1
 OUT_DIR=$2
 EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
-EXPECTED_SOURCE_SHA256=19f892cd437a994661354c3ec90963c3b5ef84ee4885cc157e3a96595049fcd4
+EXPECTED_SOURCE_SHA256=c8fe6a1035f5ef2c7681a3175702f0240c2764eb4db8d8335bfa194311389b69
 AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
 EXPECTED_RESULT=89
 
@@ -110,7 +110,9 @@ mutate() {
   fi
   NEG_RESULTS="$NEG_RESULTS $name=$result"
 }
-mutate hann-coefficient '(fmul (f64-to-bits 0.5) (turn-cos n 400))' '(fmul (f64-to-bits 0.46) (turn-cos n 400))'
+mutate hann-coefficient '(fmul (f64-to-bits 0.5) ch)' '(fmul (f64-to-bits 0.46) ch)'
+mutate rotation-sign '(fsub (fmul cn ck) (fmul sn sk))' '(fadd (fmul cn ck) (fmul sn sk))'
+mutate hann-rotation '(fadd (fmul sh c1) (fmul ch s1))' '(fadd (fmul sh c1) (fmul ch c1))'
 mutate quadrant-sign '(= q 1) (neg (sin-first s quarter))' '(= q 1) (sin-first s quarter)'
 mutate ln-terms '(atanh-run (fmul z z) 15 ' '(atanh-run (fmul z z) 1 '
 mutate filter-norm '(fmul tri (f64-to-bits 2.0))' '(fmul tri (f64-to-bits 1.0))'

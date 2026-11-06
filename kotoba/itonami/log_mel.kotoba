@@ -146,16 +146,18 @@
 (defn- mel-point [i :i64] :i64
   (mel-to-hz (fdiv (fmul (itof i) (hz-to-mel (f64-to-bits 8000.0))) (f64-to-bits 81.0))))
 
-;; weight of FFT bin k in mel filter m: triangle, then slaney area norm
-(defn mel-weight [m :i64 k :i64] :i64
-  (let [p0 (mel-point m)
-        p1 (mel-point (+ m 1))
-        p2 (mel-point (+ m 2))
-        fk (fdiv (fmul (itof k) (f64-to-bits 16000.0)) (f64-to-bits 400.0))
+;; weight of FFT bin k in the triangle with edges p0 < p1 < p2 (Hz), then slaney
+;; area norm
+(defn- weight-at [p0 :i64 p1 :i64 p2 :i64 k :i64] :i64
+  (let [fk (fdiv (fmul (itof k) (f64-to-bits 16000.0)) (f64-to-bits 400.0))
         lower (fdiv (fsub fk p0) (fsub p1 p0))
         upper (fdiv (fsub p2 fk) (fsub p2 p1))
         tri (f64-to-bits (f64-max 0.0 (f64-min (f64-from-bits lower) (f64-from-bits upper))))]
     (fdiv (fmul tri (f64-to-bits 2.0)) (fsub p2 p0))))
+
+;; weight of FFT bin k in mel filter m (0..79)
+(defn mel-weight [m :i64 k :i64] :i64
+  (weight-at (mel-point m) (mel-point (+ m 1)) (mel-point (+ m 2)) k))
 
 ;; whisper: clamp to (max over the whole window) - 8, then (x + 4) / 4
 (defn normalize-log [x :i64 window-max :i64] :i64
@@ -189,33 +191,47 @@
              (hex-digit (string-code-point-at frame (+ o 3))))))]
     (fdiv (itof (- v 32768)) (f64-to-bits 32768.0))))
 
-(defn- dft-run [frame :string k :i64 n :i64 re :i64 im :i64] :i64
+;; Direct DFT by rotation: (cn, sn) = (cos, sin) of 2*pi*k*n/400 and (ch, sh) the
+;; same for 2*pi*n/400 (the Hann window), each stepped by the angle-addition
+;; formula from the constants (ck, sk) and (c1, s1) -- one series evaluation per
+;; bin instead of two per sample, the rounding drift over 400 steps stays near
+;; 1e-14 (the gate holds 1e-6).
+(defn- dft-run [frame :string n :i64 re :i64 im :i64
+                cn :i64 sn :i64 ch :i64 sh :i64
+                ck :i64 sk :i64 c1 :i64 s1 :i64] :i64
   (if (>= n 400)
     (fadd (fmul re re) (fmul im im))
-    (let [xw (fmul (frame-sample frame n) (hann n))
-          r (* k n)]
-      (dft-run frame k (+ n 1)
-               (fadd re (fmul xw (turn-cos r 400)))
-               (fadd im (fmul xw (turn-sin r 400)))))))
+    (let [xw (fmul (frame-sample frame n)
+                   (fsub (f64-to-bits 0.5) (fmul (f64-to-bits 0.5) ch)))]
+      (dft-run frame (+ n 1)
+               (fadd re (fmul xw cn))
+               (fadd im (fmul xw sn))
+               (fsub (fmul cn ck) (fmul sn sk))
+               (fadd (fmul sn ck) (fmul cn sk))
+               (fsub (fmul ch c1) (fmul sh s1))
+               (fadd (fmul sh c1) (fmul ch s1))
+               ck sk c1 s1))))
 
 ;; |X_k|^2 of the Hann-windowed frame, k = 0..200; -1.0 for an invalid frame
 (defn power-bin [frame :string k :i64] :i64
   (if (frame-valid? frame)
-    (dft-run frame k 0 (zero) (zero))
+    (dft-run frame 0 (zero) (zero)
+             (one) (zero) (one) (zero)
+             (turn-cos k 400) (turn-sin k 400) (turn-cos 1 400) (turn-sin 1 400))
     (fsub (zero) (one))))
 
-(defn- energy-run [frame :string m :i64 k :i64 acc :i64] :i64
+(defn- energy-run [frame :string p0 :i64 p1 :i64 p2 :i64 k :i64 acc :i64] :i64
   (if (>= k 201)
     acc
-    (let [w (mel-weight m k)]
-      (energy-run frame m (+ k 1)
+    (let [w (weight-at p0 p1 p2 k)]
+      (energy-run frame p0 p1 p2 (+ k 1)
                   (if (flt (zero) w) (fadd acc (fmul w (power-bin frame k))) acc)))))
 
 ;; log10(max(mel energy, 1e-10)) of mel filter m (0..79) for one frame;
 ;; 0.0 for an invalid frame so a caller cannot mistake it for the floor
 (defn log-mel-bin [frame :string m :i64] :i64
   (if (frame-valid? frame)
-    (log10-floor (energy-run frame m 0 (zero)))
+    (log10-floor (energy-run frame (mel-point m) (mel-point (+ m 1)) (mel-point (+ m 2)) 0 (zero)))
     (zero)))
 
 ;; ---- gate fixtures ------------------------------------------------------------

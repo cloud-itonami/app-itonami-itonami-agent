@@ -58,3 +58,25 @@ FFT speed, real audio, a model, the launcher. The output is millionths, not f64
 bits. The reference is a Python re-statement of the formulas, not librosa or
 whisper. The Amu CLI is an unmerged candidate. No CLJK, EDN, JVM or Node ran in
 the gate.
+
+## Update — faster DFT (2026-11-06, JUN-866)
+
+Two changes in `log_mel.kotoba` (SHA-256 `c8fe6a1035f5ef2c7681a3175702f0240c2764eb4db8d8335bfa194311389b69`), outputs unchanged:
+
+1. The direct DFT steps cos/sin of `2*pi*k*n/400` and the Hann cos of
+   `2*pi*n/400` by the angle-addition recurrence from per-bin constants instead
+   of evaluating a series per sample. Rounding drift over 400 steps is about
+   1e-14; the gate still holds 1e-6.
+2. The three mel edge frequencies (each an exp or ln series) are computed once
+   per mel filter instead of once per (filter, bin) pair.
+
+Measured with `subprocess` wall clock on the guest, fixed frame, macOS arm64,
+process start included: **0.1029 s per frame before (PR #173 build, 10 runs
+median) and 0.0182 s after (30 runs median, min 0.0178, max 0.0190)**, so 3000
+frames take about 55 s sequentially instead of about 309 s. The fixed-frame
+output is still byte-identical to the reference line; `check-log-mel-selfhost`
+returns 89 with ten mutations caught (two new for the recurrence: rotation sign
+6, Hann rotation 6; the old Hann coefficient control now targets the recurrence,
+7), `check-nn-ops-selfhost` 38 and `check-attention-selfhost` 50 on the new
+core, and all four gate scripts are repinned to the new source digest. The O(N^2)
+DFT remains (an FFT needs arrays, JUN-876); real-time is not reached.
