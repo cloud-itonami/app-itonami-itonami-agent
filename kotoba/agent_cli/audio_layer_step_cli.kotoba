@@ -1,0 +1,40 @@
+(ns agent-cli.audio-layer-step-cli
+  "One-shot native guest that runs one Qwen3-ASR audio-encoder layer (JUN-922). argv 0 is the
+  model path inside the granted directory (for example /d/model.safetensors), argv 1 the layer
+  index, optional argv 2 the activations of three 896-wide tokens as 43,008 hex characters (16
+  per f64 bit pattern; absent means the synthetic tokens). Prints the activations after that
+  layer in the same format on one line, exit 0. A bad layer index, a malformed input, or a layer
+  that cannot be read prints one named line on stderr, nothing on stdout, exit 2. The weights
+  are read with FS2 range requests from the directory on fd 3 (amu-command-fs35)."
+  (:require [itonami.audio-ffn :as af])
+  (:export [main])
+  (:capabilities #{:cli/args :io/write :io/write-error :fs/app-data}))
+
+(defn- wire-arg [i :i64] :string
+  (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- wire-say [s :string] :string
+  (typed-cap-call :io/write :string :string s))
+
+(defn- wire-die [s :string] :string
+  (typed-cap-call :io/write-error :string :string s))
+
+(defn- digits-val [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s))
+    acc
+    (let [c (string-code-point-at s i)]
+      (if (and (>= c 48) (<= c 57)) (digits-val s (+ i 1) (+ (* acc 10) (- c 48))) -1))))
+
+(defn main [] :i64
+  (let [path (wire-arg 0)
+        ls (wire-arg 1)
+        layer (if (or (= (string-length ls) 0) (> (string-length ls) 3)) -1 (digits-val ls 0 0))]
+    (cond (= (string-length path) 0)
+          (let [_ (wire-die "audio-layer-step: argv 0 must be the model path\n")] 2)
+          (< layer 0)
+          (let [_ (wire-die "audio-layer-step: argv 1 must be a layer index\n")] 2)
+          :else
+          (let [out (af/step-hex path layer (wire-arg 2))]
+            (if (= (string-length out) 0)
+              (let [_ (wire-die "audio-layer-step: input or layer unreadable\n")] 2)
+              (let [_ (wire-say (string-concat out "\n"))] 0))))))

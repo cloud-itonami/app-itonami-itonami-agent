@@ -15,16 +15,22 @@
 (defn- fabs [a :i64] :i64
   (if (f64-lt (f64-from-bits a) 0.0) (f64-to-bits (f64-neg (f64-from-bits a))) a))
 
-;; |a - ref| < 1e-12 * max(1, |ref|); false for NaN patterns such as the -1 refusal
-(defn- near? [a :i64 ref :i64] :bool
+;; |a - ref| < tol * max(1, |ref|); false for NaN patterns such as the -1 refusal
+(defn- near-tol? [a :i64 ref :i64 tol :i64] :bool
   (let [d (fabs (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits ref))))
         m (fabs ref)
         scale (if (f64-lt 1.0 (f64-from-bits m)) m (f64-to-bits 1.0))]
-    (f64-lt (f64-from-bits d) (f64-mul (f64-from-bits 4427486594234968593) (f64-from-bits scale)))))
+    (f64-lt (f64-from-bits d) (f64-mul (f64-from-bits tol) (f64-from-bits scale)))))
+
+(defn- near? [a :i64 ref :i64] :bool (near-tol? a ref 4427486594234968593))
+
+;; the stacked layers drift further from CPython (measured: 3e-13 on the 18-layer sum), so 1e-11
+(defn- near-stack? [a :i64 ref :i64] :bool (near-tol? a ref 4442235333156365461))
 
 ;; One sublayer evaluation allocates a lot and the seed has no collector, so a process can run
 ;; only a couple of them. The gate script therefore runs this program once per case (argv 0 is the
-;; case number 0..32) and adds up the exit statuses (1 = case passed).
+;; case number 0..40; cases 33..36 take the activations after 18 layers
+;; as argv 1, cases 37..40 those after 3 layers) and adds up the exit statuses (1 = case passed).
 (defn- arg [i :i64] :string (typed-cap-call :cli/args :string :string (string-from-i64 i)))
 
 (defn- case-result [k :i64] :i64
@@ -61,6 +67,14 @@
         (= k 30) (b2i (= (af/layer-at (model) 0 2688) -1))
         (= k 31) (b2i (= (af/layer-sum (model) 99) -1))
         (= k 32) (b2i (= (af/layer-sum "/d/missing.bin" 0) -1))
+        (= k 33) (b2i (near-stack? (af/hex-sum (arg 1)) 4588748009764096592))
+        (= k 34) (b2i (near-stack? (af/hex-elem (arg 1) 0) -4629425833749186383))
+        (= k 35) (b2i (near-stack? (af/hex-elem (arg 1) 1000) -4626306511368913849))
+        (= k 36) (b2i (near-stack? (af/hex-elem (arg 1) 2687) -4618943984945636282))
+        (= k 37) (b2i (near-stack? (af/hex-sum (arg 1)) 4626132500979083551))
+        (= k 38) (b2i (near-stack? (af/hex-elem (arg 1) 0) -4619238192393927819))
+        (= k 39) (b2i (near-stack? (af/hex-elem (arg 1) 1000) 4597528240486055212))
+        (= k 40) (b2i (near-stack? (af/hex-elem (arg 1) 2687) -4620508593248123702))
         :else 0))
 
 (defn- digit-run [s :string i :i64 acc :i64] :i64
