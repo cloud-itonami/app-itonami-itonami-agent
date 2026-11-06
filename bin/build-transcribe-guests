@@ -1,0 +1,72 @@
+#!/bin/sh
+# Build the five native guests that bin/itonami-transcribe chains (JUN-941) from this checkout's sources,
+# with a source lock per guest and the amu-command-fs35 runtime profile, and verify their signatures.
+#
+#   build-transcribe-guests <amu-cli.macho> <absolute-output-dir>
+#
+# The Amu CLI must be the one the gates pin (sha256 below); the output directory must not exist. The
+# guests are built only from the files listed here, so a stale copy cannot get in; bin/itonami-transcribe
+# finds them through ITONAMI_STT_GUESTS.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-output-dir>" >&2
+  exit 2
+fi
+CLI=$1
+OUT=$2
+EXPECTED_CLI_SHA256=ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
+case "$CLI" in /*) ;; *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;; esac
+case "$OUT" in /*) ;; *) printf '%s\n' "output directory must be absolute" >&2; exit 2 ;; esac
+[ -x "$CLI" ] || { printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2; exit 2; }
+[ ! -e "$OUT" ] || { printf '%s\n' "refusing to overwrite existing output: $OUT" >&2; exit 2; }
+actual=$(shasum -a 256 "$CLI" | cut -d ' ' -f 1)
+[ "$actual" = "$EXPECTED_CLI_SHA256" ] || { printf 'unexpected Amu CLI digest: %s\n' "$actual" >&2; exit 2; }
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+KD="$REPO_ROOT/kotoba/itonami"
+AD="$REPO_ROOT/kotoba/agent_cli"
+mkdir -p "$OUT/src"
+
+# the library modules (module name:file) each guest needs, besides its own entry module
+LIBS_WAV="itonami.wav-reader:wav_reader"
+LIBS_ENC="itonami.audio-enc:audio_enc itonami.bf16:bf16 itonami.gelu-erf:gelu_erf itonami.ggml-dequant:ggml_dequant itonami.log-mel:log_mel itonami.nn-ops:nn_ops itonami.nn-vec:nn_vec itonami.qwen-ops:qwen_ops itonami.safetensors:safetensors itonami.weights-file:weights_file"
+LIBS_DEC="itonami.bf16:bf16 itonami.ggml-dequant:ggml_dequant itonami.log-mel:log_mel itonami.nn-ops:nn_ops itonami.qwen-decoder:qwen_decoder itonami.qwen-ops:qwen_ops itonami.safetensors:safetensors itonami.weights-file:weights_file"
+LIBS_DETOK="itonami.qwen-vocab:qwen_vocab"
+LIBS_CALC=""
+
+for f in wav_reader audio_enc bf16 gelu_erf ggml_dequant log_mel nn_ops nn_vec qwen_ops safetensors weights_file qwen_decoder qwen_vocab; do
+  cp "$KD/$f.kotoba" "$OUT/src/$f.kotoba"
+done
+for f in wav_hex_cli audio_enc_cli qwen_decoder_cli qwen_detok_cli qwen_calc_cli; do
+  cp "$AD/$f.kotoba" "$OUT/src/$f.kotoba"
+done
+
+# build_one <entry-file> <entry-namespace> <libs>
+build_one() {
+  entry=$1
+  ens=$2
+  libs=$3
+  s="$OUT/src"
+  {
+    printf 'KSL2\nentry %s/%s.kotoba\n' "$s" "$entry"
+    { printf '%s:%s\n' "$ens" "$entry"; for pair in $libs; do printf '%s\n' "$pair"; done; } | LC_ALL=C sort |
+    while read -r pair; do
+      printf 'module %s %s/%s.kotoba\n' "${pair%%:*}" "$s" "${pair##*:}"
+    done
+    for f in $(printf '%s\n' "$entry" $(for pair in $libs; do printf '%s\n' "${pair##*:}"; done) | LC_ALL=C sort); do
+      printf 'file %s %s/%s.kotoba\n' "$(shasum -a 256 "$s/$f.kotoba" | cut -d ' ' -f 1)" "$s" "$f"
+    done
+  } > "$OUT/$entry.ksl"
+  "$CLI" compile "$s/$entry.kotoba" --source-lock "$OUT/$entry.ksl" \
+    --runtime-profile amu-command-fs35 -o "$OUT/$entry.macho" > /dev/null
+  codesign --verify --strict "$OUT/$entry.macho"
+  printf '%s  %s\n' "$(shasum -a 256 "$OUT/$entry.macho" | cut -d ' ' -f 1)" "$entry.macho" >> "$OUT/guests.sha256"
+}
+build_one wav_hex_cli agent-cli.wav-hex-cli "$LIBS_WAV"
+build_one audio_enc_cli agent-cli.audio-enc-cli "$LIBS_ENC"
+build_one qwen_decoder_cli agent-cli.qwen-decoder-cli "$LIBS_DEC"
+build_one qwen_detok_cli agent-cli.qwen-detok-cli "$LIBS_DETOK"
+build_one qwen_calc_cli agent-cli.qwen-calc-cli "$LIBS_CALC"
+printf '%s\n' "built 5 guests in $OUT (digests in guests.sha256)"

@@ -1,0 +1,120 @@
+;; A WAV file as the hex the Qwen3-ASR encoder takes (JUN-941): RIFF/WAVE, PCM (format 1), one channel,
+;; 16,000 samples a second, 16 bits, 4,000 to 64,000 samples (0.25 to 4 s). Chunks are walked in order
+;; (a chunk is a 4-byte name, a 4-byte little-endian length and its bytes, padded to an even length), so
+;; chunks between `fmt ` and `data` (afconvert writes a FLLR filler of 4,044 bytes) are skipped. The
+;; file is read with a single FS2 E request (up to 262,144 bytes), so a file longer than that is
+;; refused. Every sample becomes 4 hex digits of the signed 16-bit value + 32768, which is what
+;; `itonami.audio-enc` reads. Anything else is a named refusal: wav-hex returns "" and wav-reason
+;; says why.
+(ns itonami.wav-reader
+  (:export [wav-hex wav-reason])
+  (:capabilities [:fs/app-data]))
+
+(defn- frame [op :string path :string tail :string] :string
+  (string-concat "\u0000FS2\u0000"
+    (string-concat op (string-concat path (string-concat "\u0000" tail)))))
+
+(defn- digits-end [s :string i :i64] :i64
+  (if (and (< i (string-length s)) (>= (string-code-point-at s i) 48) (<= (string-code-point-at s i) 57))
+    (digits-end s (+ i 1))
+    i))
+
+(defn- digits-val [s :string i :i64 e :i64 acc :i64] :i64
+  (if (>= i e) acc (digits-val s (+ i 1) e (+ (* acc 10) (- (string-code-point-at s i) 48)))))
+
+;; size of the file from the F metadata ("<mode> <size> ..."), or -1
+(defn- file-size [path :string] :i64
+  (let [r (typed-cap-call :fs/app-data :string :string (frame "F" path ""))]
+    (if (< (string-length r) 6)
+      -1
+      (let [body (string-substring r 5 (string-length r))
+            sp (string-index-of body " ")]
+        (if (< sp 0) -1 (digits-val body (+ sp 1) (digits-end body (+ sp 1)) 0))))))
+
+;; little-endian unsigned value of k bytes of r starting at the file offset p (the reply has a 5-byte
+;; acknowledgement before the file's bytes)
+(defn- le [r :bytes p :i64 k :i64 acc :i64] :i64
+  (if (< k 0)
+    acc
+    (le r p (- k 1) (bit-or (i64-shift-left acc 8) (bytes-at r (+ 5 (+ p k)))))))
+
+(defn- tag? [r :bytes p :i64 a :i64 b :i64 c :i64 d :i64] :bool
+  (and (= (bytes-at r (+ 5 p)) a) (= (bytes-at r (+ 5 (+ p 1))) b)
+       (= (bytes-at r (+ 5 (+ p 2))) c) (= (bytes-at r (+ 5 (+ p 3))) d)))
+
+;; offset of the first chunk with the given 4-byte name at or after p, or -1; size is the file size
+(defn- find-chunk [r :bytes p :i64 size :i64 a :i64 b :i64 c :i64 d :i64] :i64
+  (if (> (+ p 8) size)
+    -1
+    (if (tag? r p a b c d)
+      p
+      (find-chunk r (+ p (+ 8 (+ (le r (+ p 4) 3 0) (mod (le r (+ p 4) 3 0) 2)))) size a b c d))))
+
+;; the reason a file is refused, or "" when it is acceptable; r is the whole file (size bytes)
+(defn- reason [r :bytes size :i64] :string
+  (if (< size 44)
+    "too short to be a WAV file"
+    (if (not (and (tag? r 0 82 73 70 70) (tag? r 8 87 65 86 69)))
+      "not a RIFF/WAVE file"
+      (let [fmt (find-chunk r 12 size 102 109 116 32)]
+        (if (< fmt 0)
+          "no fmt chunk"
+          (if (> (+ fmt 24) size)
+            "truncated fmt chunk"
+            (cond (not (= (le r (+ fmt 8) 1 0) 1)) "not PCM"
+                  (not (= (le r (+ fmt 10) 1 0) 1)) "not mono"
+                  (not (= (le r (+ fmt 12) 3 0) 16000)) "not 16 kHz"
+                  (not (= (le r (+ fmt 22) 1 0) 16)) "not 16-bit"
+                  :else
+                  (let [data (find-chunk r 12 size 100 97 116 97)]
+                    (if (< data 0)
+                      "no data chunk"
+                      (let [n (quot (le r (+ data 4) 3 0) 2)]
+                        (cond (> (+ data (+ 8 (* n 2))) size) "truncated data chunk"
+                              (< n 4000) "shorter than 0.25 s"
+                              (> n 64000) "longer than 4 s"
+                              :else ""))))))))))) 
+
+;; hex of the samples (4 digits each), or ""
+(defn- hex-digit [v :i64] :string (string-substring "0123456789abcdef" v (+ v 1)))
+
+(defn- sample-hex [r :bytes at :i64] :string
+  (let [lo (bytes-at r (+ 5 at))
+        hi (bytes-at r (+ 5 (+ at 1)))
+        v (mod (+ (+ lo (* 256 hi)) 32768) 65536)]
+    (string-concat (hex-digit (quot v 4096))
+      (string-concat (hex-digit (mod (quot v 256) 16))
+        (string-concat (hex-digit (mod (quot v 16) 16)) (hex-digit (mod v 16)))))))
+
+;; balanced concatenation keeps the copying at n log n
+(defn- samples-hex [r :bytes at :i64 lo :i64 hi :i64] :string
+  (if (= (- hi lo) 1)
+    (sample-hex r (+ at (* lo 2)))
+    (let [mid (quot (+ lo hi) 2)]
+      (string-concat (samples-hex r at lo mid) (samples-hex r at mid hi)))))
+
+(defn- read-file [path :string] :bytes
+  (let [size (file-size path)]
+    (typed-cap-call :fs/app-data :string :bytes
+      (frame "E" path (string-concat "0:" (string-from-i64 (if (< size 262144) size 262144)))))))
+
+;; why the file is refused ("" when it is not)
+(defn wav-reason [path :string] :string
+  (let [size (file-size path)]
+    (cond (< size 0) "file not found"
+          (> size 262144) "file larger than 262,144 bytes"
+          :else
+          (let [r (read-file path)]
+            (if (= (bytes-count r) (+ 5 size)) (reason r size) "file unreadable")))))
+
+;; the samples as hex, or "" when wav-reason is not ""
+(defn wav-hex [path :string] :string
+  (let [size (file-size path)]
+    (if (or (< size 44) (> size 262144))
+      ""
+      (let [r (read-file path)]
+        (if (and (= (bytes-count r) (+ 5 size)) (= (string-length (reason r size)) 0))
+          (let [data (find-chunk r 12 size 100 97 116 97)
+                n (quot (le r (+ data 4) 3 0) 2)]
+            (samples-hex r (+ data 8) 0 n))
+          "")))))
