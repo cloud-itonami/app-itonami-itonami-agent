@@ -17,9 +17,9 @@ OUT_DIR=$2
 EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
 EXPECTED_LOGMEL_SHA256=19f892cd437a994661354c3ec90963c3b5ef84ee4885cc157e3a96595049fcd4
 EXPECTED_NN_SHA256=4693d227291a31b8c59378b0ab114715a983dfbfd17308d5b478181793a3604d
-EXPECTED_ATTN_SHA256=b3a30442ed5b55f42804c697cbc32b8faff301d8377ad7383e2a31e81af14d84
+EXPECTED_ATTN_SHA256=e66eaec2c210cb7aa2201ec82cac55cf49cae65197fb519bbae821971f13173a
 AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
-EXPECTED_RESULT=28
+EXPECTED_RESULT=50
 
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
 GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
@@ -121,11 +121,13 @@ mutate() {
   NEG_RESULTS="$NEG_RESULTS $name=$result"
 }
 mutate no-scale '(f64-to-bits (f64-sqrt 2.0))' '(f64-to-bits 1.0)'
-mutate no-max-shift '(fadd acc (fmul (fdiv (nn\/exp-wide (fsub (score i j) mx)) z) (fv j d)))' '(fadd acc (fmul (fdiv (nn\/exp-wide (score i j)) z) (fv j d)))'
+mutate no-max-shift '(fadd acc (fmul (fdiv (nn\/exp-wide (fsub (score h i j) mx)) z) (fv j (+ (\* 2 h) d)))))))' '(fadd acc (fmul (fdiv (nn\/exp-wide (score h i j)) z) (fv j (+ (* 2 h) d)))))))'
 mutate mask-direction '(or (= causal 0) (<= j i))' '(or (= causal 0) (>= j i))'
 mutate gemm-bias '(fadd (gemm-run i j 0 (zero)) (fbias j))' '(gemm-run i j 0 (zero))'
-mutate value-index '(fv j d)))))' '(fv j 0)))))'
-mutate softmax-denominator '(fadd acc (nn\/exp-wide (fsub (score i j) mx))))))' '(fadd acc (fmul (f64-to-bits 2.0) (nn\/exp-wide (fsub (score i j) mx)))))))'
+mutate value-head-offset '(fv j (+ (\* 2 h) d))' '(fv j d)'
+mutate query-head-offset '(fq i (\* 2 h))' '(fq i 0)'
+mutate key-head-offset '(fk j (+ (\* 2 h) 1))' '(fk j 1)'
+mutate softmax-denominator '(fadd acc (nn\/exp-wide (fsub (score h i j) mx))))))' '(fadd acc (fmul (f64-to-bits 2.0) (nn\/exp-wide (fsub (score h i j) mx)))))))'
 
 # negative control: a source changed after locking is refused
 SOURCE_PATH="$POS/src/attention.kotoba"
@@ -151,7 +153,7 @@ grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr" || { cat "$OU
   printf 'artifact_run_result: %s\n' "$ARTIFACT_RESULT"
   printf 'negative_control_results:%s\n' "$NEG_RESULTS"
   printf 'changed_source_refusal: PASS\n'
-  printf 'qualification: bounded scalar attention and GEMM on analytic d=2 fixtures; no weights, multi-head, model, turn or launcher\n'
+  printf 'qualification: bounded scalar attention and GEMM on analytic two-head width-2 fixtures; no weights, real shapes, model, turn or launcher\n'
 } > "$OUT_DIR/build-receipt.txt"
 
 cat "$OUT_DIR/build-receipt.txt"
