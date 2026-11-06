@@ -17,7 +17,7 @@
 (defn- cout [] :string "thinker.audio_tower.conv_out.weight")
 (defn- embed [] :string "thinker.model.embed_tokens.weight")
 
-;; 36 checks (the header text starts with { and the closing } sits before two padding spaces)
+;; 44 checks (the header text starts with { and the closing } sits before two padding spaces)
 (defn- part-a [h :string] :i64
   (+ (b2i (= (wf/wf-size (model)) 1876091704))
     (+ (b2i (= (wf/wf-header-len (model)) 74544))
@@ -62,13 +62,25 @@
     (+ (b2i (= (wf/wf-row-dot (model) (bias) 0 0) -1))
     (b2i (= (wf/wf-row-dot (model) "no.such.tensor" 0 0) -1))))))))
 
+;; whole-matrix product: sum of all 3584 outputs of layers.0.fc1.weight x x(seed 3), three single outputs
+(defn- part-d [] :i64
+  (+ (b2i (= (wf/wf-fast-matches-exact) 1))
+    (+ (b2i (= (wf/wf-matvec-sum (model) (fc1) 3) 4611865100072218624))
+    (+ (b2i (= (wf/wf-row-dot (model) (fc1) 0 3) 4580242319667625984))
+    (+ (b2i (= (wf/wf-row-dot (model) (fc1) 1791 3) -4642952761447546880))
+    (+ (b2i (= (wf/wf-row-dot (model) (fc1) 3583 3) 4559390238933254144))
+    (+ (b2i (= (wf/wf-matvec-sum (model) (bias) 3) -1))
+    (+ (b2i (= (wf/wf-matvec-sum (model) "no.such.tensor" 3) -1))
+    (b2i (= (wf/wf-matvec-sum "/d/missing.bin" (fc1) 3) -1))))))))))
+
 (defn- count-checks [] :i64
   (let [h (wf/wf-header-text (model))]
     (+ (part-a h)
       (+ (part-b h)
       (+ (part-c)
+      (+ (part-d)
          (b2i (and (= (string-code-point-at h 0) 123)
-                   (= (string-code-point-at h 74541) 125))))))))
+                   (= (string-code-point-at h 74541) 125)))))))))
 
 (defn main [] :i64
   (let [n (count-checks)
