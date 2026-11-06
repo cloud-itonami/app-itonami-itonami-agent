@@ -1,0 +1,167 @@
+#!/bin/sh
+# Compile and execute the token decoding core (id list to bytes with control-token
+# skipping, strict UTF-8 validation; built on itonami.ggml-dequant) with the
+# pinned Amu multi-module project CLI, against a one-off reference using CPython's
+# strict UTF-8 decoder. It does not load a real vocabulary, run a model, or
+# exercise the agent turn or launcher.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
+EXPECTED_SOURCE_SHA256=75875a660dfb61f4ed5f9020fe6679fe1669f7bbed2a59bc814685019aa7bde0
+EXPECTED_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
+AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
+EXPECTED_RESULT=21
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+CLI_SHA256=$(shasum -a 256 "$CLI" | cut -d ' ' -f 1)
+if [ "$CLI_SHA256" != "$EXPECTED_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected Amu CLI digest: $CLI_SHA256" >&2
+  exit 2
+fi
+DEQUANT="$REPO_ROOT/kotoba/itonami/ggml_dequant.kotoba"
+SOURCE="$REPO_ROOT/kotoba/itonami/token_decode.kotoba"
+DEQUANT_SHA256=$(shasum -a 256 "$DEQUANT" | cut -d ' ' -f 1)
+if [ "$DEQUANT_SHA256" != "$EXPECTED_DEQUANT_SHA256" ]; then
+  printf '%s\n' "unexpected ggml-dequant source digest: $DEQUANT_SHA256" >&2
+  exit 2
+fi
+SOURCE_SHA256=$(shasum -a 256 "$SOURCE" | cut -d ' ' -f 1)
+if [ "$SOURCE_SHA256" != "$EXPECTED_SOURCE_SHA256" ]; then
+  printf '%s\n' "unexpected token-decode source digest: $SOURCE_SHA256" >&2
+  exit 2
+fi
+
+# run_gate <dir> <source-file>: lock + compile
+run_gate() {
+  dir=$1
+  src=$2
+  gate="$dir/src/token_decode_gate.kotoba"
+  mkdir -p "$dir/src"
+  cp "$DEQUANT" "$dir/src/ggml_dequant.kotoba"
+  cp "$src" "$dir/src/token_decode.kotoba"
+  cat > "$gate" <<'EOF2'
+(ns itonami.token-decode-gate
+  (:require [itonami.token-decode :as td])
+  (:export [main]))
+(defn main [] :i64 (td/match-count))
+EOF2
+  s="$dir/src/token_decode.kotoba"
+  # module lines sorted by name: itonami.token-decode < itonami.token-decode-gate
+  gd="$dir/src/ggml_dequant.kotoba"
+  # modules sorted by name, files sorted by path
+  printf 'KSL2\nentry %s\nmodule itonami.ggml-dequant %s\nmodule itonami.token-decode %s\nmodule itonami.token-decode-gate %s\nfile %s %s\nfile %s %s\nfile %s %s\n' \
+    "$gate" "$gd" "$s" "$gate" \
+    "$(shasum -a 256 "$gd" | cut -d ' ' -f 1)" "$gd" \
+    "$(shasum -a 256 "$s" | cut -d ' ' -f 1)" "$s" \
+    "$(shasum -a 256 "$gate" | cut -d ' ' -f 1)" "$gate" > "$dir/token-decode.ksl"
+  "$CLI" compile "$gate" --source-lock "$dir/token-decode.ksl" -o "$dir/token-decode-tests.macho"
+  codesign --verify --strict "$dir/token-decode-tests.macho"
+}
+
+POS="$OUT_DIR/positive"
+run_gate "$POS" "$SOURCE"
+GATE_PATH="$POS/src/token_decode_gate.kotoba"
+LOCK="$POS/token-decode.ksl"
+PROGRAM="$POS/token-decode-tests.macho"
+DIRECT_RESULT=$("$PROGRAM")
+LOCKED_RESULT=$("$CLI" run "$GATE_PATH" --source-lock "$LOCK")
+ARTIFACT_RESULT=$("$CLI" run "$PROGRAM")
+for result in "$DIRECT_RESULT" "$LOCKED_RESULT" "$ARTIFACT_RESULT"; do
+  if [ "$result" != "$EXPECTED_RESULT" ]; then
+    printf 'token-decode result mismatch: expected %s, got %s\n' "$EXPECTED_RESULT" "$result" >&2
+    exit 1
+  fi
+done
+
+# negative controls: each mutation must change the source and stop the gate
+# from returning the full match count
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+NEG_RESULTS=""
+mutate() {
+  name=$1
+  pattern=$2
+  replacement=$3
+  sed "s/$pattern/$replacement/" "$SOURCE" > "$NEG/$name.kotoba"
+  if cmp -s "$SOURCE" "$NEG/$name.kotoba"; then
+    printf 'negative control %s did not change the source\n' "$name" >&2
+    exit 1
+  fi
+  run_gate "$NEG/$name" "$NEG/$name.kotoba"
+  result=$("$NEG/$name/token-decode-tests.macho")
+  if [ "$result" = "$EXPECTED_RESULT" ]; then
+    printf 'negative control %s still passed the gate\n' "$name" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name=$result"
+}
+mutate id-range '(>= id 51865) "!"' '(>= id 100000) "!"'
+mutate end-of-text '(= id 50257) acc' '(= id 50256) acc'
+mutate control-skip '(> id 50257) (decode-run' '(> id 50300) (decode-run'
+mutate concat-order '(string-concat acc (token-hex vocab id))' '(string-concat (token-hex vocab id) acc)'
+mutate overlong-lead '(>= b1 160) (<= b1 191) (cont? b2)) 3 0)' '(>= b1 128) (<= b1 191) (cont? b2)) 3 0)'
+mutate surrogate-range '(<= b1 159) (cont? b2)) 3 0)' '(<= b1 191) (cont? b2)) 3 0)'
+mutate max-code-point '(<= b1 143) (cont? b2) (cont? b3)) 4 0)' '(<= b1 191) (cont? b2) (cont? b3)) 4 0)'
+mutate lead-range '(and (>= b 194) (<= b 223))' '(and (>= b 192) (<= b 223))'
+
+# negative control: a source changed after locking is refused
+SOURCE_PATH="$POS/src/token_decode.kotoba"
+printf '\n' >> "$SOURCE_PATH"
+if "$CLI" compile "$GATE_PATH" --source-lock "$LOCK" \
+  -o "$OUT_DIR/should-not-exist.macho" > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+{
+  printf 'format: itonami.token-decode-selfhost-gate.v1\n'
+  printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$CLI_SHA256"
+  printf 'ggml_dequant_source_sha256: %s\n' "$DEQUANT_SHA256"
+  printf 'token_decode_source_sha256: %s\n' "$SOURCE_SHA256"
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)"
+  printf 'direct_result: %s\n' "$DIRECT_RESULT"
+  printf 'locked_run_result: %s\n' "$LOCKED_RESULT"
+  printf 'artifact_run_result: %s\n' "$ARTIFACT_RESULT"
+  printf 'negative_control_results:%s\n' "$NEG_RESULTS"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: bounded token-id decoding to hex bytes and UTF-8 validation on a fixture vocabulary; no real vocabulary, text-string output, model, turn or launcher\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"
