@@ -61,6 +61,15 @@ run_cron_schedule_cli() {
       exit "$guest_status"
       ;;
     *)
+      # Amu main's amu-command runtime reports the guest result as the process
+      # exit status and prints no trailing status line, so exit 0 with output
+      # is a success. Empty output is still refused.
+      if [ -s "$output_dir/stdout" ]; then
+        cat "$output_dir/stderr" >&2
+        cat "$output_dir/stdout"
+        rm -rf "$output_dir"
+        exit 0
+      fi
       printf '%s\n' "itonami-agent: cron schedule returned an invalid native result" >&2
       rm -rf "$output_dir"
       exit 78
