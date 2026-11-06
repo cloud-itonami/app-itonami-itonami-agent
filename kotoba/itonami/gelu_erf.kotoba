@@ -1,0 +1,177 @@
+;; Exact GELU (erf form) for the native Qwen3-ASR audio encoder (JUN-881):
+;; gelu(x) = 0.5 * x * (1 + erf(x / sqrt 2)), the PyTorch "gelu" the encoder's
+;; activation_function names (itonami.nn-ops has the tanh approximation whisper.cpp
+;; uses). The seed has no erf, so it is built here: the Maclaurin series
+;; 2/sqrt(pi) * sum (-1)^n z^(2n+1) / (n! (2n+1)) for |z| <= 3 (60 terms), and for
+;; larger |z| erfc by its continued fraction exp(-z^2) / (sqrt(pi) * (z + (1/2)/(z +
+;; 1/(z + (3/2)/(z + ...))))) evaluated backwards (60 terms) on top of nn-ops' exp-wide.
+;; To avoid cancellation in the negative tail the gelu uses erfc(-z) when z < 0.
+;; Every f64 value is an i64 bit pattern.
+(ns itonami.gelu-erf
+  (:require [itonami.nn-ops :as nn])
+  (:export [erf-f erfc-f gelu-erf match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- flt [a :i64 b :i64] :bool (f64-lt (f64-from-bits a) (f64-from-bits b)))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- one [] :i64 (f64-to-bits 1.0))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+(defn- neg [a :i64] :i64 (f64-to-bits (f64-neg (f64-from-bits a))))
+(defn- fabs [a :i64] :i64 (f64-to-bits (f64-abs (f64-from-bits a))))
+(defn- two-over-sqrt-pi [] :i64 4607760587169110893)
+(defn- sqrt-pi [] :i64 4610661241675116394)
+(defn- inv-sqrt-2 [] :i64 4604544271217802188)
+
+;; t_n = t_(n-1) * (-z^2) / n ; sum += t_n / (2n + 1)
+(defn- series-run [mz2 :i64 n :i64 t :i64 sum :i64] :i64
+  (if (> n 60)
+    sum
+    (let [t2 (fdiv (fmul t mz2) (itof n))]
+      (series-run mz2 (+ n 1) t2 (fadd sum (fdiv t2 (itof (+ (* 2 n) 1))))))))
+
+;; erf by series, |z| <= 3
+(defn- erf-series [z :i64] :i64
+  (fmul (two-over-sqrt-pi) (series-run (neg (fmul z z)) 1 z z)))
+
+;; continued fraction tail, evaluated from the deep end: f = a + (k/2)/f
+(defn- cf-run [a :i64 k :i64 f :i64] :i64
+  (if (< k 1)
+    f
+    (cf-run a (- k 1) (fadd a (fdiv (fdiv (itof k) (f64-to-bits 2.0)) f)))))
+
+;; erfc(a) for a > 3
+(defn- erfc-cf [a :i64] :i64
+  (fdiv (nn/exp-wide (neg (fmul a a))) (fmul (sqrt-pi) (cf-run a 60 a))))
+
+(defn erf-f [z :i64] :i64
+  (if (not (flt (f64-to-bits 3.0) (fabs z)))
+    (erf-series z)
+    (let [t (fsub (one) (erfc-cf (fabs z)))]
+      (if (flt z (zero)) (neg t) t))))
+
+(defn erfc-f [z :i64] :i64
+  (cond (flt z (zero)) (fsub (f64-to-bits 2.0) (erfc-f (neg z)))
+        (not (flt (f64-to-bits 3.0) z)) (fsub (one) (erf-series z))
+        :else (erfc-cf z)))
+
+;; 0.5 * x * (1 + erf(x / sqrt 2)), using erfc(-z) for z < 0
+(defn gelu-erf [x :i64] :i64
+  (let [z (fmul x (inv-sqrt-2))
+        factor (if (flt z (zero)) (erfc-f (neg z)) (fadd (one) (erf-f z)))]
+    (fmul (fmul (f64-to-bits 0.5) x) factor)))
+
+;; ---- gate fixtures (references: CPython math.erf / math.erfc) -----------------------
+(defn- gelu-x [i :i64] :i64
+  (cond
+        (= i 0) -4602678819172646912
+        (= i 1) -4606056518893174784
+        (= i 2) -4606844648827964621
+        (= i 3) -4606957238818648883
+        (= i 4) -4609434218613702656
+        (= i 5) -4611686018427387904
+        (= i 6) -4616189618054758400
+        (= i 7) -4620693217682128896
+        (= i 8) -4631501856787818086
+        (= i 9) 0
+        (= i 10) 4591870180066957722
+        (= i 11) 4602678819172646912
+        (= i 12) 4607182418800017408
+        (= i 13) 4611686018427387904
+        (= i 14) 4616414798036126925
+        (= i 15) 4616527388026811187
+        (= i 16) 4617315517961601024
+        (= i 17) 4620693217682128896
+        :else (zero)))
+(defn- gelu-want [i :i64] :i64
+  (cond
+        (= i 0) -4830557196271135245
+        (= i 1) -4703996841353017781
+        (= i 2) -4682828061390771540
+        (= i 3) -4679975375375988585
+        (= i 4) -4652053035292014491
+        (= i 5) -4636653936730056606
+        (= i 6) -4628487858624351733
+        (= i 7) -4628645898386495725
+        (= i 8) -4636579436041171944
+        (= i 9) 0
+        (= i 10) 4587940560065570588
+        (= i 11) 4599899760083774582
+        (= i 12) 4605753379315045245
+        (= i 13) 4611481103455859005
+        (= i 14) 4616414734927021115
+        (= i 15) 4616527346681972458
+        (= i 16) 4617315516347896134
+        (= i 17) 4620693217682128890
+        :else (zero)))
+
+(defn- erf-z [i :i64] :i64
+  (cond
+        (= i 0) -4604367669032910848
+        (= i 1) -4608308318706860032
+        (= i 2) -4609434218613702656
+        (= i 3) -4609659398595071181
+        (= i 4) -4616189618054758400
+        (= i 5) -4624296097384025293
+        (= i 6) 0
+        (= i 7) 4599075939470750515
+        (= i 8) 4607182418800017408
+        (= i 9) 4613712638259704627
+        (= i 10) 4613937818241073152
+        (= i 11) 4614162998222441677
+        (= i 12) 4616189618054758400
+        (= i 13) 4619004367821864960
+        :else (zero)))
+(defn- erf-want [i :i64] :i64
+  (cond
+        (= i 0) -4616189618054758400
+        (= i 1) -4616189624747993506
+        (= i 2) -4616189817028266502
+        (= i 3) -4616189988231535389
+        (= i 4) -4617606443355273078
+        (= i 5) -4623780403531093490
+        (= i 6) 0
+        (= i 7) 4599591633323682318
+        (= i 8) 4605765593499502730
+        (= i 9) 4607182048623240419
+        (= i 10) 4607182219826509306
+        (= i 11) 4607182313878239452
+        (= i 12) 4607182418661151094
+        (= i 13) 4607182418800017408
+        :else (zero)))
+
+(defn- erfc-z [i :i64] :i64
+  (cond
+        (= i 0) -4616189618054758400
+        (= i 1) 4602678819172646912
+        (= i 2) 4613712638259704627
+        (= i 3) 4614162998222441677
+        (= i 4) 4617315517961601024
+        :else (zero)))
+(defn- erfc-want [i :i64] :i64
+  (cond
+        (= i 0) 4610977605777130565
+        (= i 1) 4602309526204327004
+        (= i 2) 4541189801076275313
+        (= i 3) 4532993779147510467
+        (= i 4) 4430147966231082809
+        :else (zero)))
+
+(defn- close? [a :i64 b :i64] :bool
+  (f64-le (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b)))
+          (f64-mul 0.000000001 (f64-max 1.0 (f64-abs (f64-from-bits b))))))
+
+(defn- gelu-run [i :i64 acc :i64] :i64
+  (if (>= i 18) acc (gelu-run (+ i 1) (if (close? (gelu-erf (gelu-x i)) (gelu-want i)) (+ acc 1) acc))))
+(defn- erf-run [i :i64 acc :i64] :i64
+  (if (>= i 14) acc (erf-run (+ i 1) (if (close? (erf-f (erf-z i)) (erf-want i)) (+ acc 1) acc))))
+(defn- erfc-run [i :i64 acc :i64] :i64
+  (if (>= i 5) acc (erfc-run (+ i 1) (if (close? (erfc-f (erfc-z i)) (erfc-want i)) (+ acc 1) acc))))
+
+;; 18 gelu + 14 erf + 5 erfc = 37
+(defn match-count [] :i64
+  (+ (gelu-run 0 0)
+  (+ (erf-run 0 0)
+     (erfc-run 0 0))))
