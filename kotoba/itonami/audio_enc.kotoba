@@ -1,4 +1,4 @@
-;; The Qwen3-ASR audio encoder for speech of up to 7 s (JUN-928, JUN-929): N samples of 16 kHz speech
+;; The Qwen3-ASR audio encoder for speech of up to 8 s (JUN-928, JUN-929): N samples of 16 kHz speech
 ;; -> 128 x T log-mel (T = N / 160 frames, split into chunks of 100 frames, the last zero-padded;
 ;; 13 tokens per full chunk and ceil(L / 8) for a last chunk of L frames, positions restarting at 0 in each
 ;; chunk, one attention window over all tokens). The text below describes one chunk: 128 x 100 log-mel -> three 3x3 stride-2 pad-1 conv2d blocks (480 channels, bias, exact GELU) ->
@@ -16,7 +16,7 @@
             [itonami.nn-vec :as nv]
             [itonami.qwen-ops :as qo]
             [itonami.weights-file :as wf])
-  (:export [enc-mel enc-front enc-layer enc-tail enc-sum])
+  (:export [enc-mel enc-front enc-front-part enc-front-join enc-layer enc-tail enc-sum])
   (:capabilities [:fs/app-data :fs/app-data-bytes]))
 
 (defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
@@ -87,7 +87,7 @@
 (defn enc-mel [clip :string] :i64
   (let [len (string-length clip)
         n (quot len 4)]
-    (if (or (not (= (mod len 4) 0)) (< n 4000) (> n 112000) (not (all-hex? clip 0 len)))
+    (if (or (not (= (mod len 4) 0)) (< n 4000) (> n 128000) (not (all-hex? clip 0 len)))
       2
       (let [tt (quot n 160)
             tp (* 100 (quot (+ tt 99) 100))
@@ -209,6 +209,91 @@
         (if (or (< tt 25) (> n 104) (not (= (vector-count mel) (* 128 tp))))
           1
           (let [feats (chunks-run path w1 b1 w2 b2 w3 b3 mel tp k vlast 0 (vector-alloc (* n 7680)))]
+            (if (= (vector-count feats) 0)
+              1
+              (let [tok (nv/linear-multi path wco 896 7680 feats n (vector-alloc 0))
+                    a (pos-add tok n 0 0 (vector-alloc (* n 896)))]
+                (if (and (= (vector-count tok) (* n 896)) (nv/write-f64 "/d/st/a.bin" a)) 0 1)))))))))
+
+;; ---- the front end in parts (JUN-946) ---------------------------------------------------------------
+;; The Amu vector arena (128 Mi items) never reclaims, and the conv blocks of 8 chunks overrun it in one process
+;; (JUN-944). A part is at most 4 chunks: `enc-front-part` writes their conv features (7680 values per token) to
+;; /d/st/feat<c0>.bin, and `enc-front-join` projects all parts and adds the positions, giving the same a.bin as
+;; `enc-front`.
+(defn- part-path [c0 :i64] :string
+  (string-concat "/d/st/feat" (string-concat (string-from-i64 c0) ".bin")))
+
+;; the tokens of chunks c0..c1-1 of a clip of k chunks whose last chunk has vlast tokens
+(defn- part-tokens [c0 :i64 c1 :i64 k :i64 vlast :i64] :i64
+  (- (* 13 (- c1 c0)) (if (= c1 k) (- 13 vlast) 0)))
+
+(defn- parts-run [path :string w1 :i64 b1 :i64 w2 :i64 b2 :i64 w3 :i64 b3 :i64 mel :vector-i64 tp :i64 k :i64 vlast :i64 c0 :i64 c1 :i64 c :i64 out :vector-i64] :vector-i64
+  (if (>= c c1)
+    out
+    (let [nv (if (= c (- k 1)) vlast 13)
+          o (conv-chunk path w1 b1 w2 b2 w3 b3 mel tp c nv (* (- c c0) 13) out)]
+      (if (= (vector-count o) 0)
+        o
+        (parts-run path w1 b1 w2 b2 w3 b3 mel tp k vlast c0 c1 (+ c 1) o)))))
+
+;; status 0 = /d/st/feat<c0>.bin holds the conv features of chunks c0..c1-1 of /d/st/mel.bin (at most 4 chunks)
+(defn enc-front-part [path :string c0 :i64 c1 :i64] :i64
+  (let [w1 (off path (aname "conv2d1.weight"))
+        b1 (off path (aname "conv2d1.bias"))
+        w2 (off path (aname "conv2d2.weight"))
+        b2 (off path (aname "conv2d2.bias"))
+        w3 (off path (aname "conv2d3.weight"))
+        b3 (off path (aname "conv2d3.bias"))
+        meta (nv/read-f64 "/d/st/meta.bin" 0 1)]
+    (if (or (< w1 0) (< b1 0) (< w2 0) (< b2 0) (< w3 0) (< b3 0) (not (= (vector-count meta) 1)))
+      1
+      (let [tt (vector-at meta 0)
+            k (quot (+ tt 99) 100)
+            tp (* 100 k)
+            llast (- tt (* 100 (- k 1)))
+            vlast (quot (+ llast 7) 8)
+            n (+ (* 13 (- k 1)) vlast)
+            mel (nv/read-f64 "/d/st/mel.bin" 0 (* 128 tp))]
+        (if (or (< tt 25) (> n 104) (< c0 0) (>= c0 c1) (> c1 k) (> (- c1 c0) 4)
+                (not (= (vector-count mel) (* 128 tp))))
+          1
+          (let [np (part-tokens c0 c1 k vlast)
+                feats (parts-run path w1 b1 w2 b2 w3 b3 mel tp k vlast c0 c1 c0 (vector-alloc (* np 7680)))]
+            (if (= (vector-count feats) 0)
+              1
+              (if (nv/write-f64 (part-path c0) feats) 0 1))))))))
+
+(defn- copy-run [src :vector-i64 i :i64 n :i64 at :i64 out :vector-i64] :vector-i64
+  (if (>= i n)
+    out
+    (copy-run src (+ i 1) n at (vector-assoc! out (+ at i) (vector-at src i)))))
+
+;; the parts c0, c0 + 4, ... of a clip of k chunks, copied to their token positions in out
+(defn- join-parts [c0 :i64 k :i64 vlast :i64 out :vector-i64] :vector-i64
+  (if (>= c0 k)
+    out
+    (let [c1 (if (< (+ c0 4) k) (+ c0 4) k)
+          np (part-tokens c0 c1 k vlast)
+          f (part-path c0)
+          v (nv/read-f64 f 0 (* np 7680))]
+      (if (and (= (vector-count v) (* np 7680)) (= (wf/wf-size f) (* 8 (* np 7680))))
+        (join-parts c1 k vlast (copy-run v 0 (* np 7680) (* (* c0 13) 7680) out))
+        (vector-alloc 0)))))
+
+;; status 0 = /d/st/a.bin holds the position-encoded tokens, as `enc-front` writes them, from the parts
+(defn enc-front-join [path :string] :i64
+  (let [wco (off path (aname "conv_out.weight"))
+        meta (nv/read-f64 "/d/st/meta.bin" 0 1)]
+    (if (or (< wco 0) (not (= (vector-count meta) 1)))
+      1
+      (let [tt (vector-at meta 0)
+            k (quot (+ tt 99) 100)
+            llast (- tt (* 100 (- k 1)))
+            vlast (quot (+ llast 7) 8)
+            n (+ (* 13 (- k 1)) vlast)]
+        (if (or (< tt 25) (> n 104))
+          1
+          (let [feats (join-parts 0 k vlast (vector-alloc (* n 7680)))]
             (if (= (vector-count feats) 0)
               1
               (let [tok (nv/linear-multi path wco 896 7680 feats n (vector-alloc 0))

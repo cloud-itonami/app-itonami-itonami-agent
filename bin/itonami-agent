@@ -98,7 +98,7 @@ Selfhost routes:
   session-search <base> <query> [limit] [after] [before] [detail] [sort] [sid] [pbase]
   turn <base> <job-id> <task>
   turn-loop <base> <job-id> <task>
-  stt <file.wav>  (16 kHz mono 16-bit PCM WAV, 0.25 to 7 s; native Qwen3-ASR, minutes per file;
+  stt <file.wav>  (16 kHz mono 16-bit PCM WAV, 0.25 to 8 s; native Qwen3-ASR, minutes per file;
                    needs ITONAMI_STT_GUESTS and ITONAMI_STT_MODEL, see bin/itonami-transcribe)
 
 Other routes are blocked until their Kotoba/Amu selfhost port is qualified.
