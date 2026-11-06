@@ -1,0 +1,56 @@
+;; Gate for itonami.audio-ffn against the real Qwen3-ASR-0.6B model.safetensors cloned into the
+;; granted directory as /d/model.safetensors. Expected values come from a CPython float64
+;; computation of the same sublayer (struct/json for the weights, math.erf for GELU); the
+;; native result must agree to 1e-12 relative (absolute below magnitude 1) because erf and exp are
+;; series here. Layers 0 and 5, the sum of the 896 outputs and outputs 0, 447, 895, plus refusals.
+(ns itonami.audio-ffn-gate
+  (:require [itonami.audio-ffn :as af])
+  (:export [main])
+  (:capabilities #{:cli/args :io/write}))
+
+(defn- b2i [x :bool] :i64 (if x 1 0))
+(defn- say [s :string] :string (typed-cap-call :io/write :string :string s))
+(defn- model [] :string "/d/model.safetensors")
+
+(defn- fabs [a :i64] :i64
+  (if (f64-lt (f64-from-bits a) 0.0) (f64-to-bits (f64-neg (f64-from-bits a))) a))
+
+;; |a - ref| < 1e-12 * max(1, |ref|); false for NaN patterns such as the -1 refusal
+(defn- near? [a :i64 ref :i64] :bool
+  (let [d (fabs (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits ref))))
+        m (fabs ref)
+        scale (if (f64-lt 1.0 (f64-from-bits m)) m (f64-to-bits 1.0))]
+    (f64-lt (f64-from-bits d) (f64-mul (f64-from-bits 4427486594234968593) (f64-from-bits scale)))))
+
+;; One sublayer evaluation allocates a lot and the seed has no collector, so a process can run
+;; only a couple of them. The gate script therefore runs this program once per case (argv 0 is the
+;; case number 0..10) and adds up the exit statuses (1 = case passed).
+(defn- arg [i :i64] :string (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- case-result [k :i64] :i64
+  (cond (= k 0) (b2i (near? (af/ffn-sum (model) 0) 4603193218202318266))
+        (= k 1) (b2i (near? (af/ffn-at (model) 0 0) -4616433939558554056))
+        (= k 2) (b2i (near? (af/ffn-at (model) 0 447) -4613897535406099257))
+        (= k 3) (b2i (near? (af/ffn-at (model) 0 895) -4618812444907483462))
+        (= k 4) (b2i (near? (af/ffn-sum (model) 5) 4602755038376049046))
+        (= k 5) (b2i (near? (af/ffn-at (model) 5 0) -4613674113860385944))
+        (= k 6) (b2i (near? (af/ffn-at (model) 5 447) -4614159620888757052))
+        (= k 7) (b2i (near? (af/ffn-at (model) 5 895) 4589715479447281920))
+        (= k 8) (b2i (= (af/ffn-at (model) 0 896) -1))
+        (= k 9) (b2i (= (af/ffn-sum (model) 99) -1))
+        (= k 10) (b2i (= (af/ffn-sum "/d/missing.bin" 0) -1))
+        :else 0))
+
+(defn- digit-run [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s))
+    acc
+    (let [c (string-code-point-at s i)]
+      (if (and (>= c 48) (<= c 57)) (digit-run s (+ i 1) (+ (* acc 10) (- c 48))) -1))))
+
+(defn main [] :i64
+  (let [a (arg 0)
+        k (if (= (string-length a) 0) -1 (digit-run a 0 0))
+        r (if (< k 0) 0 (case-result k))
+        w (say (string-concat "case " (string-concat (string-from-i64 k)
+            (string-concat (if (= r 1) " pass" " FAIL") "\n"))))]
+    r))

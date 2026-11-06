@@ -1,0 +1,167 @@
+;; The feed-forward half of one Qwen3-ASR audio-encoder layer on the real weights (JUN-916):
+;;   out = x + fc2(gelu(fc1(LayerNorm(x))))      (every projection with its bias)
+;; for one 896-wide token. The weights stay in the safetensors file and are read one row at a
+;; time with FS2 E requests (itonami.weights-file reads the header); activations live in internal
+;; vector-f64 arrays, which the seed allows only inside a module (exports are i64 bit patterns).
+;; LayerNorm uses eps 1e-5 (the torch default; config.json names none) and the exact GELU.
+;; erf and exp are series, so results are compared with CPython to a tolerance, not bit for bit.
+;; The input token is x[i] = (((3 i + 1) mod 11) - 5) / 4.
+(ns itonami.audio-ffn
+  (:require [itonami.bf16 :as bf]
+            [itonami.gelu-erf :as ge]
+            [itonami.nn-ops :as nn]
+            [itonami.safetensors :as st]
+            [itonami.weights-file :as wf])
+  (:export [ffn-at ffn-sum])
+  (:capabilities [:fs/app-data]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+
+(defn- frame [op :string path :string tail :string] :string
+  (string-concat "\u0000FS2\u0000"
+    (string-concat op (string-concat path (string-concat "\u0000" tail)))))
+
+;; integer BF16 -> f64 (same as itonami.weights-file; zero and subnormals take the exact decoder)
+(defn- bf16-fast [v :i64] :i64
+  (let [e (mod (quot v 128) 256)]
+    (if (= e 0)
+      (bf/bf16-to-f64 v)
+      (let [pos (+ (i64-shift-left (+ e 896) 52) (i64-shift-left (mod v 128) 45))]
+        (if (>= v 32768)
+          (f64-to-bits (f64-neg (f64-from-bits pos)))
+          pos)))))
+
+(defn- push-bf16 [r :bytes i :i64 n :i64 v :vector-f64] :vector-f64
+  (if (>= i n)
+    v
+    (push-bf16 r (+ i 1) n
+      (vector-f64-conj v (f64-from-bits
+        (bf16-fast (+ (bytes-at r (+ 5 (* 2 i))) (* 256 (bytes-at r (+ 6 (* 2 i)))))))))))
+
+;; count BF16 elements at absolute file offset off, as a vector ((vector-f64-new) when short)
+(defn- read-vec [path :string off :i64 count :i64] :vector-f64
+  (let [r (typed-cap-call :fs/app-data :string :bytes
+            (frame "E" path (string-concat (string-from-i64 off)
+                              (string-concat ":" (string-from-i64 (* count 2))))))]
+    (if (= (bytes-count r) (+ 5 (* count 2)))
+      (push-bf16 r 0 count (vector-f64-new))
+      (vector-f64-new))))
+
+;; absolute data offset of a 2-D or 1-D BF16 tensor, or -1
+(defn- tensor-off [h :string n :i64 name :string] :i64
+  (if (string=? (st/st-dtype h name) "BF16")
+    (let [b (st/st-begin h name)]
+      (if (< b 0) -1 (+ (+ 8 n) b)))
+    -1))
+
+(defn- lname [layer :i64 tail :string] :string
+  (string-concat "thinker.audio_tower.layers."
+    (string-concat (string-from-i64 layer) (string-concat "." tail))))
+
+(defn- vec-sum [v :vector-f64 i :i64 acc :i64] :i64
+  (if (>= i (vector-f64-count v))
+    acc
+    (vec-sum v (+ i 1) (fadd acc (f64-to-bits (vector-f64-at v i))))))
+
+(defn- sq-dev [v :vector-f64 i :i64 mean :i64 acc :i64] :i64
+  (if (>= i (vector-f64-count v))
+    acc
+    (let [d (fsub (f64-to-bits (vector-f64-at v i)) mean)]
+      (sq-dev v (+ i 1) mean (fadd acc (fmul d d))))))
+
+(defn- ln-run [x :vector-f64 g :vector-f64 b :vector-f64 i :i64 mean :i64 inv :i64 out :vector-f64] :vector-f64
+  (if (>= i (vector-f64-count x))
+    out
+    (ln-run x g b (+ i 1) mean inv
+      (vector-f64-conj out (f64-from-bits
+        (nn/ln-normalize (f64-to-bits (vector-f64-at x i)) mean inv
+          (f64-to-bits (vector-f64-at g i)) (f64-to-bits (vector-f64-at b i))))))))
+
+(defn- layer-norm [x :vector-f64 g :vector-f64 b :vector-f64] :vector-f64
+  (let [n (itof (vector-f64-count x))
+        mean (fdiv (vec-sum x 0 (zero)) n)
+        var (fdiv (sq-dev x 0 mean (zero)) n)
+        inv (nn/inv-std var (f64-to-bits 0.00001))]
+    (ln-run x g b 0 mean inv (vector-f64-new))))
+
+(defn- dot-vec [r :bytes i :i64 cols :i64 x :vector-f64 acc :i64] :i64
+  (if (>= i cols)
+    acc
+    (dot-vec r (+ i 1) cols x
+      (fadd acc (fmul (bf16-fast (+ (bytes-at r (+ 5 (* 2 i))) (* 256 (bytes-at r (+ 6 (* 2 i))))))
+                      (f64-to-bits (vector-f64-at x i)))))))
+
+;; y[r] = W[r] . x + bias[r] for every row; a short read leaves the vector short
+(defn- linear-run [path :string woff :i64 rows :i64 cols :i64 x :vector-f64 bias :vector-f64 r :i64 out :vector-f64] :vector-f64
+  (if (>= r rows)
+    out
+    (let [row (typed-cap-call :fs/app-data :string :bytes
+                (frame "E" path (string-concat (string-from-i64 (+ woff (* r (* cols 2))))
+                                  (string-concat ":" (string-from-i64 (* cols 2))))))]
+      (if (= (bytes-count row) (+ 5 (* cols 2)))
+        (linear-run path woff rows cols x bias (+ r 1)
+          (vector-f64-conj out (f64-from-bits
+            (fadd (dot-vec row 0 cols x (zero)) (f64-to-bits (vector-f64-at bias r))))))
+        (vector-f64-new)))))
+
+(defn- gelu-run [v :vector-f64 i :i64 out :vector-f64] :vector-f64
+  (if (>= i (vector-f64-count v))
+    out
+    (gelu-run v (+ i 1)
+      (vector-f64-conj out (f64-from-bits (ge/gelu-erf (f64-to-bits (vector-f64-at v i))))))))
+
+(defn- add-run [a :vector-f64 b :vector-f64 i :i64 out :vector-f64] :vector-f64
+  (if (>= i (vector-f64-count a))
+    out
+    (add-run a b (+ i 1)
+      (vector-f64-conj out (f64-from-bits
+        (fadd (f64-to-bits (vector-f64-at a i)) (f64-to-bits (vector-f64-at b i))))))))
+
+(defn- input-run [i :i64 n :i64 v :vector-f64] :vector-f64
+  (if (>= i n)
+    v
+    (input-run (+ i 1) n
+      (vector-f64-conj v (f64-from-bits
+        (fdiv (itof (- (mod (+ (* 3 i) 1) 11) 5)) (f64-to-bits 4.0)))))))
+
+;; the whole sublayer, or an empty vector when anything cannot be read
+(defn- ffn [path :string layer :i64] :vector-f64
+  (let [h (wf/wf-header-text path)
+        n (wf/wf-header-len path)
+        gn (tensor-off h n (lname layer "final_layer_norm.weight"))
+        bn (tensor-off h n (lname layer "final_layer_norm.bias"))
+        w1 (tensor-off h n (lname layer "fc1.weight"))
+        b1 (tensor-off h n (lname layer "fc1.bias"))
+        w2 (tensor-off h n (lname layer "fc2.weight"))
+        b2 (tensor-off h n (lname layer "fc2.bias"))]
+    (if (or (< gn 0) (< bn 0) (< w1 0) (< b1 0) (< w2 0) (< b2 0)
+            (not (= (st/st-dim h (lname layer "fc1.weight") 0) 3584))
+            (not (= (st/st-dim h (lname layer "fc1.weight") 1) 896))
+            (not (= (st/st-dim h (lname layer "fc2.weight") 0) 896))
+            (not (= (st/st-dim h (lname layer "fc2.weight") 1) 3584)))
+      (vector-f64-new)
+      (let [x (input-run 0 896 (vector-f64-new))
+            y (layer-norm x (read-vec path gn 896) (read-vec path bn 896))
+            a (linear-run path w1 3584 896 y (read-vec path b1 3584) 0 (vector-f64-new))
+            g (gelu-run a 0 (vector-f64-new))
+            c (linear-run path w2 896 3584 g (read-vec path b2 896) 0 (vector-f64-new))]
+        (if (and (= (vector-f64-count a) 3584) (= (vector-f64-count c) 896))
+          (add-run x c 0 (vector-f64-new))
+          (vector-f64-new))))))
+
+;; output element idx as f64 bits, or -1
+(defn ffn-at [path :string layer :i64 idx :i64] :i64
+  (let [o (ffn path layer)]
+    (if (or (< idx 0) (>= idx (vector-f64-count o)))
+      -1
+      (f64-to-bits (vector-f64-at o idx)))))
+
+;; sequential sum of the 896 outputs as f64 bits, or -1
+(defn ffn-sum [path :string layer :i64] :i64
+  (let [o (ffn path layer)]
+    (if (= (vector-f64-count o) 896) (vec-sum o 0 (zero)) -1)))
