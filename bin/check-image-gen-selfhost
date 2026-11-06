@@ -1,0 +1,139 @@
+#!/bin/sh
+# Compile and execute the pure image_generate core (size policy, request body,
+# response extraction) with the pinned Amu multi-module project CLI. It does not
+# call a model, write an image, or exercise the agent turn or launcher.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
+EXPECTED_SOURCE_SHA256=c7c4a0353a5e507c317b229f8d031679a58d40dea8e9362d173dc427a0065525
+AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+CLI_SHA256=$(shasum -a 256 "$CLI" | cut -d ' ' -f 1)
+if [ "$CLI_SHA256" != "$EXPECTED_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected Amu CLI digest: $CLI_SHA256" >&2
+  exit 2
+fi
+SOURCE="$REPO_ROOT/kotoba/itonami/image_gen.kotoba"
+SOURCE_SHA256=$(shasum -a 256 "$SOURCE" | cut -d ' ' -f 1)
+if [ "$SOURCE_SHA256" != "$EXPECTED_SOURCE_SHA256" ]; then
+  printf '%s\n' "unexpected image-gen source digest: $SOURCE_SHA256" >&2
+  exit 2
+fi
+
+# run_gate <dir> <source-file>: lock + compile + run, print the program result
+run_gate() {
+  dir=$1
+  src=$2
+  gate="$dir/src/image_gen_gate.kotoba"
+  mkdir -p "$dir/src"
+  cp "$src" "$dir/src/image_gen.kotoba"
+  cat > "$gate" <<'EOF2'
+(ns itonami.image-gen-gate
+  (:require [itonami.image-gen :as ig])
+  (:export [main]))
+(defn main [] :i64
+  (+ (if (ig/test-valid-size) 1 0)
+     (+ (if (ig/test-request-body) 2 0)
+        (if (ig/test-extract-b64) 4 0))))
+EOF2
+  s="$dir/src/image_gen.kotoba"
+  # module lines must be sorted by name: itonami.image-gen < itonami.image-gen-gate
+  printf 'KSL2\nentry %s\nmodule itonami.image-gen %s\nmodule itonami.image-gen-gate %s\nfile %s %s\nfile %s %s\n' \
+    "$gate" "$s" "$gate" \
+    "$(shasum -a 256 "$s" | cut -d ' ' -f 1)" "$s" \
+    "$(shasum -a 256 "$gate" | cut -d ' ' -f 1)" "$gate" > "$dir/image-gen.ksl"
+  "$CLI" compile "$gate" --source-lock "$dir/image-gen.ksl" -o "$dir/image-gen-tests.macho"
+  codesign --verify --strict "$dir/image-gen-tests.macho"
+}
+
+POS="$OUT_DIR/positive"
+run_gate "$POS" "$SOURCE"
+GATE_PATH="$POS/src/image_gen_gate.kotoba"
+LOCK="$POS/image-gen.ksl"
+PROGRAM="$POS/image-gen-tests.macho"
+DIRECT_RESULT=$("$PROGRAM")
+LOCKED_RESULT=$("$CLI" run "$GATE_PATH" --source-lock "$LOCK")
+ARTIFACT_RESULT=$("$CLI" run "$PROGRAM")
+for result in "$DIRECT_RESULT" "$LOCKED_RESULT" "$ARTIFACT_RESULT"; do
+  if [ "$result" != 7 ]; then
+    printf 'image-gen result mismatch: expected 7, got %s\n' "$result" >&2
+    exit 1
+  fi
+done
+
+# negative control 1: widen the size ceiling; the gate must stop returning 7
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+sed 's/(<= v 2048)/(<= v 4096)/' "$SOURCE" > "$NEG/mutated.kotoba"
+if cmp -s "$SOURCE" "$NEG/mutated.kotoba"; then
+  printf '%s\n' "negative control did not change the source" >&2
+  exit 1
+fi
+run_gate "$NEG/run" "$NEG/mutated.kotoba"
+NEG_RESULT=$("$NEG/run/image-gen-tests.macho")
+if [ "$NEG_RESULT" = 7 ]; then
+  printf '%s\n' "mutated size ceiling still passed the gate" >&2
+  exit 1
+fi
+
+# negative control 2: a source changed after locking is refused
+SOURCE_PATH="$POS/src/image_gen.kotoba"
+printf '\n' >> "$SOURCE_PATH"
+if "$CLI" compile "$GATE_PATH" --source-lock "$LOCK" \
+  -o "$OUT_DIR/should-not-exist.macho" > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+{
+  printf 'format: itonami.image-gen-selfhost-gate.v1\n'
+  printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$CLI_SHA256"
+  printf 'image_gen_source_sha256: %s\n' "$SOURCE_SHA256"
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)"
+  printf 'direct_result: %s\n' "$DIRECT_RESULT"
+  printf 'locked_run_result: %s\n' "$LOCKED_RESULT"
+  printf 'artifact_run_result: %s\n' "$ARTIFACT_RESULT"
+  printf 'mutated_size_ceiling_result: %s\n' "$NEG_RESULT"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: bounded pure image_generate core; no model request, image write, turn execution, or launcher qualification\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"

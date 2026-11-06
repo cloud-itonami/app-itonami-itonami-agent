@@ -1,0 +1,160 @@
+;; Pure core of the image_generate tool (JUN-863): size policy, request body and
+;; response extraction for an OpenAI-compatible POST {base}/images/generations,
+;; the shape murakumo's ComfyUI gateway serves (murakumo.infer.gateway:
+;; {prompt n size} -> {data [{b64_json}]}). The host supplies the network call
+;; and the file write; this module decides only what is sent and what is kept.
+;; Written in the Amu selfhost seed subset, like itonami.rail.
+(ns itonami.image-gen
+  (:export [valid-size? request-body extract-b64
+            test-valid-size test-request-body test-extract-b64]))
+
+(defn- digit? [c :i64] :bool
+  (and (>= c 48) (<= c 57)))
+
+;; value of the all-digit slice s[i,n); -1 when any byte is not a digit
+(defn- digits-value [s :string i :i64 n :i64 acc :i64] :i64
+  (cond (>= i n) acc
+        (not (digit? (string-code-point-at s i))) -1
+        :else (recur s (inc i) n (+ (* acc 10) (- (string-code-point-at s i) 48)))))
+
+(defn- side-ok? [s :string] :bool
+  (let [n (string-length s)]
+    (and (>= n 2)
+         (<= n 4)
+         (let [v (digits-value s 0 n 0)]
+           (and (>= v 64) (<= v 2048))))))
+
+;; "WxH", each side 64..2048 and plain digits: the gateway hands this string to
+;; a render farm, so nothing else may reach it.
+(defn valid-size? [size :string] :bool
+  (let [x (string-index-of size "x")]
+    (and (> x 0)
+         (side-ok? (string-substring size 0 x))
+         (side-ok? (string-substring size (+ x 1) (string-length size))))))
+
+(defn- utf8-width [c :i64] :i64
+  (cond (< c 128) 1
+        (< c 2048) 2
+        (< c 65536) 3
+        :else 4))
+
+;; the prompt carries no control byte other than \n \r \t (those are escaped)
+(defn- prompt-clean? [s :string i :i64 n :i64] :bool
+  (if (>= i n)
+    true
+    (let [c (string-code-point-at s i)]
+      (if (and (< c 32) (not (= c 9)) (not (= c 10)) (not (= c 13)))
+        false
+        (recur s (+ i (utf8-width c)) n)))))
+
+(defn- escape-for [c :i64] :string
+  (cond (= c 34) "\\\""
+        (= c 92) "\\\\"
+        (= c 10) "\\n"
+        (= c 13) "\\r"
+        (= c 9) "\\t"
+        :else ""))
+
+(defn- escape-run [s :string i :i64 n :i64 start :i64 out :string] :string
+  (if (>= i n)
+    (string-concat out (string-substring s start n))
+    (let [c (string-code-point-at s i)
+          e (escape-for c)]
+      (if (= (string-length e) 0)
+        (recur s (+ i (utf8-width c)) n start out)
+        (recur s (+ i 1) n (+ i 1)
+               (string-concat (string-concat out (string-substring s start i)) e))))))
+
+;; JSON request body, or "" when the prompt is empty / has a control byte or the
+;; size is invalid. model is the resolved model id (already non-empty).
+(defn request-body [model :string prompt :string size :string] :string
+  (if (or (= (string-length prompt) 0)
+          (= (string-length model) 0)
+          (not (valid-size? size))
+          (not (prompt-clean? prompt 0 (string-length prompt))))
+    ""
+    (string-concat
+      "{\"model\":\""
+      (string-concat (escape-run model 0 (string-length model) 0 "")
+        (string-concat "\",\"prompt\":\""
+          (string-concat (escape-run prompt 0 (string-length prompt) 0 "")
+            (string-concat "\",\"n\":1,\"size\":\""
+              (string-concat size "\",\"response_format\":\"b64_json\"}"))))))))
+
+(defn- ws? [c :i64] :bool
+  (or (= c 32) (or (= c 9) (or (= c 10) (= c 13)))))
+
+(defn- skip-ws [s :string i :i64 n :i64] :i64
+  (if (and (< i n) (ws? (string-code-point-at s i)))
+    (recur s (inc i) n)
+    i))
+
+(defn- b64-char? [c :i64] :bool
+  (or (and (>= c 65) (<= c 90))
+      (or (and (>= c 97) (<= c 122))
+          (or (digit? c) (or (= c 43) (or (= c 47) (= c 61)))))))
+
+(defn- all-b64? [s :string i :i64 n :i64] :bool
+  (cond (>= i n) true
+        (not (b64-char? (string-code-point-at s i))) false
+        :else (recur s (inc i) n)))
+
+;; the first "b64_json" string value of a response body, or "" when absent,
+;; not a string, escaped, empty or not canonical-length base64.
+(defn extract-b64 [body :string] :string
+  (let [k (string-index-of body "\"b64_json\"")]
+    (if (< k 0)
+      ""
+      (let [n (string-length body)
+            a (skip-ws body (+ k 10) n)]
+        (if (or (>= a n) (not (= (string-code-point-at body a) 58)))
+          ""
+          (let [q (skip-ws body (+ a 1) n)]
+            (if (or (>= q n) (not (= (string-code-point-at body q) 34)))
+              ""
+              (let [rest (string-substring body (+ q 1) n)
+                    e (string-index-of rest "\"")]
+                (if (< e 1)
+                  ""
+                  (let [v (string-substring rest 0 e)]
+                    (if (and (all-b64? v 0 e) (= (mod e 4) 0)) v "")))))))))))
+
+(defn test-valid-size [] :bool
+  (and (valid-size? "1024x1024")
+       (valid-size? "64x2048")
+       (valid-size? "832x1216")
+       (not (valid-size? ""))
+       (not (valid-size? "x"))
+       (not (valid-size? "1024"))
+       (not (valid-size? "1024x"))
+       (not (valid-size? "x1024"))
+       (not (valid-size? "63x64"))
+       (not (valid-size? "64x2049"))
+       (not (valid-size? "10240x1024"))
+       (not (valid-size? "1024x1024x2"))
+       (not (valid-size? "10 4x1024"))
+       (not (valid-size? "-1024x1024"))
+       (not (valid-size? "1024x1024\",\"n\":9"))))
+
+(defn test-request-body [] :bool
+  (and (string=? (request-body "animagine-xl-4.0" "a cat" "832x1216")
+                 "{\"model\":\"animagine-xl-4.0\",\"prompt\":\"a cat\",\"n\":1,\"size\":\"832x1216\",\"response_format\":\"b64_json\"}")
+       ;; quote, backslash, newline and a multibyte prompt survive as valid JSON
+       (string=? (request-body "m" "say \"hi\"\\\n猫" "64x64")
+                 "{\"model\":\"m\",\"prompt\":\"say \\\"hi\\\"\\\\\\n猫\",\"n\":1,\"size\":\"64x64\",\"response_format\":\"b64_json\"}")
+       (string=? (request-body "m" "" "64x64") "")
+       (string=? (request-body "" "p" "64x64") "")
+       (string=? (request-body "m" "p" "huge") "")
+       (string=? (request-body "m" "bell\u0007" "64x64") "")))
+
+(defn test-extract-b64 [] :bool
+  (and (string=? (extract-b64 "{\"data\":[{\"b64_json\":\"aGVsbG8=\"}]}") "aGVsbG8=")
+       (string=? (extract-b64 "{\"data\": [ {\"b64_json\" :  \"AAAA\" } ]}") "AAAA")
+       (string=? (extract-b64 "") "")
+       (string=? (extract-b64 "{\"data\":[]}") "")
+       (string=? (extract-b64 "{\"data\":[{\"b64_json\":null}]}") "")
+       (string=? (extract-b64 "{\"data\":[{\"b64_json\":\"\"}]}") "")
+       (string=? (extract-b64 "{\"data\":[{\"b64_json\":\"aGVsbG8\"}]}") "")
+       (string=? (extract-b64 "{\"data\":[{\"b64_json\":\"aG\\/s\"}]}") "")
+       (string=? (extract-b64 "{\"data\":[{\"b64_json\":\"aG Vs\"}]}") "")
+       (string=? (extract-b64 "{\"data\":[{\"b64_json\":\"aGVs") "")))
