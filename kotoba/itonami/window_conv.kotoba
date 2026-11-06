@@ -1,0 +1,141 @@
+;; Window framing and conv1d index rules for the native whisper encoder
+;; (JUN-868). Pure integer math plus a scalar convolution fixture.
+;;   - 30 s window: audio padded to 480000 samples gives 3000 frames of 400
+;;     samples at hop 160 after torch.stft's center padding, i.e. 200 samples
+;;     of reflection on each side; frame-source-index maps (frame t, sample n)
+;;     to the index of the source sample the host must place there.
+;;   - conv1d with kernel 3, padding 1: conv-out-len and conv-tap give the
+;;     output length and, per tap, the input position (or -1 for zero padding).
+;; The seed has no vectors, so the convolution is checked on an analytic
+;; fixture; a host or later unit drives it over real rows.
+;; Every f64 value is an i64 bit pattern.
+(ns itonami.window-conv
+  (:export [reflect-index frame-source-index frame-count conv-out-len conv-tap
+            match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+
+;; numpy/torch reflect padding without repeating the edge: -i for i < 0,
+;; 2*(len-1)-i past the end; valid while |pad| < len
+(defn reflect-index [i :i64 len :i64] :i64
+  (cond (< i 0) (- 0 i)
+        (>= i len) (- (* 2 (- len 1)) i)
+        :else i))
+
+;; source sample for sample n of frame t of a signal of len samples
+(defn frame-source-index [t :i64 n :i64 len :i64] :i64
+  (reflect-index (- (+ (* 160 t) n) 200) len))
+
+;; frames kept after dropping the last stft frame: 3000 for 480000 samples
+(defn frame-count [len :i64] :i64 (quot len 160))
+
+;; Conv1d kernel 3, padding 1: output length
+(defn conv-out-len [len :i64 stride :i64] :i64
+  (+ (quot (- (+ len 2) 3) stride) 1))
+
+;; input position read by tap k of output t, or -1 when it falls in the padding
+(defn conv-tap [t :i64 stride :i64 k :i64 len :i64] :i64
+  (let [p (- (+ (* t stride) k) 1)]
+    (if (or (< p 0) (>= p len)) -1 p)))
+
+;; ---- gate fixture: 2 in-channels, 2 out-channels, length 9 ----------------------
+(defn- fx [c :i64 t :i64] :i64
+  (fdiv (itof (- (mod (+ (* c 7) (* t 3)) 11) 5)) (f64-to-bits 4.0)))
+(defn- fw [o :i64 c :i64 k :i64] :i64
+  (fdiv (itof (- (mod (+ (+ (* o 5) (* c 3)) (* k 2)) 7) 3)) (f64-to-bits 5.0)))
+(defn- fb [o :i64] :i64
+  (fsub (fmul (itof o) (f64-to-bits 0.5)) (f64-to-bits 0.25)))
+
+(defn- tap-run [o :i64 t :i64 stride :i64 c :i64 k :i64 acc :i64] :i64
+  (cond (>= c 2) acc
+        (>= k 3) (tap-run o t stride (+ c 1) 0 acc)
+        :else
+        (let [p (conv-tap t stride k 9)]
+          (tap-run o t stride c (+ k 1)
+                   (if (< p 0) acc (fadd acc (fmul (fw o c k) (fx c p))))))))
+
+(defn- conv-at [o :i64 t :i64 stride :i64] :i64
+  (fadd (tap-run o t stride 0 0 (zero)) (fb o)))
+
+(defn- want-conv1 [i :i64] :i64
+  (cond
+        (= i 0) -4619342137793917747
+        (= i 1) 4609884578576439705
+        (= i 2) -4631501856787818084
+        (= i 3) -4615063718147915776
+        (= i 4) 4599976659396224616
+        (= i 5) 4599075939470750516
+        (= i 6) -4624296097384025292
+        (= i 7) -4614162998222441676
+        (= i 8) -4621593937607602996
+        (= i 9) 4609884578576439706
+        (= i 10) -4620693217682128896
+        (= i 11) -4617991057905706598
+        (= i 12) 4603129179135383962
+        (= i 13) 4605380978949069210
+        (= i 14) -4619792497756654796
+        (= i 15) 4596373779694328217
+        (= i 16) 4601778099247172813
+        (= i 17) 4607632778762754458
+        :else (zero)))
+
+(defn- want-conv2 [i :i64] :i64
+  (cond
+        (= i 0) -4619342137793917747
+        (= i 1) -4631501856787818084
+        (= i 2) 4599976659396224616
+        (= i 3) -4624296097384025292
+        (= i 4) -4621593937607602996
+        (= i 5) 4609884578576439706
+        (= i 6) -4617991057905706598
+        (= i 7) 4605380978949069210
+        (= i 8) 4596373779694328217
+        (= i 9) 4607632778762754458
+        :else (zero)))
+
+(defn- close? [a :i64 b :i64] :bool
+  (f64-le (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b)))
+          (f64-mul 0.000000001 (f64-max 1.0 (f64-abs (f64-from-bits b))))))
+
+(defn- conv1-run [i :i64 acc :i64] :i64
+  (if (>= i 18)
+    acc
+    (conv1-run (+ i 1)
+               (if (close? (conv-at (quot i 9) (mod i 9) 1) (want-conv1 i)) (+ acc 1) acc))))
+
+(defn- conv2-run [i :i64 acc :i64] :i64
+  (if (>= i 10)
+    acc
+    (conv2-run (+ i 1)
+               (if (close? (conv-at (quot i 5) (mod i 5) 2) (want-conv2 i)) (+ acc 1) acc))))
+
+(defn- b2i [x :bool] :i64 (if x 1 0))
+
+;; 5 reflect + 4 frame mapping + 2 frame counts + 3 out lengths + 4 taps
+;; + 18 stride-1 outputs + 10 stride-2 outputs = 46
+(defn match-count [] :i64
+  (+ (b2i (= (reflect-index -3 10) 3))
+  (+ (b2i (= (reflect-index 0 10) 0))
+  (+ (b2i (= (reflect-index 9 10) 9))
+  (+ (b2i (= (reflect-index 10 10) 8))
+  (+ (b2i (= (reflect-index 12 10) 6))
+  (+ (b2i (= (frame-source-index 0 0 480000) 200))
+  (+ (b2i (= (frame-source-index 0 200 480000) 0))
+  (+ (b2i (= (frame-source-index 2999 399 480000) 479959))
+  (+ (b2i (= (frame-source-index 1 5 480000) 35))
+  (+ (b2i (= (frame-count 480000) 3000))
+  (+ (b2i (= (frame-count 479999) 2999))
+  (+ (b2i (= (conv-out-len 9 1) 9))
+  (+ (b2i (= (conv-out-len 9 2) 5))
+  (+ (b2i (= (conv-out-len 3000 2) 1500))
+  (+ (b2i (= (conv-tap 0 1 0 9) -1))
+  (+ (b2i (= (conv-tap 0 1 1 9) 0))
+  (+ (b2i (= (conv-tap 8 1 2 9) -1))
+  (+ (b2i (= (conv-tap 4 2 1 9) 8))
+  (+ (conv1-run 0 0)
+     (conv2-run 0 0)))))))))))))))))))))
