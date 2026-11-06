@@ -1,0 +1,226 @@
+#!/bin/sh
+# Compile and run the native audio-encoder feed-forward sublayer (itonami.audio-ffn) on the real
+# Qwen3-ASR-0.6B weights with the pinned Amu multi-module project CLI. The model is cloned
+# (APFS clonefile) into a directory granted to the guest on fd 3; the guest reads it only through
+# FS2 F/E requests. Expected values come from a CPython float64 computation of the same sublayer
+# (struct/json for the weights, math.erf for GELU) and are compared to 1e-12 relative (the native results differ from CPython by 18 and 54 ulps on the two sums). One
+# evaluation allocates a lot and the seed has no collector, so the gate program runs once per
+# case (argv 0) and the script counts the cases that exit 1. It does not run attention, the conv
+# front end, a model, the agent turn or the launcher.
+
+set -eu
+
+if [ "$#" -ne 3 ]; then
+  printf '{'bf16': '09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b', 'dq': 'c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5', 'lm': 'daf0d273329a7b5a05aef4255b985f2e1c031c74f32596e9578add46980b1f5e', 'nn': '4693d227291a31b8c59378b0ab114715a983dfbfd17308d5b478181793a3604d', 'ge': '36b4c98a4df8fd817695a62d1602320f23d93fb38ddf97c1fb124bdcbd7c18a6', 'st': '20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75', 'wf': '8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6', 'src': '34a8acd0d611d2171ef8059bb5ef841f93987519fcfb942c7dceaff566f7134c', 'gate': '3ed8b6d837a356e0b9908661f660d9a1bd395cc088388883aa3d807915999054'}\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir> <model.safetensors>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+MODEL=$3
+EXPECTED_CLI_SHA256=ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
+EXPECTED_MODEL_SHA256=79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
+EXPECTED_BF16_SHA256=09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b
+EXPECTED_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
+EXPECTED_LOGMEL_SHA256=daf0d273329a7b5a05aef4255b985f2e1c031c74f32596e9578add46980b1f5e
+EXPECTED_NNOPS_SHA256=4693d227291a31b8c59378b0ab114715a983dfbfd17308d5b478181793a3604d
+EXPECTED_GELU_SHA256=36b4c98a4df8fd817695a62d1602320f23d93fb38ddf97c1fb124bdcbd7c18a6
+EXPECTED_ST_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
+EXPECTED_WF_SHA256=8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
+EXPECTED_SOURCE_SHA256=34a8acd0d611d2171ef8059bb5ef841f93987519fcfb942c7dceaff566f7134c
+EXPECTED_GATE_SHA256=d82d4c7e6ff7661c483f489d30d47c840e52743fd4faf77d93bbdc0403cd0eb0
+CASES=11
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+case "$MODEL" in
+  /*) ;;
+  *) printf '%s\n' "model path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2
+  exit 2
+fi
+if [ ! -f "$MODEL" ]; then
+  printf '%s\n' "model file is missing: $MODEL" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+check_sha() {
+  actual=$(shasum -a 256 "$1" | cut -d ' ' -f 1)
+  if [ "$actual" != "$2" ]; then
+    printf 'unexpected digest for %s: %s\n' "$1" "$actual" >&2
+    exit 2
+  fi
+}
+KD="$REPO_ROOT/kotoba/itonami"
+BF16="$KD/bf16.kotoba"
+DEQUANT="$KD/ggml_dequant.kotoba"
+LOGMEL="$KD/log_mel.kotoba"
+NNOPS="$KD/nn_ops.kotoba"
+GELU="$KD/gelu_erf.kotoba"
+ST="$KD/safetensors.kotoba"
+WF="$KD/weights_file.kotoba"
+SOURCE="$KD/audio_ffn.kotoba"
+GATE="$REPO_ROOT/test/native/audio_ffn_gate.kotoba"
+check_sha "$CLI" "$EXPECTED_CLI_SHA256"
+check_sha "$MODEL" "$EXPECTED_MODEL_SHA256"
+check_sha "$BF16" "$EXPECTED_BF16_SHA256"
+check_sha "$DEQUANT" "$EXPECTED_DEQUANT_SHA256"
+check_sha "$LOGMEL" "$EXPECTED_LOGMEL_SHA256"
+check_sha "$NNOPS" "$EXPECTED_NNOPS_SHA256"
+check_sha "$GELU" "$EXPECTED_GELU_SHA256"
+check_sha "$ST" "$EXPECTED_ST_SHA256"
+check_sha "$WF" "$EXPECTED_WF_SHA256"
+check_sha "$SOURCE" "$EXPECTED_SOURCE_SHA256"
+check_sha "$GATE" "$EXPECTED_GATE_SHA256"
+
+SCOPE="$OUT_DIR/scope"
+mkdir -m 700 -p "$SCOPE/d"
+/bin/cp -c "$MODEL" "$SCOPE/d/model.safetensors"
+
+# run_gate <dir> <audio_ffn-source>: lock + compile with the FS35 command profile
+run_gate() {
+  dir=$1
+  src=$2
+  s="$dir/src"
+  mkdir -p "$s"
+  cp "$BF16" "$s/bf16.kotoba"
+  cp "$DEQUANT" "$s/ggml_dequant.kotoba"
+  cp "$LOGMEL" "$s/log_mel.kotoba"
+  cp "$NNOPS" "$s/nn_ops.kotoba"
+  cp "$GELU" "$s/gelu_erf.kotoba"
+  cp "$ST" "$s/safetensors.kotoba"
+  cp "$WF" "$s/weights_file.kotoba"
+  cp "$src" "$s/audio_ffn.kotoba"
+  cp "$GATE" "$s/audio_ffn_gate.kotoba"
+  # modules sorted by name, files sorted by path
+  {
+    printf 'KSL2\nentry %s/audio_ffn_gate.kotoba\n' "$s"
+    printf 'module itonami.audio-ffn %s/audio_ffn.kotoba\n' "$s"
+    printf 'module itonami.audio-ffn-gate %s/audio_ffn_gate.kotoba\n' "$s"
+    printf 'module itonami.bf16 %s/bf16.kotoba\n' "$s"
+    printf 'module itonami.gelu-erf %s/gelu_erf.kotoba\n' "$s"
+    printf 'module itonami.ggml-dequant %s/ggml_dequant.kotoba\n' "$s"
+    printf 'module itonami.log-mel %s/log_mel.kotoba\n' "$s"
+    printf 'module itonami.nn-ops %s/nn_ops.kotoba\n' "$s"
+    printf 'module itonami.safetensors %s/safetensors.kotoba\n' "$s"
+    printf 'module itonami.weights-file %s/weights_file.kotoba\n' "$s"
+    for f in audio_ffn audio_ffn_gate bf16 gelu_erf ggml_dequant log_mel nn_ops safetensors weights_file; do
+      printf 'file %s %s/%s.kotoba\n' "$(shasum -a 256 "$s/$f.kotoba" | cut -d ' ' -f 1)" "$s" "$f"
+    done
+  } > "$dir/audio-ffn.ksl"
+  "$CLI" compile "$s/audio_ffn_gate.kotoba" --source-lock "$dir/audio-ffn.ksl" \
+    --runtime-profile amu-command-fs35 -o "$dir/audio-ffn-tests.macho"
+  codesign --verify --strict "$dir/audio-ffn-tests.macho"
+}
+
+# run_cases <program>: sets PASSED to the number of cases that exit 1
+run_cases() {
+  PASSED=0
+  CASE_LINES=""
+  k=0
+  while [ "$k" -lt "$CASES" ]; do
+    set +e
+    line=$("$1" "$k" 3< "$SCOPE" 2>/dev/null)
+    status=$?
+    set -e
+    if [ "$status" -eq 1 ]; then
+      PASSED=$((PASSED + 1))
+    fi
+    CASE_LINES="$CASE_LINES$line;"
+    k=$((k + 1))
+  done
+}
+
+POS="$OUT_DIR/positive"
+run_gate "$POS" "$SOURCE"
+PROGRAM="$POS/audio-ffn-tests.macho"
+run_cases "$PROGRAM"
+if [ "$PASSED" -ne "$CASES" ]; then
+  printf 'audio-ffn: %s of %s cases passed: %s\n' "$PASSED" "$CASES" "$CASE_LINES" >&2
+  exit 1
+fi
+POS_PASSED=$PASSED
+POS_LINES=$CASE_LINES
+
+# negative controls: each mutation must change the source and stop at least one case from passing
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+NEG_RESULTS=""
+mutate() {
+  name=$1
+  pattern=$2
+  replacement=$3
+  sed "s/$pattern/$replacement/" "$SOURCE" > "$NEG/$name.kotoba"
+  if cmp -s "$SOURCE" "$NEG/$name.kotoba"; then
+    printf 'negative control %s did not change the source\n' "$name" >&2
+    exit 1
+  fi
+  run_gate "$NEG/$name" "$NEG/$name.kotoba"
+  run_cases "$NEG/$name/audio-ffn-tests.macho"
+  if [ "$PASSED" -eq "$CASES" ]; then
+    printf 'negative control %s still passed the gate\n' "$name" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name=$PASSED/$CASES"
+}
+mutate ln-eps '(f64-to-bits 0.00001)' '(f64-to-bits 0.0001)'
+mutate ln-variance '(sq-dev x 0 mean (zero)) n)' '(sq-dev x 0 mean (zero)) (itof 895))'
+mutate ln-gamma-beta '(ln-run x g b 0 mean inv' '(ln-run x b g 0 mean inv'
+mutate bias-dropped '(f64-to-bits (vector-f64-at bias r))' '(zero)'
+mutate activation-identity '(ge\/gelu-erf (f64-to-bits (vector-f64-at v i)))' '(f64-to-bits (vector-f64-at v i))'
+mutate residual '(add-run x c 0' '(add-run c c 0'
+mutate input-vector '(mod (+ (\* 3 i) 1) 11)' '(mod (+ (* 3 i) 2) 11)'
+mutate row-offset '(+ woff (\* r (\* cols 2)))' '(+ woff (* r cols))'
+mutate fc2-weight 'linear-run path w2 896 3584' 'linear-run path w1 896 3584'
+
+# negative control: a source changed after locking is refused
+printf '\n' >> "$POS/src/audio_ffn.kotoba"
+if "$CLI" compile "$POS/src/audio_ffn_gate.kotoba" --source-lock "$POS/audio-ffn.ksl" \
+  --runtime-profile amu-command-fs35 -o "$OUT_DIR/should-not-exist.macho" \
+  > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+rm -f "$SCOPE/d/model.safetensors"
+{
+  printf 'format: itonami.audio-ffn-selfhost-gate.v1\n'
+  printf 'amu_cli_sha256: %s\n' "$EXPECTED_CLI_SHA256"
+  printf 'model_sha256: %s\n' "$EXPECTED_MODEL_SHA256"
+  printf 'audio_ffn_source_sha256: %s\n' "$EXPECTED_SOURCE_SHA256"
+  printf 'weights_file_source_sha256: %s\n' "$EXPECTED_WF_SHA256"
+  printf 'gate_source_sha256: %s\n' "$EXPECTED_GATE_SHA256"
+  printf 'runtime_profile: amu-command-fs35 (directory on fd 3), one process per case\n'
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)"
+  printf 'cases_passed: %s of %s\n' "$POS_PASSED" "$CASES"
+  printf 'cases: %s\n' "$POS_LINES"
+  printf 'negative_control_cases_passed:%s\n' "$NEG_RESULTS"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: layers 0 and 5 feed-forward sublayer of one 896-wide token on the real weights to 1e-12 relative against CPython float64; not the attention half, the conv front end, an equality claim with the original model implementation, a model run, turn or launcher\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"
