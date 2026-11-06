@@ -1,0 +1,144 @@
+;; Scalar attention and GEMM for the native whisper path (JUN-870): single-head
+;; scaled dot-product attention with a softmax shifted by the row maximum
+;; (non-causal self, causal self, and cross with a different key length), and
+;; C = A.B + bias. The seed has no vectors, so the rows are analytic fixtures
+;; (query/key/value/A/B generators below); the arithmetic per output element is
+;; the real kernel's and a later unit drives it over host data. d = 2 here.
+;; Built on itonami.nn-ops' exp-wide. Every f64 value is an i64 bit pattern.
+(ns itonami.attention
+  (:require [itonami.nn-ops :as nn])
+  (:export [attention-at gemm-at match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- flt [a :i64 b :i64] :bool (f64-lt (f64-from-bits a) (f64-from-bits b)))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- one [] :i64 (f64-to-bits 1.0))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+
+;; fixtures: Q(i,d) = ((3i+5d) mod 7 - 3)/4, K(j,d) = ((5j+3d+1) mod 9 - 4)/4,
+;; V(j,d) = ((2j+7d) mod 5 - 2)/2
+(defn- fq [i :i64 d :i64] :i64 (fdiv (itof (- (mod (+ (* i 3) (* d 5)) 7) 3)) (f64-to-bits 4.0)))
+(defn- fk [j :i64 d :i64] :i64 (fdiv (itof (- (mod (+ (+ (* j 5) (* d 3)) 1) 9) 4)) (f64-to-bits 4.0)))
+(defn- fv [j :i64 d :i64] :i64 (fdiv (itof (- (mod (+ (* j 2) (* d 7)) 5) 2)) (f64-to-bits 2.0)))
+
+;; key j is visible to query i unless causal masking (causal = 1) hides j > i
+(defn- visible? [causal :i64 i :i64 j :i64] :bool
+  (or (= causal 0) (<= j i)))
+
+;; q_i . k_j / sqrt(2)
+(defn- score [i :i64 j :i64] :i64
+  (fdiv (fadd (fmul (fq i 0) (fk j 0)) (fmul (fq i 1) (fk j 1)))
+        (f64-to-bits (f64-sqrt 2.0))))
+
+(defn- max-run [causal :i64 i :i64 lk :i64 j :i64 acc :i64] :i64
+  (cond (>= j lk) acc
+        (not (visible? causal i j)) (max-run causal i lk (+ j 1) acc)
+        :else (max-run causal i lk (+ j 1)
+                       (let [s (score i j)] (if (flt acc s) s acc)))))
+
+(defn- denom-run [causal :i64 i :i64 lk :i64 mx :i64 j :i64 acc :i64] :i64
+  (cond (>= j lk) acc
+        (not (visible? causal i j)) (denom-run causal i lk mx (+ j 1) acc)
+        :else (denom-run causal i lk mx (+ j 1)
+                         (fadd acc (nn/exp-wide (fsub (score i j) mx))))))
+
+(defn- mix-run [causal :i64 i :i64 d :i64 lk :i64 mx :i64 z :i64 j :i64 acc :i64] :i64
+  (cond (>= j lk) acc
+        (not (visible? causal i j)) (mix-run causal i d lk mx z (+ j 1) acc)
+        :else (mix-run causal i d lk mx z (+ j 1)
+                       (fadd acc (fmul (fdiv (nn/exp-wide (fsub (score i j) mx)) z) (fv j d))))))
+
+;; output element d of query i over lk keys; causal = 1 masks j > i
+(defn attention-at [causal :i64 i :i64 d :i64 lk :i64] :i64
+  (let [mx (max-run causal i lk 0 (fsub (zero) (f64-to-bits 1000000000.0)))
+        z (denom-run causal i lk mx 0 (zero))]
+    (mix-run causal i d lk mx z 0 (zero))))
+
+;; A(i,k) = ((i+2k) mod 5 - 2)/3, B(k,j) = ((3k+j) mod 4 - 1)/2, bias(j) = j/4 - 0.1
+(defn- fa [i :i64 k :i64] :i64 (fdiv (itof (- (mod (+ i (* k 2)) 5) 2)) (f64-to-bits 3.0)))
+(defn- fb [k :i64 j :i64] :i64 (fdiv (itof (- (mod (+ (* k 3) j) 4) 1)) (f64-to-bits 2.0)))
+(defn- fbias [j :i64] :i64 (fsub (fmul (itof j) (f64-to-bits 0.25)) (f64-to-bits 0.1)))
+
+(defn- gemm-run [i :i64 j :i64 k :i64 acc :i64] :i64
+  (if (>= k 4)
+    acc
+    (gemm-run i j (+ k 1) (fadd acc (fmul (fa i k) (fb k j))))))
+
+;; C(i,j) = sum_k A(i,k) B(k,j) + bias(j), A is 3x4, B is 4x2
+(defn gemm-at [i :i64 j :i64] :i64
+  (fadd (gemm-run i j 0 (zero)) (fbias j)))
+
+(defn- want-self [i :i64] :i64
+  (cond
+        (= i 0) -4632857668920421475
+        (= i 1) 4581779155463098604
+        (= i 2) -4628489764679792957
+        (= i 3) 4599950004514844269
+        (= i 4) -4629344648645263149
+        (= i 5) 4599925426604904581
+        (= i 6) -4628122846271466354
+        (= i 7) 4599954475874809877
+        :else (zero)))
+
+(defn- want-causal [i :i64] :i64
+  (cond
+        (= i 0) -4616189618054758400
+        (= i 1) 0
+        (= i 2) -4622269099264464935
+        (= i 3) 4603466759963814932
+        (= i 4) 4587456961297632664
+        (= i 5) 4598526567668167656
+        (= i 6) -4628122846271466354
+        (= i 7) 4599954475874809877
+        :else (zero)))
+
+(defn- want-cross [i :i64] :i64
+  (cond
+        (= i 0) 4589522046199472104
+        (= i 1) -4625561744897460796
+        (= i 2) -4634864936301354178
+        (= i 3) 4594296934072115962
+        (= i 4) -4647019165338802104
+        (= i 5) 4590436273669028971
+        :else (zero)))
+
+(defn- want-gemm [i :i64] :i64
+  (cond
+        (= i 0) 4603279299122962978
+        (= i 1) 4604029899060858061
+        (= i 2) 4589468260265693456
+        (= i 3) -4619041897818759715
+        (= i 4) 4600877379321698714
+        (= i 5) -4623395377458551194
+        :else (zero)))
+
+(defn- close? [a :i64 b :i64] :bool
+  (f64-le (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b)))
+          (f64-mul 0.000000001 (f64-max 1.0 (f64-abs (f64-from-bits b))))))
+
+(defn- self-run [i :i64 acc :i64] :i64
+  (if (>= i 8)
+    acc
+    (self-run (+ i 1) (if (close? (attention-at 0 (quot i 2) (mod i 2) 4) (want-self i)) (+ acc 1) acc))))
+(defn- causal-run [i :i64 acc :i64] :i64
+  (if (>= i 8)
+    acc
+    (causal-run (+ i 1) (if (close? (attention-at 1 (quot i 2) (mod i 2) 4) (want-causal i)) (+ acc 1) acc))))
+(defn- cross-run [i :i64 acc :i64] :i64
+  (if (>= i 6)
+    acc
+    (cross-run (+ i 1) (if (close? (attention-at 0 (quot i 2) (mod i 2) 5) (want-cross i)) (+ acc 1) acc))))
+(defn- gemm-check [i :i64 acc :i64] :i64
+  (if (>= i 6)
+    acc
+    (gemm-check (+ i 1) (if (close? (gemm-at (quot i 2) (mod i 2)) (want-gemm i)) (+ acc 1) acc))))
+
+;; 8 self + 8 causal + 6 cross + 6 gemm = 28
+(defn match-count [] :i64
+  (+ (self-run 0 0)
+  (+ (causal-run 0 0)
+  (+ (cross-run 0 0)
+     (gemm-check 0 0)))))
