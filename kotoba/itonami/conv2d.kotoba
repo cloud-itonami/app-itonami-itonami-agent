@@ -1,0 +1,169 @@
+;; conv2d for the native Qwen3-ASR audio tower (JUN-880): kernel 3x3, padding 1, stride
+;; 1 or 2, several input and output channels, with bias. The tower starts with three
+;; of these (conv2d1 [480,1,3,3], conv2d2/3 [480,480,3,3], 8x reduction overall).
+;; Pure integer index rules (out-len, tap position or -1 in the padding) plus a
+;; scalar convolution checked on an analytic fixture (2 in / 2 out channels, 5 x 6
+;; input); the seed has no vectors, so a host or later unit drives it over real
+;; tensors. Every f64 value is an i64 bit pattern.
+(ns itonami.conv2d
+  (:export [conv2d-out-len conv2d-tap match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+
+;; output length along one axis for kernel 3, padding 1
+(defn conv2d-out-len [n :i64 stride :i64] :i64
+  (+ (quot (- (+ n 2) 3) stride) 1))
+
+;; input position read by tap k of output o along one axis, or -1 in the padding
+(defn conv2d-tap [o :i64 stride :i64 k :i64 n :i64] :i64
+  (let [p (- (+ (* o stride) k) 1)]
+    (if (or (< p 0) (>= p n)) -1 p)))
+
+;; ---- gate fixture: C_in 2, C_out 2, H 5, W 6 ---------------------------------------
+(defn- fx [c :i64 y :i64 x :i64] :i64
+  (fdiv (itof (- (mod (+ (+ (* c 7) (* y 5)) (* x 3)) 11) 5)) (f64-to-bits 4.0)))
+(defn- fw [o :i64 c :i64 ky :i64 kx :i64] :i64
+  (fdiv (itof (- (mod (+ (+ (+ (* o 5) (* c 3)) (* ky 2)) (* kx 7)) 9) 4)) (f64-to-bits 5.0)))
+(defn- fb [o :i64] :i64
+  (fsub (fmul (itof o) (f64-to-bits 0.5)) (f64-to-bits 0.25)))
+
+;; sum over input channels c and kernel taps (ky, kx), in the reference's order
+(defn- tap-run [o :i64 oy :i64 ox :i64 stride :i64 c :i64 ky :i64 kx :i64 acc :i64] :i64
+  (cond (>= c 2) acc
+        (>= ky 3) (tap-run o oy ox stride (+ c 1) 0 0 acc)
+        (>= kx 3) (tap-run o oy ox stride c (+ ky 1) 0 acc)
+        :else
+        (let [py (conv2d-tap oy stride ky 5)
+              px (conv2d-tap ox stride kx 6)]
+          (tap-run o oy ox stride c ky (+ kx 1)
+                   (if (or (< py 0) (< px 0))
+                     acc
+                     (fadd acc (fmul (fw o c ky kx) (fx c py px))))))))
+
+(defn- conv-at [o :i64 oy :i64 ox :i64 stride :i64] :i64
+  (fadd (tap-run o oy ox stride 0 0 0 (zero)) (fb o)))
+
+(defn- want-s1 [i :i64] :i64
+  (cond
+        (= i 0) -4615514078110652825
+        (= i 1) 4607407598781385931
+        (= i 2) 4608758678669597082
+        (= i 3) -4613262278296967580
+        (= i 4) 4599075939470750514
+        (= i 5) -4631501856787818096
+        (= i 6) 4599976659396224616
+        (= i 7) -4612136378390124954
+        (= i 8) 4587366580439587184
+        (= i 9) 4611686018427387904
+        (= i 10) -4613712638259704628
+        (= i 11) 4604480259023595110
+        (= i 12) -4611123068473966593
+        (= i 13) -4617540697942969549
+        (= i 14) -4859383997932765184
+        (= i 15) -4612136378390124954
+        (= i 16) 4587366580439587184
+        (= i 17) 4591870180066957724
+        (= i 18) 4612361558371493479
+        (= i 19) -4611686018427387906
+        (= i 20) -4613037098315599053
+        (= i 21) -4617540697942969549
+        (= i 22) -4859383997932765184
+        (= i 23) -4620693217682128896
+        (= i 24) -4612586738352862003
+        (= i 25) 4611911198408756429
+        (= i 26) 4612361558371493479
+        (= i 27) -4609434218613702656
+        (= i 28) -4613037098315599053
+        (= i 29) 4602678819172646912
+        (= i 30) 4609659398595071181
+        (= i 31) 4604480259023595110
+        (= i 32) -4611123068473966591
+        (= i 33) 4605831338911806256
+        (= i 34) 4610560118520545280
+        (= i 35) -4614838538166547250
+        (= i 36) 4608083138725491507
+        (= i 37) -4615964438073389876
+        (= i 38) 4612811918334230527
+        (= i 39) 4603129179135383960
+        (= i 40) -4614388178203810200
+        (= i 41) 4605831338911806258
+        (= i 42) 4604480259023595111
+        (= i 43) 4612361558371493479
+        (= i 44) -4626998257160447592
+        (= i 45) -4615964438073389876
+        (= i 46) 4612811918334230527
+        (= i 47) 4594572339843380013
+        (= i 48) 4596373779694328216
+        (= i 49) -4613937818241073152
+        (= i 50) 4613037098315599053
+        (= i 51) 4612361558371493479
+        (= i 52) -4626998257160447592
+        (= i 53) -4620242857719391848
+        (= i 54) 4596373779694328220
+        (= i 55) -4614838538166547252
+        (= i 56) -4611348248455335116
+        (= i 57) 4608983858650965606
+        (= i 58) 4610109758557808230
+        (= i 59) 4601778099247172812
+        :else (zero)))
+
+(defn- want-s2 [i :i64] :i64
+  (cond
+        (= i 0) -4615514078110652825
+        (= i 1) 4608758678669597082
+        (= i 2) 4599075939470750514
+        (= i 3) -4611123068473966593
+        (= i 4) -4859383997932765184
+        (= i 5) 4587366580439587184
+        (= i 6) -4612586738352862003
+        (= i 7) 4612361558371493479
+        (= i 8) -4613037098315599053
+        (= i 9) 4609659398595071181
+        (= i 10) -4611123068473966591
+        (= i 11) 4610560118520545280
+        (= i 12) 4604480259023595111
+        (= i 13) -4626998257160447592
+        (= i 14) 4612811918334230527
+        (= i 15) 4596373779694328220
+        (= i 16) -4611348248455335116
+        (= i 17) 4610109758557808230
+        :else (zero)))
+
+(defn- close? [a :i64 b :i64] :bool
+  (f64-le (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b)))
+          (f64-mul 0.000000001 (f64-max 1.0 (f64-abs (f64-from-bits b))))))
+
+;; stride 1: output 5 x 6 per channel; stride 2: 3 x 3 per channel
+(defn- s1-run [i :i64 acc :i64] :i64
+  (if (>= i 60)
+    acc
+    (s1-run (+ i 1)
+            (if (close? (conv-at (quot i 30) (quot (mod i 30) 6) (mod i 6) 1) (want-s1 i)) (+ acc 1) acc))))
+(defn- s2-run [i :i64 acc :i64] :i64
+  (if (>= i 18)
+    acc
+    (s2-run (+ i 1)
+            (if (close? (conv-at (quot i 9) (quot (mod i 9) 3) (mod i 3) 2) (want-s2 i)) (+ acc 1) acc))))
+
+(defn- b2i [x :bool] :i64 (if x 1 0))
+
+;; 60 stride-1 + 18 stride-2 outputs + 6 length checks (Qwen's real axes: 128 -> 64 -> 32
+;; -> 16 over three stride-2 layers) + 4 tap checks = 88
+(defn match-count [] :i64
+  (+ (s1-run 0 0)
+    (+ (s2-run 0 0)
+    (+ (b2i (= (conv2d-out-len 5 1) 5))
+    (+ (b2i (= (conv2d-out-len 6 2) 3))
+    (+ (b2i (= (conv2d-out-len 128 2) 64))
+    (+ (b2i (= (conv2d-out-len 64 2) 32))
+    (+ (b2i (= (conv2d-out-len 32 2) 16))
+    (+ (b2i (= (conv2d-out-len 100 2) 50))
+    (+ (b2i (= (conv2d-tap 0 1 0 6) -1))
+    (+ (b2i (= (conv2d-tap 0 2 1 6) 0))
+    (+ (b2i (= (conv2d-tap 2 2 2 5) -1))
+    (b2i (= (conv2d-tap 2 2 1 6) 4))))))))))))))
