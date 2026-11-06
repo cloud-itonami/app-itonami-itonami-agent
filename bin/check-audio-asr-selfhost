@@ -1,0 +1,351 @@
+#!/bin/sh
+# Compile and run real speech through the whole native Qwen3-ASR audio encoder with the pinned Amu
+# multi-module project CLI: a 0.24 s clip (3840 samples, test/native/speech_clip.hex, cut from a
+# macOS `say` utterance converted with afconvert) -> the 128-bin log-mel (reflect padding, 24
+# Hann frames, Slaney filterbank, log10 floor, max-8 clamp, (x+4)/4) -> the front end -> the 18
+# layers (one process each, hex on argv) -> the tail. The model is cloned (APFS clonefile) into a
+# directory granted to the guests on fd 3. Expected values come from a CPython float64 pipeline of
+# the same definition (direct DFT, Slaney filterbank from the definition, math.erf) and are
+# compared to 1e-11 relative. It does not run a language model, longer audio, the agent turn or
+# the launcher.
+
+set -eu
+
+if [ "$#" -ne 4 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir> <model.safetensors> <speech_clip.hex>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+MODEL=$3
+CLIP=$4
+EXPECTED_CLI_SHA256=ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
+EXPECTED_MODEL_SHA256=79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
+EXPECTED_BF16_SHA256=09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b
+EXPECTED_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
+EXPECTED_LOGMEL_SHA256=daf0d273329a7b5a05aef4255b985f2e1c031c74f32596e9578add46980b1f5e
+EXPECTED_NNOPS_SHA256=4693d227291a31b8c59378b0ab114715a983dfbfd17308d5b478181793a3604d
+EXPECTED_GELU_SHA256=36b4c98a4df8fd817695a62d1602320f23d93fb38ddf97c1fb124bdcbd7c18a6
+EXPECTED_QWENOPS_SHA256=a5a8744046a81edd21d0740395e874c89ed518e24092a5e889c78b2b2ba51576
+EXPECTED_ST_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
+EXPECTED_WF_SHA256=8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
+EXPECTED_SOURCE_SHA256=9c01ba2790139042cd4674aac8246ddead7039b43297e17a8a4e5009e8bbba17
+EXPECTED_FRONT_SHA256=3b9b81ff44bfff6615f885eb3e14de83633b83a63416c5ba20f2f2e1f5035b4e
+EXPECTED_STEP_SHA256=84376ac04492c187fa7a6278fd5a0ecf8fc5ac343d1f5f41a85618111585dc6d
+EXPECTED_TAIL_SHA256=ca678bbc9481c86e43f6677590099423da2d7c3a3465ea1a236e67db211c9f26
+EXPECTED_GATE_SHA256=b7601ad8c36f0dea9d550738907258a84075b66c61a09323642c7a46d34ab088
+EXPECTED_MEL_SHA256=eaccd429fb3fb23cca7b98ed0f7f8d66d673ac727e69cf2767c648e287697d25
+EXPECTED_CLIP_SHA256=2bbce992495804159c59b2add9bb776a28484765b483a722416cd8b05ad79175
+LAYERS=18
+CHECKS=16
+REFUSALS=5
+TOTAL=$((CHECKS + REFUSALS))
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+case "$MODEL" in
+  /*) ;;
+  *) printf '%s\n' "model path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2
+  exit 2
+fi
+if [ ! -f "$MODEL" ]; then
+  printf '%s\n' "model file is missing: $MODEL" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+check_sha() {
+  actual=$(shasum -a 256 "$1" | cut -d ' ' -f 1)
+  if [ "$actual" != "$2" ]; then
+    printf 'unexpected digest for %s: %s\n' "$1" "$actual" >&2
+    exit 2
+  fi
+}
+KD="$REPO_ROOT/kotoba/itonami"
+AD="$REPO_ROOT/kotoba/agent_cli"
+SOURCE="$KD/audio_ffn.kotoba"
+check_sha "$CLI" "$EXPECTED_CLI_SHA256"
+check_sha "$MODEL" "$EXPECTED_MODEL_SHA256"
+check_sha "$CLIP" "$EXPECTED_CLIP_SHA256"
+check_sha "$AD/audio_mel_cli.kotoba" "$EXPECTED_MEL_SHA256"
+check_sha "$KD/bf16.kotoba" "$EXPECTED_BF16_SHA256"
+check_sha "$KD/ggml_dequant.kotoba" "$EXPECTED_DEQUANT_SHA256"
+check_sha "$KD/log_mel.kotoba" "$EXPECTED_LOGMEL_SHA256"
+check_sha "$KD/nn_ops.kotoba" "$EXPECTED_NNOPS_SHA256"
+check_sha "$KD/gelu_erf.kotoba" "$EXPECTED_GELU_SHA256"
+check_sha "$KD/qwen_ops.kotoba" "$EXPECTED_QWENOPS_SHA256"
+check_sha "$KD/safetensors.kotoba" "$EXPECTED_ST_SHA256"
+check_sha "$KD/weights_file.kotoba" "$EXPECTED_WF_SHA256"
+check_sha "$SOURCE" "$EXPECTED_SOURCE_SHA256"
+check_sha "$AD/audio_front_cli.kotoba" "$EXPECTED_FRONT_SHA256"
+check_sha "$AD/audio_layer_step_cli.kotoba" "$EXPECTED_STEP_SHA256"
+check_sha "$AD/audio_tail_cli.kotoba" "$EXPECTED_TAIL_SHA256"
+check_sha "$REPO_ROOT/test/native/audio_asr_gate.kotoba" "$EXPECTED_GATE_SHA256"
+
+SCOPE="$OUT_DIR/scope"
+mkdir -m 700 -p "$SCOPE/d"
+/bin/cp -c "$MODEL" "$SCOPE/d/model.safetensors"
+
+# compile_one <dir> <entry-file-name> <entry-namespace>: lock + compile with the FS35 command profile
+compile_one() {
+  dir=$1
+  entry=$2
+  ns=$3
+  s="$dir/src"
+  {
+    printf 'KSL2\nentry %s/%s.kotoba\n' "$s" "$entry"
+    # modules sorted by name
+    printf '%s\n' \
+      "agent-cli.audio-front-cli audio_front_cli" \
+      "agent-cli.audio-layer-step-cli audio_layer_step_cli" \
+      "agent-cli.audio-mel-cli audio_mel_cli" \
+      "agent-cli.audio-tail-cli audio_tail_cli" \
+      "itonami.audio-asr-gate audio_asr_gate" \
+      "itonami.audio-ffn audio_ffn" \
+      "itonami.bf16 bf16" \
+      "itonami.gelu-erf gelu_erf" \
+      "itonami.ggml-dequant ggml_dequant" \
+      "itonami.log-mel log_mel" \
+      "itonami.nn-ops nn_ops" \
+      "itonami.qwen-ops qwen_ops" \
+      "itonami.safetensors safetensors" \
+      "itonami.weights-file weights_file" |
+    while read -r name file; do
+      case "$file" in
+        audio_front_cli|audio_layer_step_cli|audio_mel_cli|audio_tail_cli|audio_asr_gate)
+          [ "$file" = "$entry" ] || continue ;;
+      esac
+      printf 'module %s %s/%s.kotoba\n' "$name" "$s" "$file"
+    done
+    for f in audio_asr_gate audio_ffn audio_front_cli audio_layer_step_cli audio_mel_cli audio_tail_cli bf16 gelu_erf ggml_dequant log_mel nn_ops qwen_ops safetensors weights_file; do
+      case "$f" in
+        audio_front_cli|audio_layer_step_cli|audio_mel_cli|audio_tail_cli|audio_asr_gate)
+          [ "$f" = "$entry" ] || continue ;;
+      esac
+      printf 'file %s %s/%s.kotoba\n' "$(shasum -a 256 "$s/$f.kotoba" | cut -d ' ' -f 1)" "$s" "$f"
+    done
+  } > "$dir/$entry.ksl"
+  "$CLI" compile "$s/$entry.kotoba" --source-lock "$dir/$entry.ksl" \
+    --runtime-profile amu-command-fs35 -o "$dir/$entry.macho"
+  codesign --verify --strict "$dir/$entry.macho"
+}
+
+# build_variant <dir> <audio_ffn-source>: sources + the four binaries
+build_variant() {
+  dir=$1
+  src=$2
+  s="$dir/src"
+  mkdir -p "$s"
+  for f in bf16 ggml_dequant log_mel nn_ops gelu_erf qwen_ops safetensors weights_file; do
+    cp "$KD/$f.kotoba" "$s/$f.kotoba"
+  done
+  cp "$src" "$s/audio_ffn.kotoba"
+  for f in audio_front_cli audio_layer_step_cli audio_mel_cli audio_tail_cli; do
+    cp "$AD/$f.kotoba" "$s/$f.kotoba"
+  done
+  cp "$REPO_ROOT/test/native/audio_asr_gate.kotoba" "$s/audio_asr_gate.kotoba"
+  compile_one "$dir" audio_mel_cli x
+  compile_one "$dir" audio_front_cli x
+  compile_one "$dir" audio_layer_step_cli x
+  compile_one "$dir" audio_tail_cli x
+  compile_one "$dir" audio_asr_gate x
+}
+
+# prog_status <program> <args...>: runs a guest with the scope on fd 3; sets OUT and STATUS
+prog_status() {
+  prog=$1
+  shift
+  set +e
+  OUT=$("$prog" "$@" 3< "$SCOPE" 2>/dev/null)
+  STATUS=$?
+  set -e
+}
+
+# stage_cases <dir> <first-case> <hex>: counts the passing cases first..first+3; sets STAGE_PASSED
+stage_cases() {
+  STAGE_PASSED=0
+  k=$2
+  last=$(($2 + 3))
+  while [ "$k" -le "$last" ]; do
+    set +e
+    "$1/audio_asr_gate.macho" "$k" "$3" 3< "$SCOPE" > /dev/null 2>&1
+    status=$?
+    set -e
+    if [ "$status" -eq 1 ]; then
+      STAGE_PASSED=$((STAGE_PASSED + 1))
+    fi
+    k=$((k + 1))
+  done
+}
+
+# run_pipeline <dir>: front, 18 layers, tail; each stage is checked before the next one runs.
+# Sets PASSED (out of TOTAL) and keeps the stage outputs in FRONT_HEX, STACK_HEX, TAIL_HEX.
+run_pipeline() {
+  dir=$1
+  PASSED=0
+  MEL_HEX=""
+  FRONT_HEX=""
+  STACK_HEX=""
+  TAIL_HEX=""
+  clip=$(tr -d '\n' < "$CLIP")
+  prog_status "$dir/audio_mel_cli.macho" "$clip"
+  if [ "$STATUS" -ne 0 ] || [ "${#OUT}" -ne 49152 ]; then
+    return 0
+  fi
+  MEL_HEX=$OUT
+  stage_cases "$dir" 0 "$MEL_HEX"
+  PASSED=$((PASSED + STAGE_PASSED))
+  if [ "$STAGE_PASSED" -ne 4 ]; then
+    return 0
+  fi
+  prog_status "$dir/audio_front_cli.macho" /d/model.safetensors "$MEL_HEX"
+  if [ "$STATUS" -ne 0 ] || [ "${#OUT}" -ne 43008 ]; then
+    return 0
+  fi
+  FRONT_HEX=$OUT
+  stage_cases "$dir" 4 "$FRONT_HEX"
+  PASSED=$((PASSED + STAGE_PASSED))
+  if [ "$STAGE_PASSED" -ne 4 ]; then
+    return 0
+  fi
+  h=$FRONT_HEX
+  l=0
+  while [ "$l" -lt "$LAYERS" ]; do
+    prog_status "$dir/audio_layer_step_cli.macho" /d/model.safetensors "$l" "$h"
+    if [ "$STATUS" -ne 0 ] || [ "${#OUT}" -ne 43008 ]; then
+      return 0
+    fi
+    h=$OUT
+    l=$((l + 1))
+  done
+  STACK_HEX=$h
+  stage_cases "$dir" 8 "$STACK_HEX"
+  PASSED=$((PASSED + STAGE_PASSED))
+  if [ "$STAGE_PASSED" -ne 4 ]; then
+    return 0
+  fi
+  prog_status "$dir/audio_tail_cli.macho" /d/model.safetensors "$STACK_HEX"
+  if [ "$STATUS" -ne 0 ] || [ "${#OUT}" -ne 49152 ]; then
+    return 0
+  fi
+  TAIL_HEX=$OUT
+  stage_cases "$dir" 12 "$TAIL_HEX"
+  PASSED=$((PASSED + STAGE_PASSED))
+  if [ "$STAGE_PASSED" -ne 4 ]; then
+    return 0
+  fi
+  # refusals: exit 2 and nothing on stdout
+  prog_status "$dir/audio_mel_cli.macho"
+  [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && PASSED=$((PASSED + 1))
+  short=$(printf '%s' "$clip" | cut -c 2-)
+  prog_status "$dir/audio_mel_cli.macho" "$short"
+  [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && PASSED=$((PASSED + 1))
+  bad="g$(printf '%s' "$clip" | cut -c 2-)"
+  prog_status "$dir/audio_mel_cli.macho" "$bad"
+  [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && PASSED=$((PASSED + 1))
+  shortmel=$(printf '%s' "$MEL_HEX" | cut -c 2-)
+  prog_status "$dir/audio_front_cli.macho" /d/model.safetensors "$shortmel"
+  [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && PASSED=$((PASSED + 1))
+  prog_status "$dir/audio_front_cli.macho" /d/missing.bin "$MEL_HEX"
+  [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && PASSED=$((PASSED + 1))
+  return 0
+}
+
+POS="$OUT_DIR/positive"
+build_variant "$POS" "$SOURCE"
+run_pipeline "$POS"
+if [ "$PASSED" -ne "$TOTAL" ]; then
+  printf 'audio-encoder: %s of %s checks passed\n' "$PASSED" "$TOTAL" >&2
+  exit 1
+fi
+POS_PASSED=$PASSED
+printf '%s\n' "$MEL_HEX" > "$OUT_DIR/mel.hex"
+printf '%s\n' "$FRONT_HEX" > "$OUT_DIR/front.hex"
+printf '%s\n' "$STACK_HEX" > "$OUT_DIR/stack18.hex"
+printf '%s\n' "$TAIL_HEX" > "$OUT_DIR/tail.hex"
+
+# negative controls: each mutation must change the source and stop at least one check
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+NEG_RESULTS=""
+mutate() {
+  name=$1
+  pattern=$2
+  replacement=$3
+  sed "s/$pattern/$replacement/" "$SOURCE" > "$NEG/$name.kotoba"
+  if cmp -s "$SOURCE" "$NEG/$name.kotoba"; then
+    printf 'negative control %s did not change the source\n' "$name" >&2
+    exit 1
+  fi
+  build_variant "$NEG/$name" "$NEG/$name.kotoba"
+  run_pipeline "$NEG/$name"
+  if [ "$PASSED" -eq "$TOTAL" ]; then
+    printf 'negative control %s still passed the gate\n' "$name" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name=$PASSED/$TOTAL"
+}
+mutate reflect-pad '(- 7678 i)' '(- 7679 i)'
+mutate pad-offset '(- (+ (\* t 160) j) 200)' '(- (+ (* t 160) j) 199)'
+mutate hop-size '(+ (\* t 160) j)' '(+ (* t 161) j)'
+mutate bin-layout '(+ (\* m 24) t)' '(+ (* t 128) m)'
+mutate bin-count '(>= m 128)' '(>= m 127)'
+mutate max-clamp '(f64-lt (f64-from-bits acc) (f64-from-bits (vector-at v i)))' '(f64-lt (f64-from-bits (vector-at v i)) (f64-from-bits acc))'
+mutate normalisation '(lm\/normalize-log (vector-at v i) mx)' '(vector-at v i)'
+mutate front-ignores-mel '(front-from path (dec-run b 0 3072 (vector-alloc 3072)))' '(front-from path (mel-run 0 3072 (vector-alloc 3072)))'
+
+# negative control: a source changed after locking is refused
+printf '\n' >> "$POS/src/audio_ffn.kotoba"
+if "$CLI" compile "$POS/src/audio_front_cli.kotoba" --source-lock "$POS/audio_front_cli.ksl" \
+  --runtime-profile amu-command-fs35 -o "$OUT_DIR/should-not-exist.macho" \
+  > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+rm -f "$SCOPE/d/model.safetensors"
+{
+  printf 'format: itonami.audio-asr-selfhost-gate.v1\n'
+  printf 'amu_cli_sha256: %s\n' "$EXPECTED_CLI_SHA256"
+  printf 'model_sha256: %s\n' "$EXPECTED_MODEL_SHA256"
+  printf 'audio_ffn_source_sha256: %s\n' "$EXPECTED_SOURCE_SHA256"
+  printf 'front_cli_sha256: %s\n' "$EXPECTED_FRONT_SHA256"
+  printf 'step_cli_sha256: %s\n' "$EXPECTED_STEP_SHA256"
+  printf 'tail_cli_sha256: %s\n' "$EXPECTED_TAIL_SHA256"
+  printf 'gate_source_sha256: %s\n' "$EXPECTED_GATE_SHA256"
+  printf 'runtime_profile: amu-command-fs35 (directory on fd 3), one process per stage and layer\n'
+  printf 'clip_sha256: %s\n' "$EXPECTED_CLIP_SHA256"
+  printf 'mel_cli_sha256: %s\n' "$EXPECTED_MEL_SHA256"
+  printf 'front_program_sha256: %s\n' "$(shasum -a 256 "$POS/audio_front_cli.macho" | cut -d ' ' -f 1)"
+  printf 'checks_passed: %s of %s (4 values after the mel, 4 after the front end, 4 after 18 layers, 4 after the tail, 5 refusals)\n' "$POS_PASSED" "$TOTAL"
+  printf 'negative_control_checks_passed:%s\n' "$NEG_RESULTS"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: real speech clip (3840 samples, 24 mel frames, 3 tokens): log-mel + front end + 18 layers + tail on the real Qwen3-ASR-0.6B weights to 1e-11 against CPython float64; structure from the llama.cpp mtmd qwen3a graph, not the original code; position table in float64; the clip is not padded to 30 s as the HF feature extractor does; no chunking beyond one chunk, language model, text, turn or launcher\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"

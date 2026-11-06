@@ -1,0 +1,59 @@
+;; Gate for the real-audio path through the native Qwen3-ASR audio encoder (JUN-925): a 0.24 s clip of
+;; speech (3840 samples) -> 128-bin log-mel -> front end -> 18 layers -> tail. argv 0 is the case
+;; number 0..15, argv 1 the hex output of the stage (cases 0..3 mel, 4..7 front end, 8..11 after 18
+;; layers, 12..15 tail). Expected values come from a CPython float64 pipeline of the same definition
+;; (direct DFT, Slaney filterbank written from the definition, struct/json weights, math.erf); the
+;; native result must agree to 1e-11 relative (absolute below magnitude 1). Exit status 1 = pass.
+(ns itonami.audio-asr-gate
+  (:require [itonami.audio-ffn :as af])
+  (:export [main])
+  (:capabilities #{:cli/args :io/write})) 
+
+(defn- b2i [x :bool] :i64 (if x 1 0))
+(defn- say [s :string] :string (typed-cap-call :io/write :string :string s))
+(defn- arg [i :i64] :string (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- fabs [a :i64] :i64
+  (if (f64-lt (f64-from-bits a) 0.0) (f64-to-bits (f64-neg (f64-from-bits a))) a))
+
+;; |a - ref| < 1e-11 * max(1, |ref|); false for NaN patterns such as the -1 refusal
+(defn- near? [a :i64 ref :i64] :bool
+  (let [d (fabs (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits ref))))
+        m (fabs ref)
+        scale (if (f64-lt 1.0 (f64-from-bits m)) m (f64-to-bits 1.0))]
+    (f64-lt (f64-from-bits d) (f64-mul (f64-from-bits 4442235333156365461) (f64-from-bits scale)))))
+
+(defn- case-result [k :i64] :i64
+  (let [h (arg 1)]
+    (cond
+          (= k 0) (b2i (near? (af/hexn-sum h 3072) 4651697718533195189))
+          (= k 1) (b2i (near? (af/hexn-elem h 3072 0) 4599031757815926702))
+          (= k 2) (b2i (near? (af/hexn-elem h 3072 1000) 4602194719740292972))
+          (= k 3) (b2i (near? (af/hexn-elem h 3072 3071) -4619312379766908812))
+          (= k 4) (b2i (near? (af/hexn-sum h 2688) 4654391924142329285))
+          (= k 5) (b2i (near? (af/hexn-elem h 2688 0) 4602780346816527307))
+          (= k 6) (b2i (near? (af/hexn-elem h 2688 1000) 4600184885757960557))
+          (= k 7) (b2i (near? (af/hexn-elem h 2688 2687) 4610929617200492455))
+          (= k 8) (b2i (near? (af/hexn-sum h 2688) 4654047223817635080))
+          (= k 9) (b2i (near? (af/hexn-elem h 2688 0) 4602738798670681814))
+          (= k 10) (b2i (near? (af/hexn-elem h 2688 1000) 4606250600196810993))
+          (= k 11) (b2i (near? (af/hexn-elem h 2688 2687) 4590991833285259256))
+          (= k 12) (b2i (near? (af/hexn-sum h 3072) 4610281118033092874))
+          (= k 13) (b2i (near? (af/hexn-elem h 3072 0) 4584663649275999850))
+          (= k 14) (b2i (near? (af/hexn-elem h 3072 1000) 4585483528947178934))
+          (= k 15) (b2i (near? (af/hexn-elem h 3072 3071) 4587471180330292144))
+          :else 0)))
+
+(defn- digit-run [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s))
+    acc
+    (let [c (string-code-point-at s i)]
+      (if (and (>= c 48) (<= c 57)) (digit-run s (+ i 1) (+ (* acc 10) (- c 48))) -1))))
+
+(defn main [] :i64
+  (let [a (arg 0)
+        k (if (= (string-length a) 0) -1 (digit-run a 0 0))
+        r (if (< k 0) 0 (case-result k))
+        w (say (string-concat "case " (string-concat (string-from-i64 k)
+            (string-concat (if (= r 1) " pass" " FAIL") "\n"))))]
+    r))

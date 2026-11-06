@@ -19,7 +19,7 @@
             [itonami.qwen-ops :as qo]
             [itonami.safetensors :as st]
             [itonami.weights-file :as wf])
-  (:export [ffn-at ffn-sum attn-at attn-sum layer-at layer-sum step-hex hex-elem hex-sum hexn-elem hexn-sum front-hex tail-hex])
+  (:export [ffn-at ffn-sum attn-at attn-sum layer-at layer-sum step-hex hex-elem hex-sum hexn-elem hexn-sum front-hex front-hex-mel mel-hex tail-hex])
   (:capabilities [:fs/app-data]))
 
 (defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
@@ -489,8 +489,7 @@
   (pos-add (linear-run path wco 896 7680 (feat-run x3 w 0 (vector-alloc 7680)) (zero-vec 896) 0 (vector-alloc 896))
            w 0 (vector-alloc 896)))
 
-;; the three position-encoded tokens as hex (43,008 characters), or "" when the model lacks a tensor
-(defn front-hex [path :string] :string
+(defn- front-from [path :string x0 :vector-i64] :string
   (let [h (wf/wf-header-text path)
         n (wf/wf-header-len path)
         w1 (tensor-off h n (aname "conv2d1.weight"))
@@ -504,17 +503,74 @@
             (not (= (st/st-dim h (aname "conv2d2.weight") 1) 480))
             (not (= (st/st-dim h (aname "conv_out.weight") 1) 7680)))
       ""
-      (let [x0 (mel-run 0 3072 (vector-alloc 3072))
-            x1 (conv-layer path w1 b1 1 128 24 480 x0)
+      (let [x1 (conv-layer path w1 b1 1 128 24 480 x0)
             x2 (conv-layer path w2 b2 480 64 12 480 x1)
             x3 (conv-layer path w3 b3 480 32 6 480 x2)
             t0 (front-token path wco x3 0)
             t1 (front-token path wco x3 1)
             t2 (front-token path wco x3 2)]
-        (if (and (= (vector-count x3) 23040) (= (vector-count t0) 896) (= (vector-count t1) 896) (= (vector-count t2) 896))
+        (if (and (= (vector-count x0) 3072) (= (vector-count x3) 23040) (= (vector-count t0) 896) (= (vector-count t1) 896) (= (vector-count t2) 896))
           (enc-range (concat3 t0 t1 t2) 0 2688)
           "")))))
 
+
+;; the three position-encoded tokens as hex (43,008 characters) for the synthetic mel input, or ""
+;; when the model lacks a tensor
+(defn front-hex [path :string] :string
+  (front-from path (mel-run 0 3072 (vector-alloc 3072))))
+
+;; the same for a real mel: mel-hex is 3072 values (128 bins x 24 frames, index bin * 24 + frame) as
+;; 49,152 hex characters, e.g. the output of mel-hex; "" when it is malformed
+(defn front-hex-mel [path :string mel-hex :string] :string
+  (let [b (string-to-utf8 mel-hex)]
+    (if (or (not (= (bytes-count b) 49152)) (not (all-hex? b 0 49152)))
+      ""
+      (front-from path (dec-run b 0 3072 (vector-alloc 3072))))))
+
+;; ---- the log-mel of a real clip (JUN-925) ---------------------------------------------------
+;; 3840 samples of 16 kHz audio, each as 4 hex digits of the int16 sample + 32768 (15,360
+;; characters), go through whisper's front end: reflect padding of 200 samples on both sides,
+;; 400-sample periodic Hann frames with hop 160 (24 frames; the 25th a centred STFT would give is
+;; dropped, as whisper does), 128 Slaney mel bins (itonami.log-mel), log10 with the 1e-10 floor,
+;; the clamp at (maximum - 8) and (x + 4) / 4. The result is 3072 values, index bin * 24 + frame.
+;; The clip is not padded to 30 s as the HF feature extractor does, so the maximum is the clip's.
+(defn- reflect-ix [i :i64] :i64
+  (if (< i 0) (- 0 i) (if (>= i 3840) (- 7678 i) i)))
+
+(defn- clip-frame [clip :string t :i64 j :i64 acc :string] :string
+  (if (>= j 400)
+    acc
+    (let [src (reflect-ix (- (+ (* t 160) j) 200))]
+      (clip-frame clip t (+ j 1)
+        (string-concat acc (string-substring clip (* 4 src) (+ (* 4 src) 4)))))))
+
+(defn- mel-bins [frame :string m :i64 t :i64 out :vector-i64] :vector-i64
+  (if (>= m 128)
+    out
+    (mel-bins frame (+ m 1) t (vector-assoc! out (+ (* m 24) t) (lm/log-mel-bin-n frame 128 m)))))
+
+(defn- mel-frames [clip :string t :i64 out :vector-i64] :vector-i64
+  (if (>= t 24)
+    out
+    (mel-frames clip (+ t 1) (mel-bins (clip-frame clip t 0 "") 0 t out))))
+
+(defn- vmax [v :vector-i64 i :i64 acc :i64] :i64
+  (if (>= i (vector-count v))
+    acc
+    (vmax v (+ i 1) (if (f64-lt (f64-from-bits acc) (f64-from-bits (vector-at v i))) (vector-at v i) acc))))
+
+(defn- norm-run [v :vector-i64 mx :i64 i :i64 out :vector-i64] :vector-i64
+  (if (>= i (vector-count v))
+    out
+    (norm-run v mx (+ i 1) (vector-assoc! out i (lm/normalize-log (vector-at v i) mx)))))
+
+(defn mel-hex [clip-hex :string] :string
+  (let [b (string-to-utf8 clip-hex)]
+    (if (or (not (= (bytes-count b) 15360)) (not (all-hex? b 0 15360)))
+      ""
+      (let [raw (mel-frames clip-hex 0 (vector-alloc 3072))
+            mx (vmax raw 0 (vector-at raw 0))]
+        (enc-range (norm-run raw mx 0 (vector-alloc 3072)) 0 3072)))))
 ;; ---- the tail: ln_post -> proj1 -> exact GELU -> proj2 (JUN-923) ---------------------------------
 (defn- tail-token [path :string g :vector-i64 b :vector-i64 w1 :i64 c1 :vector-i64 w2 :i64 c2 :vector-i64 x :vector-i64] :vector-i64
   (let [y (layer-norm x g b)
