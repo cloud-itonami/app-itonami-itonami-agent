@@ -1,0 +1,167 @@
+#!/bin/sh
+# Compile and execute the safetensors header reader (built on itonami.ggml-dequant) with
+# the pinned Amu multi-module project CLI, against exact slices of the real header of
+# the downloaded Qwen3-ASR-0.6B model.safetensors checked with CPython's json. It does
+# not read a model file at gate time, run a model, or exercise the agent turn or
+# launcher.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
+EXPECTED_SOURCE_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
+EXPECTED_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
+AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
+EXPECTED_RESULT=44
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+CLI_SHA256=$(shasum -a 256 "$CLI" | cut -d ' ' -f 1)
+if [ "$CLI_SHA256" != "$EXPECTED_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected Amu CLI digest: $CLI_SHA256" >&2
+  exit 2
+fi
+DEQUANT="$REPO_ROOT/kotoba/itonami/ggml_dequant.kotoba"
+SOURCE="$REPO_ROOT/kotoba/itonami/safetensors.kotoba"
+DEQUANT_SHA256=$(shasum -a 256 "$DEQUANT" | cut -d ' ' -f 1)
+if [ "$DEQUANT_SHA256" != "$EXPECTED_DEQUANT_SHA256" ]; then
+  printf '%s\n' "unexpected ggml-dequant source digest: $DEQUANT_SHA256" >&2
+  exit 2
+fi
+SOURCE_SHA256=$(shasum -a 256 "$SOURCE" | cut -d ' ' -f 1)
+if [ "$SOURCE_SHA256" != "$EXPECTED_SOURCE_SHA256" ]; then
+  printf '%s\n' "unexpected safetensors source digest: $SOURCE_SHA256" >&2
+  exit 2
+fi
+
+# run_gate <dir> <source-file>: lock + compile
+run_gate() {
+  dir=$1
+  src=$2
+  gate="$dir/src/safetensors_gate.kotoba"
+  mkdir -p "$dir/src"
+  cp "$DEQUANT" "$dir/src/ggml_dequant.kotoba"
+  cp "$src" "$dir/src/safetensors.kotoba"
+  cat > "$gate" <<'EOF2'
+(ns itonami.safetensors-gate
+  (:require [itonami.safetensors :as st])
+  (:export [main]))
+(defn main [] :i64 (st/match-count))
+EOF2
+  s="$dir/src/safetensors.kotoba"
+  # module lines sorted by name: itonami.safetensors < itonami.safetensors-gate
+  gd="$dir/src/ggml_dequant.kotoba"
+  # modules sorted by name, files sorted by path
+  printf 'KSL2\nentry %s\nmodule itonami.ggml-dequant %s\nmodule itonami.safetensors %s\nmodule itonami.safetensors-gate %s\nfile %s %s\nfile %s %s\nfile %s %s\n' \
+    "$gate" "$gd" "$s" "$gate" \
+    "$(shasum -a 256 "$gd" | cut -d ' ' -f 1)" "$gd" \
+    "$(shasum -a 256 "$s" | cut -d ' ' -f 1)" "$s" \
+    "$(shasum -a 256 "$gate" | cut -d ' ' -f 1)" "$gate" > "$dir/safetensors.ksl"
+  "$CLI" compile "$gate" --source-lock "$dir/safetensors.ksl" -o "$dir/safetensors-tests.macho"
+  codesign --verify --strict "$dir/safetensors-tests.macho"
+}
+
+POS="$OUT_DIR/positive"
+run_gate "$POS" "$SOURCE"
+GATE_PATH="$POS/src/safetensors_gate.kotoba"
+LOCK="$POS/safetensors.ksl"
+PROGRAM="$POS/safetensors-tests.macho"
+DIRECT_RESULT=$("$PROGRAM")
+LOCKED_RESULT=$("$CLI" run "$GATE_PATH" --source-lock "$LOCK")
+ARTIFACT_RESULT=$("$CLI" run "$PROGRAM")
+for result in "$DIRECT_RESULT" "$LOCKED_RESULT" "$ARTIFACT_RESULT"; do
+  if [ "$result" != "$EXPECTED_RESULT" ]; then
+    printf 'safetensors result mismatch: expected %s, got %s\n' "$EXPECTED_RESULT" "$result" >&2
+    exit 1
+  fi
+done
+
+# negative controls: each mutation must change the source and stop the gate
+# from returning the full match count
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+NEG_RESULTS=""
+mutate() {
+  name=$1
+  pattern=$2
+  replacement=$3
+  sed "s/$pattern/$replacement/" "$SOURCE" > "$NEG/$name.kotoba"
+  if cmp -s "$SOURCE" "$NEG/$name.kotoba"; then
+    printf 'negative control %s did not change the source\n' "$name" >&2
+    exit 1
+  fi
+  run_gate "$NEG/$name" "$NEG/$name.kotoba"
+  result=$("$NEG/$name/safetensors-tests.macho")
+  if [ "$result" = "$EXPECTED_RESULT" ]; then
+    printf 'negative control %s still passed the gate\n' "$name" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name=$result"
+}
+mutate dtype-offset '(+ k 9)' '(+ k 8)'
+mutate list-start-offset '(+ k (string-length pat))' '(+ k 1)'
+mutate end-comma '(after-commas e s 1)' '(after-commas e s 0)'
+mutate ndim-count '(+ 1 (count-commas e s 0))' '(count-commas e s 0)'
+mutate scalar-ndim '(= (string-code-point-at e s) 93) 0' '(= (string-code-point-at e s) 93) 1'
+mutate le-scale '(\* scale 256)' '(* scale 16)'
+mutate entry-end '(string-index-of rest "}")' '(string-index-of rest ",")'
+mutate dim-index '(after-commas e s k)' '(after-commas e s (+ k 1))'
+
+# negative control: a source changed after locking is refused
+SOURCE_PATH="$POS/src/safetensors.kotoba"
+printf '\n' >> "$SOURCE_PATH"
+if "$CLI" compile "$GATE_PATH" --source-lock "$LOCK" \
+  -o "$OUT_DIR/should-not-exist.macho" > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+{
+  printf 'format: itonami.safetensors-selfhost-gate.v1\n'
+  printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$CLI_SHA256"
+  printf 'ggml_dequant_source_sha256: %s\n' "$DEQUANT_SHA256"
+  printf 'safetensors_source_sha256: %s\n' "$SOURCE_SHA256"
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)"
+  printf 'direct_result: %s\n' "$DIRECT_RESULT"
+  printf 'locked_run_result: %s\n' "$LOCKED_RESULT"
+  printf 'artifact_run_result: %s\n' "$ARTIFACT_RESULT"
+  printf 'negative_control_results:%s\n' "$NEG_RESULTS"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: bounded safetensors header reading on real header slices; no full 612-tensor header, data area, turn or launcher\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"
