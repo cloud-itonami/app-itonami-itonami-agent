@@ -1,0 +1,148 @@
+;; Turning Qwen token ids back into text (JUN-928): the byte-level BPE vocabulary of Qwen3-ASR as a
+;; GPT-2 style table. vocab.json (a JSON object token -> id, 151,643 entries; its only escapes are
+;; \" and \\) is read through FS2 E requests, searched on bytes for the entry `":<id>,` or `":<id>}`,
+;; and the token's characters are mapped back to bytes with the GPT-2 table: printable Latin-1 bytes
+;; (33..126, 161..172, 174..255) stand for themselves, the other 68 bytes are the code points
+;; 256, 257, ... in ascending byte order. Ids from 151643 up are not in vocab.json: the few the
+;; model emits in a transcript are named here (<|endoftext|>, <|im_start|>, <|im_end|>, <asr_text>),
+;; any other becomes <special:id>. The result is the UTF-8 text of the ids in order.
+(ns itonami.qwen-vocab
+  (:export [vocab-text])
+  (:capabilities [:fs/app-data]))
+
+(defn- frame [op :string path :string tail :string] :string
+  (string-concat "\u0000FS2\u0000"
+    (string-concat op (string-concat path (string-concat "\u0000" tail)))))
+
+(defn- digits-end [s :string i :i64] :i64
+  (if (and (< i (string-length s)) (>= (string-code-point-at s i) 48) (<= (string-code-point-at s i) 57))
+    (digits-end s (+ i 1))
+    i))
+
+(defn- digits-val [s :string i :i64 e :i64 acc :i64] :i64
+  (if (>= i e) acc (digits-val s (+ i 1) e (+ (* acc 10) (- (string-code-point-at s i) 48)))))
+
+;; size of the file from the F metadata ("<mode> <size> ..."), or -1
+(defn- file-size [path :string] :i64
+  (let [r (typed-cap-call :fs/app-data :string :string (frame "F" path ""))]
+    (if (< (string-length r) 6)
+      -1
+      (let [body (string-substring r 5 (string-length r))
+            sp (string-index-of body " ")]
+        (if (< sp 0) -1 (digits-val body (+ sp 1) (digits-end body (+ sp 1)) 0))))))
+
+(defn- copy-chunk [r :bytes i :i64 n :i64 at :i64 out :vector-i64] :vector-i64
+  (if (>= i n)
+    out
+    (copy-chunk r (+ i 1) n at (vector-assoc! out (+ at i) (bytes-at r (+ 5 i))))))
+
+;; the whole file as one vector of bytes, in requests of 262,144 bytes (empty when a read is short)
+(defn- read-bytes [path :string size :i64 at :i64 out :vector-i64] :vector-i64
+  (if (>= at size)
+    out
+    (let [n (if (< (- size at) 262144) (- size at) 262144)
+          r (typed-cap-call :fs/app-data :string :bytes
+              (frame "E" path (string-concat (string-from-i64 at) (string-concat ":" (string-from-i64 n)))))]
+      (if (= (bytes-count r) (+ 5 n))
+        (read-bytes path size (+ at n) (copy-chunk r 0 n at out))
+        (vector-alloc 0)))))
+
+;; index of the closing quote of the entry whose id is `id`: the bytes `"` `:` <id> then `,` or `}`
+(defn- digit-match [v :vector-i64 p :i64 s :string k :i64] :bool
+  (if (>= k (string-length s))
+    true
+    (if (= (vector-at v (+ p k)) (string-code-point-at s k)) (digit-match v p s (+ k 1)) false)))
+
+(defn- find-entry [v :vector-i64 i :i64 n :i64 pat :string pat2 :string] :i64
+  (if (>= i n)
+    -1
+    (if (and (= (vector-at v i) 34) (or (digit-match v i pat 0) (digit-match v i pat2 0)))
+      i
+      (find-entry v (+ i 1) n pat pat2))))
+
+;; position of the opening quote of the key that ends at the quote q: the nearest earlier quote that
+;; is not escaped (an even number of backslashes before it)
+(defn- backslashes [v :vector-i64 p :i64 acc :i64] :i64
+  (if (and (>= p 0) (= (vector-at v p) 92)) (backslashes v (- p 1) (+ acc 1)) acc))
+
+(defn- open-quote [v :vector-i64 p :i64] :i64
+  (if (< p 0)
+    -1
+    (if (and (= (vector-at v p) 34) (= (mod (backslashes v (- p 1) 0) 2) 0))
+      p
+      (open-quote v (- p 1)))))
+
+;; GPT-2 table: code point -> byte
+(defn- cp-byte [cp :i64] :i64
+  (if (< cp 256)
+    cp
+    (let [n (- cp 256)]
+      (if (<= n 32) n (if (<= n 66) (+ 127 (- n 33)) 173)))))
+
+;; store a byte (the result is 1, the number of bytes added)
+(defn- put-byte [out :vector-i64 at :i64 b :i64] :i64
+  (let [z (vector-assoc! out at b)] 1))
+
+(defn- put-str [out :vector-i64 at :i64 s :string i :i64] :i64
+  (if (>= i (string-length s))
+    at
+    (put-str out (+ at (put-byte out at (string-code-point-at s i))) s (+ i 1))))
+
+;; bytes of the key between the quotes, unescaped and mapped through the table, appended to out at
+;; `at`; returns the new length
+(defn- emit-key [v :vector-i64 i :i64 end :i64 out :vector-i64 at :i64] :i64
+  (if (>= i end)
+    at
+    (let [b (vector-at v i)]
+      (cond (= b 92)
+            (let [c (vector-at v (+ i 1))]
+              (emit-key v (+ i 2) end out (+ at (put-byte out at c)) ))
+            (< b 128)
+            (emit-key v (+ i 1) end out (+ at (put-byte out at (cp-byte b))))
+            :else
+            (let [cp (+ (* (bit-and b 31) 64) (bit-and (vector-at v (+ i 1)) 63))]
+              (emit-key v (+ i 2) end out (+ at (put-byte out at (cp-byte cp)))))))))
+
+;; the bytes of token `id` appended to out at `at`; returns the new length, or -1 when not found
+(defn- emit-token [v :vector-i64 n :i64 id :i64 out :vector-i64 at :i64] :i64
+  (cond (= id 151643) (put-str out at "<|endoftext|>" 0)
+        (= id 151644) (put-str out at "<|im_start|>" 0)
+        (= id 151645) (put-str out at "<|im_end|>" 0)
+        (= id 151704) (put-str out at "<asr_text>" 0)
+        (>= id 151643) (put-str out (put-str out at "<special:" 0) (string-concat (string-from-i64 id) ">") 0)
+        :else
+        (let [s (string-from-i64 id)
+              q (find-entry v 0 n (string-concat "\":" (string-concat s ",")) (string-concat "\":" (string-concat s "}")))]
+          (if (< q 0)
+            -1
+            (let [o (open-quote v (- q 1))]
+              (if (< o 0) -1 (emit-key v (+ o 1) q out at)))))))
+
+(defn- ids-run [v :vector-i64 n :i64 ids :string i :i64 out :vector-i64 at :i64] :i64
+  (if (>= i (string-length ids))
+    at
+    (let [e (digits-end ids i)]
+      (if (= e i)
+        -1
+        (let [na (emit-token v n (digits-val ids i e 0) out at)]
+          (if (< na 0)
+            -1
+            (ids-run v n ids (+ e 1) out na)))))))
+
+(defn- slice-bytes [src :vector-i64 n :i64 i :i64 out :vector-i64] :vector-i64
+  (if (>= i n) out (slice-bytes src n (+ i 1) (vector-assoc! out i (vector-at src i)))))
+
+;; the text of the comma-separated token ids, reading the vocabulary at `vocab-path`; "" when the file,
+;; an id or the text cannot be read (an empty id list gives "")
+(defn vocab-text [vocab-path :string ids :string] :string
+  (let [size (file-size vocab-path)]
+    (if (or (< size 1000) (> size 4000000) (= (string-length ids) 0) (> (string-length ids) 4000))
+      ""
+      (let [v (read-bytes vocab-path size 0 (vector-alloc size))]
+        (if (not (= (vector-count v) size))
+          ""
+          (let [out (vector-alloc 64000)
+                n (ids-run v size ids 0 out 0)]
+            (if (< n 1)
+              ""
+              (string-from-utf8 (bytes-from-vector-i64 (slice-bytes out n 0 (vector-alloc n)))))))))))
