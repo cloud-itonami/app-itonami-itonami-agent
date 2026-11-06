@@ -1,0 +1,156 @@
+;; Reading a safetensors file's header (JUN-885): the file starts with the header length
+;; as a little-endian u64 (8 bytes), followed by that many bytes of JSON mapping each
+;; tensor name to {"dtype": ..., "shape": [...], "data_offsets": [begin, end]} (offsets
+;; relative to the data area that follows the header). The header arrives as a string
+;; and is read by plain string search: the tensor's entry is found by its exact quoted
+;; name (so layers.1 never matches layers.10), fields are found by key inside that
+;; entry, so key order does not matter. st-header-len reads the 8-byte prefix from hex.
+;; The seed has no JSON parser or byte reader; the data area is not read here. Built
+;; on itonami.ggml-dequant's byte-at.
+(ns itonami.safetensors
+  (:require [itonami.ggml-dequant :as gd])
+  (:export [st-header-len st-find st-dtype st-ndim st-dim st-begin st-end match-count]))
+
+(defn- digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
+
+;; end of the digit run starting at i
+(defn- digits-end [s :string i :i64] :i64
+  (if (and (< i (string-length s)) (digit? (string-code-point-at s i))) (digits-end s (+ i 1)) i))
+(defn- digits-val [s :string i :i64 e :i64 acc :i64] :i64
+  (if (>= i e) acc (digits-val s (+ i 1) e (+ (* acc 10) (- (string-code-point-at s i) 48)))))
+;; the number at s[i..], or -1 when there is no digit there
+(defn- num-at [s :string i :i64] :i64
+  (let [e (digits-end s i)]
+    (if (= e i) -1 (digits-val s i e 0))))
+
+;; little-endian u64 from 8 bytes of hex (16 characters), or -1 when unreadable
+(defn- le-run [hex :string i :i64 acc :i64 scale :i64] :i64
+  (if (>= i 8)
+    acc
+    (let [b (gd/byte-at hex i)]
+      (if (< b 0) -1 (le-run hex (+ i 1) (+ acc (* b scale)) (* scale 256))))))
+(defn st-header-len [hex :string] :i64
+  (if (= (string-length hex) 16) (le-run hex 0 0 1) -1))
+
+;; index of the entry of tensor name (its quoted name followed by an object), or -1
+(defn st-find [h :string name :string] :i64
+  (string-index-of h (string-concat "\"" (string-concat name "\":{"))))
+
+;; the entry's object text, up to and including its closing brace ("" when absent)
+(defn- entry [h :string name :string] :string
+  (let [i (st-find h name)]
+    (if (< i 0)
+      ""
+      (let [rest (string-substring h i (string-length h))
+            e (string-index-of rest "}")]
+        (if (< e 0) "" (string-substring rest 0 (+ e 1)))))))
+
+(defn st-dtype [h :string name :string] :string
+  (let [e (entry h name)
+        k (string-index-of e "\"dtype\":\"")]
+    (if (< k 0)
+      ""
+      (let [rest (string-substring e (+ k 9) (string-length e))
+            q (string-index-of rest "\"")]
+        (if (< q 0) "" (string-substring rest 0 q))))))
+
+;; index just after the opening bracket of the list under key in entry e, or -1
+(defn- list-start [e :string key :string] :i64
+  (let [pat (string-concat "\"" (string-concat key "\":["))
+        k (string-index-of e pat)]
+    (if (< k 0) -1 (+ k (string-length pat)))))
+
+;; index just after the n-th comma at or after i (stops at ']'), or -1
+(defn- after-commas [e :string i :i64 n :i64] :i64
+  (cond (= n 0) i
+        (>= i (string-length e)) -1
+        (= (string-code-point-at e i) 93) -1
+        (= (string-code-point-at e i) 44) (after-commas e (+ i 1) (- n 1))
+        :else (after-commas e (+ i 1) n)))
+
+(defn- count-commas [e :string i :i64 acc :i64] :i64
+  (cond (>= i (string-length e)) acc
+        (= (string-code-point-at e i) 93) acc
+        (= (string-code-point-at e i) 44) (count-commas e (+ i 1) (+ acc 1))
+        :else (count-commas e (+ i 1) acc)))
+
+;; number of dimensions (0 for a scalar), -1 when the tensor or its shape is missing
+(defn st-ndim [h :string name :string] :i64
+  (let [e (entry h name)
+        s (list-start e "shape")]
+    (cond (< s 0) -1
+          (= (string-code-point-at e s) 93) 0
+          :else (+ 1 (count-commas e s 0)))))
+
+;; dimension k, or -1 when absent
+(defn st-dim [h :string name :string k :i64] :i64
+  (let [e (entry h name)
+        s (list-start e "shape")]
+    (if (< s 0)
+      -1
+      (let [p (after-commas e s k)]
+        (if (< p 0) -1 (num-at e p))))))
+
+(defn st-begin [h :string name :string] :i64
+  (let [e (entry h name)
+        s (list-start e "data_offsets")]
+    (if (< s 0) -1 (num-at e s))))
+
+(defn st-end [h :string name :string] :i64
+  (let [e (entry h name)
+        s (list-start e "data_offsets")]
+    (if (< s 0) -1 (let [p (after-commas e s 1)] (if (< p 0) -1 (num-at e p))))))
+
+;; ---- gate fixture: exact slices of the real Qwen3-ASR-0.6B header plus two synthetic entries ----
+(defn- header [] :string
+  "{\"thinker.audio_tower.conv2d1.bias\":{\"dtype\":\"BF16\",\"shape\":[480],\"data_offsets\":[0,960]},\"thinker.audio_tower.conv_out.weight\":{\"dtype\":\"BF16\",\"shape\":[896,7680],\"data_offsets\":[8305920,22068480]},\"thinker.audio_tower.layers.1.fc1.weight\":{\"dtype\":\"BF16\",\"shape\":[3584,896],\"data_offsets\":[41366528,47789056]},\"thinker.audio_tower.layers.10.fc1.weight\":{\"dtype\":\"BF16\",\"shape\":[3584,896],\"data_offsets\":[60657408,67079936]},\"thinker.model.embed_tokens.weight\":{\"dtype\":\"BF16\",\"shape\":[151936,1024],\"data_offsets\":[683917312,995082240]},\"x.y\":{\"data_offsets\":[5,9],\"shape\":[2,2],\"dtype\":\"F32\"},\"s\":{\"dtype\":\"F32\",\"shape\":[],\"data_offsets\":[9,13]}}")
+
+(defn- b2i [x :bool] :i64 (if x 1 0))
+
+;; 44 checks: 5 real tensors x 6 fields, 2 synthetic entries (reordered keys, scalar),
+;; 3 absent-name checks, 2 header-length checks
+(defn match-count [] :i64
+  (+ (b2i (string=? (st-dtype (header) "thinker.audio_tower.conv2d1.bias") "BF16"))
+    (+ (b2i (= (st-ndim (header) "thinker.audio_tower.conv2d1.bias") 1))
+    (+ (b2i (= (st-dim (header) "thinker.audio_tower.conv2d1.bias" 0) 480))
+    (+ (b2i (= (st-dim (header) "thinker.audio_tower.conv2d1.bias" 1) -1))
+    (+ (b2i (= (st-begin (header) "thinker.audio_tower.conv2d1.bias") 0))
+    (+ (b2i (= (st-end (header) "thinker.audio_tower.conv2d1.bias") 960))
+    (+ (b2i (string=? (st-dtype (header) "thinker.audio_tower.conv_out.weight") "BF16"))
+    (+ (b2i (= (st-ndim (header) "thinker.audio_tower.conv_out.weight") 2))
+    (+ (b2i (= (st-dim (header) "thinker.audio_tower.conv_out.weight" 0) 896))
+    (+ (b2i (= (st-dim (header) "thinker.audio_tower.conv_out.weight" 1) 7680))
+    (+ (b2i (= (st-begin (header) "thinker.audio_tower.conv_out.weight") 8305920))
+    (+ (b2i (= (st-end (header) "thinker.audio_tower.conv_out.weight") 22068480))
+    (+ (b2i (string=? (st-dtype (header) "thinker.audio_tower.layers.1.fc1.weight") "BF16"))
+    (+ (b2i (= (st-ndim (header) "thinker.audio_tower.layers.1.fc1.weight") 2))
+    (+ (b2i (= (st-dim (header) "thinker.audio_tower.layers.1.fc1.weight" 0) 3584))
+    (+ (b2i (= (st-dim (header) "thinker.audio_tower.layers.1.fc1.weight" 1) 896))
+    (+ (b2i (= (st-begin (header) "thinker.audio_tower.layers.1.fc1.weight") 41366528))
+    (+ (b2i (= (st-end (header) "thinker.audio_tower.layers.1.fc1.weight") 47789056))
+    (+ (b2i (string=? (st-dtype (header) "thinker.audio_tower.layers.10.fc1.weight") "BF16"))
+    (+ (b2i (= (st-ndim (header) "thinker.audio_tower.layers.10.fc1.weight") 2))
+    (+ (b2i (= (st-dim (header) "thinker.audio_tower.layers.10.fc1.weight" 0) 3584))
+    (+ (b2i (= (st-dim (header) "thinker.audio_tower.layers.10.fc1.weight" 1) 896))
+    (+ (b2i (= (st-begin (header) "thinker.audio_tower.layers.10.fc1.weight") 60657408))
+    (+ (b2i (= (st-end (header) "thinker.audio_tower.layers.10.fc1.weight") 67079936))
+    (+ (b2i (string=? (st-dtype (header) "thinker.model.embed_tokens.weight") "BF16"))
+    (+ (b2i (= (st-ndim (header) "thinker.model.embed_tokens.weight") 2))
+    (+ (b2i (= (st-dim (header) "thinker.model.embed_tokens.weight" 0) 151936))
+    (+ (b2i (= (st-dim (header) "thinker.model.embed_tokens.weight" 1) 1024))
+    (+ (b2i (= (st-begin (header) "thinker.model.embed_tokens.weight") 683917312))
+    (+ (b2i (= (st-end (header) "thinker.model.embed_tokens.weight") 995082240))
+    (+ (b2i (string=? (st-dtype (header) "x.y") "F32"))
+    (+ (b2i (= (st-ndim (header) "x.y") 2))
+    (+ (b2i (= (st-dim (header) "x.y" 0) 2))
+    (+ (b2i (= (st-begin (header) "x.y") 5))
+    (+ (b2i (= (st-end (header) "x.y") 9))
+    (+ (b2i (= (st-ndim (header) "s") 0))
+    (+ (b2i (= (st-dim (header) "s" 0) -1))
+    (+ (b2i (= (st-begin (header) "s") 9))
+    (+ (b2i (= (st-end (header) "s") 13))
+    (+ (b2i (= (st-find (header) "thinker.audio_tower.nope") -1))
+    (+ (b2i (string=? (st-dtype (header) "thinker.audio_tower.nope") ""))
+    (+ (b2i (= (st-begin (header) "thinker.audio_tower.nope") -1))
+    (+ (b2i (= (st-header-len "3023010000000000") 74544))
+    (b2i (= (st-header-len "30230100000000zz") -1))))))))))))))))))))))))))))))))))))))))))))))
