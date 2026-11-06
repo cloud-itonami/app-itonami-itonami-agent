@@ -1,0 +1,150 @@
+;; One Qwen3 attention layer for the native Qwen3-ASR LLM / Qwen3-TTS talker (JUN-883):
+;; per-head RMSNorm of q and k (QK-norm, weights over head_dim), NeoX RoPE, grouped-query
+;; attention (the query heads of a group share one KV head) and a causal softmax
+;; shifted by the row maximum. Scalar steps on an analytic fixture (head width 4, 4
+;; query heads over 2 KV heads, sequence 3, theta 1e6, eps 1e-6); the seed has no
+;; vectors, so a host or later unit drives the same arithmetic over real tensors and
+;; adds the output projection. Built on itonami.qwen-ops (rms-inv, rms-apply, RoPE) and
+;; itonami.nn-ops (exp-wide). Every f64 value is an i64 bit pattern.
+(ns itonami.qwen-attn
+  (:require [itonami.nn-ops :as nn]
+            [itonami.qwen-ops :as qo])
+  (:export [attn-out match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- flt [a :i64 b :i64] :bool (f64-lt (f64-from-bits a) (f64-from-bits b)))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+(defn- theta [] :i64 (f64-to-bits 1000000.0))
+(defn- eps [] :i64 (f64-to-bits 0.000001))
+
+;; ---- fixtures: q (i,h,e), k (j,g,e), v (j,g,e) and the QK-norm weights -----------------
+(defn- fq [i :i64 h :i64 e :i64] :i64
+  (fdiv (itof (- (mod (+ (+ (+ (* i 7) (* h 5)) (* e 3)) 1) 11) 5)) (f64-to-bits 4.0)))
+(defn- fk [j :i64 g :i64 e :i64] :i64
+  (fdiv (itof (- (mod (+ (+ (+ (* j 5) (* g 7)) (* e 2)) 3) 9) 4)) (f64-to-bits 3.0)))
+(defn- fv [j :i64 g :i64 e :i64] :i64
+  (fdiv (itof (- (mod (+ (+ (+ (* j 3) (* g 5)) (* e 7)) 2) 7) 3)) (f64-to-bits 2.0)))
+(defn- wq [e :i64] :i64 (fadd (f64-to-bits 0.8) (fmul (f64-to-bits 0.1) (itof e))))
+(defn- wk [e :i64] :i64 (fsub (f64-to-bits 1.1) (fmul (f64-to-bits 0.1) (itof e))))
+
+;; ---- q after QK-norm and RoPE -----------------------------------------------------------
+(defn- q-inv [i :i64 h :i64] :i64
+  (qo/rms-inv (fadd (fadd (fadd (fmul (fq i h 0) (fq i h 0)) (fmul (fq i h 1) (fq i h 1)))
+                          (fmul (fq i h 2) (fq i h 2)))
+                    (fmul (fq i h 3) (fq i h 3)))
+              4 (eps)))
+(defn- q-norm [i :i64 h :i64 e :i64] :i64 (qo/rms-apply (fq i h e) (q-inv i h) (wq e)))
+(defn- q-rot [i :i64 h :i64 e :i64] :i64
+  (if (< e 2)
+    (qo/rope-first (q-norm i h e) (q-norm i h (+ e 2)) i e 4 (theta))
+    (qo/rope-second (q-norm i h (- e 2)) (q-norm i h e) i (- e 2) 4 (theta))))
+
+;; ---- k after QK-norm and RoPE (position j) ----------------------------------------------
+(defn- k-inv [j :i64 g :i64] :i64
+  (qo/rms-inv (fadd (fadd (fadd (fmul (fk j g 0) (fk j g 0)) (fmul (fk j g 1) (fk j g 1)))
+                          (fmul (fk j g 2) (fk j g 2)))
+                    (fmul (fk j g 3) (fk j g 3)))
+              4 (eps)))
+(defn- k-norm [j :i64 g :i64 e :i64] :i64 (qo/rms-apply (fk j g e) (k-inv j g) (wk e)))
+(defn- k-rot [j :i64 g :i64 e :i64] :i64
+  (if (< e 2)
+    (qo/rope-first (k-norm j g e) (k-norm j g (+ e 2)) j e 4 (theta))
+    (qo/rope-second (k-norm j g (- e 2)) (k-norm j g e) j (- e 2) 4 (theta))))
+
+;; ---- scores, causal softmax, weighted values ----------------------------------------------
+;; the KV head of query head h: heads are grouped in twos
+(defn- kv-head [h :i64] :i64 (quot h 2))
+
+(defn- score [i :i64 h :i64 j :i64] :i64
+  (let [g (kv-head h)]
+    (fdiv (fadd (fadd (fadd (fmul (q-rot i h 0) (k-rot j g 0)) (fmul (q-rot i h 1) (k-rot j g 1)))
+                      (fmul (q-rot i h 2) (k-rot j g 2)))
+                (fmul (q-rot i h 3) (k-rot j g 3)))
+          (f64-to-bits 2.0))))
+
+(defn- max-run [i :i64 h :i64 j :i64 acc :i64] :i64
+  (cond (> j i) acc
+        :else (max-run i h (+ j 1) (let [s (score i h j)] (if (flt acc s) s acc)))))
+
+(defn- denom-run [i :i64 h :i64 mx :i64 j :i64 acc :i64] :i64
+  (cond (> j i) acc
+        :else (denom-run i h mx (+ j 1) (fadd acc (nn/exp-wide (fsub (score i h j) mx))))))
+
+(defn- mix-run [i :i64 h :i64 e :i64 mx :i64 z :i64 j :i64 acc :i64] :i64
+  (cond (> j i) acc
+        :else (mix-run i h e mx z (+ j 1)
+                       (fadd acc (fmul (fdiv (nn/exp-wide (fsub (score i h j) mx)) z)
+                                       (fv j (kv-head h) e))))))
+
+;; output element e of query head h at position i (causal: keys 0..i)
+(defn attn-out [i :i64 h :i64 e :i64] :i64
+  (let [mx (max-run i h 0 (fsub (zero) (f64-to-bits 1000000000.0)))
+        z (denom-run i h mx 0 (zero))]
+    (mix-run i h e mx z 0 (zero))))
+
+;; ---- gate: 3 positions x 4 query heads x 4 elements = 48 --------------------------------
+(defn- want [n :i64] :i64
+  (cond
+        (= n 0) -4620693217682128896
+        (= n 1) -4620693217682128896
+        (= n 2) -4620693217682128896
+        (= n 3) -4620693217682128896
+        (= n 4) -4620693217682128896
+        (= n 5) -4620693217682128896
+        (= n 6) -4620693217682128896
+        (= n 7) -4620693217682128896
+        (= n 8) -4613937818241073152
+        (= n 9) -4613937818241073152
+        (= n 10) -4613937818241073152
+        (= n 11) -4613937818241073152
+        (= n 12) -4613937818241073152
+        (= n 13) -4613937818241073152
+        (= n 14) -4613937818241073152
+        (= n 15) -4613937818241073152
+        (= n 16) 4605819243873114700
+        (= n 17) 4605819243873114700
+        (= n 18) 4605819243873114700
+        (= n 19) 4605819243873114700
+        (= n 20) -4623261546274791079
+        (= n 21) -4623261546274791079
+        (= n 22) -4623261546274791079
+        (= n 23) -4623261546274791079
+        (= n 24) -4633120889492454090
+        (= n 25) -4633120889492454090
+        (= n 26) -4633120889492454090
+        (= n 27) -4633120889492454090
+        (= n 28) -4614372431536422967
+        (= n 29) -4614372431536422967
+        (= n 30) -4614372431536422967
+        (= n 31) -4614372431536422967
+        (= n 32) -4617590902741219816
+        (= n 33) -4617590902741219816
+        (= n 34) -4617590902741219816
+        (= n 35) -4617590902741219816
+        (= n 36) 4603549620608352774
+        (= n 37) 4603549620608352774
+        (= n 38) 4603549620608352774
+        (= n 39) 4603549620608352774
+        (= n 40) 4587534346874676128
+        (= n 41) 4587534346874676128
+        (= n 42) 4587534346874676128
+        (= n 43) 4587534346874676128
+        (= n 44) -4620539741803256684
+        (= n 45) -4620539741803256684
+        (= n 46) -4620539741803256684
+        (= n 47) -4620539741803256684
+        :else (zero)))
+(defn- close? [a :i64 b :i64] :bool
+  (f64-le (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b)))
+          (f64-mul 0.000000001 (f64-max 1.0 (f64-abs (f64-from-bits b))))))
+(defn- out-run [n :i64 acc :i64] :i64
+  (if (>= n 48)
+    acc
+    (out-run (+ n 1)
+             (if (close? (attn-out (quot n 16) (quot (mod n 16) 4) (mod n 4)) (want n)) (+ acc 1) acc))))
+
+(defn match-count [] :i64 (out-run 0 0))
