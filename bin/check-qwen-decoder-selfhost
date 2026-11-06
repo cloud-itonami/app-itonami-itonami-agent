@@ -1,0 +1,312 @@
+#!/bin/sh
+# Compile and run the native Qwen3 decoder (itonami.qwen-decoder) on the real Qwen3-ASR-0.6B model with
+# the pinned Amu multi-module project CLI. The model is cloned (APFS clonefile) into a directory granted
+# to the guests on fd 3, together with an empty /d/st state directory; the decoder keeps its hidden
+# states and per-layer key/value caches there as binary f64 files (FS2 B/C writes, E reads). One process
+# per layer and per vocabulary slice, because the native runtime never reclaims memory. Expected values
+# come from one-off CPython float64 runs of the same definition (struct/json weights, math.exp/sin/cos)
+# and are compared to 1e-9 relative. It does not run audio, a tokenizer, the agent turn or the launcher.
+
+set -eu
+
+if [ "$#" -ne 3 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir> <model.safetensors>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+MODEL=$3
+EXPECTED_CLI_SHA256=ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
+EXPECTED_MODEL_SHA256=79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
+EXPECTED_BF16_SHA256=09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b
+EXPECTED_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
+EXPECTED_LOGMEL_SHA256=daf0d273329a7b5a05aef4255b985f2e1c031c74f32596e9578add46980b1f5e
+EXPECTED_NNOPS_SHA256=4693d227291a31b8c59378b0ab114715a983dfbfd17308d5b478181793a3604d
+EXPECTED_QWENOPS_SHA256=a5a8744046a81edd21d0740395e874c89ed518e24092a5e889c78b2b2ba51576
+EXPECTED_ST_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
+EXPECTED_WF_SHA256=8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
+EXPECTED_SOURCE_SHA256=b6930680d5a095e547bd5356e3460ee5b6e34ee3ecaa9265a760e6e728f9b0a6
+EXPECTED_DECODER_SHA256=1bc4da57141d43c53605f2288c8bffa76634cc63ee209592d5c7467cfca2e45e
+EXPECTED_CALC_SHA256=0e4c2b8cdb6388474f36996c938aaea7578b90490e8eb3c5e8e8218e7cd1cd60
+LAYERS=28
+TOTAL=14
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in /*) ;; *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;; esac
+case "$MODEL" in /*) ;; *) printf '%s\n' "model path must be absolute" >&2; exit 2 ;; esac
+if [ ! -x "$CLI" ]; then printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2; exit 2; fi
+if [ ! -f "$MODEL" ]; then printf '%s\n' "model file is missing: $MODEL" >&2; exit 2; fi
+if [ -e "$OUT_DIR" ]; then printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2; exit 2; fi
+
+check_sha() {
+  actual=$(shasum -a 256 "$1" | cut -d ' ' -f 1)
+  if [ "$actual" != "$2" ]; then
+    printf 'unexpected digest for %s: %s\n' "$1" "$actual" >&2
+    exit 2
+  fi
+}
+KD="$REPO_ROOT/kotoba/itonami"
+AD="$REPO_ROOT/kotoba/agent_cli"
+SOURCE="$KD/qwen_decoder.kotoba"
+check_sha "$CLI" "$EXPECTED_CLI_SHA256"
+check_sha "$MODEL" "$EXPECTED_MODEL_SHA256"
+check_sha "$KD/bf16.kotoba" "$EXPECTED_BF16_SHA256"
+check_sha "$KD/ggml_dequant.kotoba" "$EXPECTED_DEQUANT_SHA256"
+check_sha "$KD/log_mel.kotoba" "$EXPECTED_LOGMEL_SHA256"
+check_sha "$KD/nn_ops.kotoba" "$EXPECTED_NNOPS_SHA256"
+check_sha "$KD/qwen_ops.kotoba" "$EXPECTED_QWENOPS_SHA256"
+check_sha "$KD/safetensors.kotoba" "$EXPECTED_ST_SHA256"
+check_sha "$KD/weights_file.kotoba" "$EXPECTED_WF_SHA256"
+check_sha "$SOURCE" "$EXPECTED_SOURCE_SHA256"
+check_sha "$AD/qwen_decoder_cli.kotoba" "$EXPECTED_DECODER_SHA256"
+check_sha "$AD/qwen_calc_cli.kotoba" "$EXPECTED_CALC_SHA256"
+
+SCOPE="$OUT_DIR/scope"
+mkdir -m 700 -p "$SCOPE/d/st"
+/bin/cp -c "$MODEL" "$SCOPE/d/model.safetensors"
+
+# compile_one <dir> <entry-file-name>: lock + compile with the FS35 command profile
+compile_one() {
+  dir=$1
+  entry=$2
+  s="$dir/src"
+  {
+    printf 'KSL2\nentry %s/%s.kotoba\n' "$s" "$entry"
+    if [ "$entry" = "qwen_calc_cli" ]; then
+      printf 'module agent-cli.qwen-calc-cli %s/qwen_calc_cli.kotoba\n' "$s"
+      printf 'file %s %s/qwen_calc_cli.kotoba\n' "$(shasum -a 256 "$s/qwen_calc_cli.kotoba" | cut -d ' ' -f 1)" "$s"
+    else
+      printf 'module agent-cli.qwen-decoder-cli %s/qwen_decoder_cli.kotoba\n' "$s"
+      for pair in "itonami.bf16 bf16" "itonami.ggml-dequant ggml_dequant" "itonami.log-mel log_mel" \
+                  "itonami.nn-ops nn_ops" "itonami.qwen-decoder qwen_decoder" "itonami.qwen-ops qwen_ops" \
+                  "itonami.safetensors safetensors" "itonami.weights-file weights_file"; do
+        set -- $pair
+        printf 'module %s %s/%s.kotoba\n' "$1" "$s" "$2"
+      done
+      for f in bf16 ggml_dequant log_mel nn_ops qwen_decoder qwen_decoder_cli qwen_ops safetensors weights_file; do
+        printf 'file %s %s/%s.kotoba\n' "$(shasum -a 256 "$s/$f.kotoba" | cut -d ' ' -f 1)" "$s" "$f"
+      done
+    fi
+  } > "$dir/$entry.ksl"
+  "$CLI" compile "$s/$entry.kotoba" --source-lock "$dir/$entry.ksl" \
+    --runtime-profile amu-command-fs35 -o "$dir/$entry.macho"
+  codesign --verify --strict "$dir/$entry.macho"
+}
+
+# build_variant <dir> <decoder-source>
+build_variant() {
+  dir=$1
+  src=$2
+  s="$dir/src"
+  mkdir -p "$s"
+  for f in bf16 ggml_dequant log_mel nn_ops qwen_ops safetensors weights_file; do
+    cp "$KD/$f.kotoba" "$s/$f.kotoba"
+  done
+  cp "$src" "$s/qwen_decoder.kotoba"
+  cp "$AD/qwen_decoder_cli.kotoba" "$s/qwen_decoder_cli.kotoba"
+  cp "$AD/qwen_calc_cli.kotoba" "$s/qwen_calc_cli.kotoba"
+  compile_one "$dir" qwen_decoder_cli
+  compile_one "$dir" qwen_calc_cli
+}
+
+# prog_status <program> <args...>: runs a guest with the scope on fd 3; sets OUT and STATUS
+prog_status() {
+  prog=$1
+  shift
+  set +e
+  OUT=$("$prog" "$@" 3< "$SCOPE" 2>/dev/null)
+  STATUS=$?
+  set -e
+}
+
+# near <a-bits> <b-bits> <tolerance exponent>: succeeds when the values agree
+near() {
+  set +e
+  "$CALC" near "$1" "$2" "$3" > /dev/null 2>&1
+  r=$?
+  set -e
+  [ "$r" -eq 1 ]
+}
+
+# prefill <dir> <ids>: embed, apply the layers at position 0, no cache
+prefill() {
+  dir=$1
+  ids=$2
+  n=$(printf '%s' "$ids" | awk -F, '{print NF}')
+  rm -f "$SCOPE"/d/st/*.bin
+  prog_status "$dir/qwen_decoder_cli.macho" embed /d/model.safetensors "$ids"
+  [ "$STATUS" -eq 0 ] || return 1
+  l=0
+  while [ "$l" -lt "$LAYERS" ]; do
+    prog_status "$dir/qwen_decoder_cli.macho" layer /d/model.safetensors "$l" 0 "$n"
+    [ "$STATUS" -eq 0 ] || return 1
+    l=$((l + 1))
+  done
+}
+
+# head_all <dir>: the best row and logit over the whole vocabulary, and the sum of all logits;
+# sets HEAD_ROW, HEAD_BITS, HEAD_SUM
+head_all() {
+  dir=$1
+  HEAD_ROW=""
+  HEAD_BITS=""
+  sums=""
+  for range in 0:30000 30000:60000 60000:90000 90000:120000 120000:151936; do
+    prog_status "$dir/qwen_decoder_cli.macho" head /d/model.safetensors "${range%:*}" "${range##*:}"
+    [ "$STATUS" -eq 0 ] || return 1
+    set -- $OUT
+    if [ -z "$HEAD_BITS" ] || near_greater "$2" "$HEAD_BITS"; then
+      HEAD_ROW=$1
+      HEAD_BITS=$2
+    fi
+    sums="$sums $3"
+  done
+  prog_status "$CALC" fsum $sums
+  [ "$STATUS" -eq 0 ] || return 1
+  HEAD_SUM=$OUT
+}
+
+# near_greater <a-bits> <b-bits>: true when a > b as doubles
+near_greater() {
+  set +e
+  "$CALC" greater "$1" "$2" > /dev/null 2>&1
+  r=$?
+  set -e
+  [ "$r" -eq 1 ]
+}
+
+# run_checks <dir>: sets PASSED out of TOTAL
+run_checks() {
+  dir=$1
+  PASSED=0
+  # A: six prompt tokens (<|im_start|>system\n<|im_end|>\n<|im_start|>) against CPython
+  if prefill "$dir" 151644,8948,198,151645,198,151644 && head_all "$dir"; then
+    [ "$HEAD_ROW" = "151645" ] && PASSED=$((PASSED + 1))
+    near "$HEAD_BITS" 4624326306219015785 9 && PASSED=$((PASSED + 1))
+    near "$HEAD_SUM" -4543203917565198777 9 && PASSED=$((PASSED + 1))
+  fi
+  [ "$PASSED" -eq 3 ] || return 0
+  # B: "The capital of France is" -> " Paris"
+  if prefill "$dir" 785,6722,315,9625,374 && head_all "$dir"; then
+    [ "$HEAD_ROW" = "12095" ] && PASSED=$((PASSED + 1))
+    near "$HEAD_BITS" 4628157689627416259 9 && PASSED=$((PASSED + 1))
+    near "$HEAD_SUM" 4696373389068368172 9 && PASSED=$((PASSED + 1))
+  fi
+  [ "$PASSED" -eq 6 ] || return 0
+  # C: one more token through the key/value caches (position 5, one token) against the CPython run
+  # over all six tokens
+  prog_status "$dir/qwen_decoder_cli.macho" embed /d/model.safetensors 12095
+  if [ "$STATUS" -eq 0 ]; then
+    l=0
+    ok=1
+    while [ "$l" -lt "$LAYERS" ]; do
+      prog_status "$dir/qwen_decoder_cli.macho" layer /d/model.safetensors "$l" 5 1
+      [ "$STATUS" -eq 0 ] || { ok=0; break; }
+      l=$((l + 1))
+    done
+    if [ "$ok" -eq 1 ] && head_all "$dir"; then
+      [ "$HEAD_ROW" = "13" ] && PASSED=$((PASSED + 1))
+      near "$HEAD_BITS" 4629015471761731137 9 && PASSED=$((PASSED + 1))
+      near "$HEAD_SUM" 4698357917258825862 9 && PASSED=$((PASSED + 1))
+    fi
+  fi
+  [ "$PASSED" -eq 9 ] || return 0
+  # refusals: exit 2 and nothing on stdout
+  prog_status "$dir/qwen_decoder_cli.macho" layer /d/model.safetensors 28 0 1
+  [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && PASSED=$((PASSED + 1))
+  prog_status "$dir/qwen_decoder_cli.macho" embed /d/model.safetensors 151936
+  [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && PASSED=$((PASSED + 1))
+  prog_status "$dir/qwen_decoder_cli.macho" head /d/model.safetensors 100 100
+  [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && PASSED=$((PASSED + 1))
+  prog_status "$dir/qwen_decoder_cli.macho" embed /d/missing.bin 785
+  [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && PASSED=$((PASSED + 1))
+  prog_status "$dir/qwen_decoder_cli.macho" bogus /d/model.safetensors
+  [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && PASSED=$((PASSED + 1))
+  return 0
+}
+
+POS="$OUT_DIR/positive"
+build_variant "$POS" "$SOURCE"
+CALC="$POS/qwen_calc_cli.macho"
+run_checks "$POS"
+if [ "$PASSED" -ne "$TOTAL" ]; then
+  printf 'qwen-decoder: %s of %s checks passed\n' "$PASSED" "$TOTAL" >&2
+  exit 1
+fi
+POS_PASSED=$PASSED
+
+# negative controls: each mutation must change the source and stop at least one check
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+NEG_RESULTS=""
+mutate() {
+  name=$1
+  pattern=$2
+  replacement=$3
+  sed "s/$pattern/$replacement/" "$SOURCE" > "$NEG/$name.kotoba"
+  if cmp -s "$SOURCE" "$NEG/$name.kotoba"; then
+    printf 'negative control %s did not change the source\n' "$name" >&2
+    exit 1
+  fi
+  build_variant "$NEG/$name" "$NEG/$name.kotoba"
+  run_checks "$NEG/$name"
+  if [ "$PASSED" -eq "$TOTAL" ]; then
+    printf 'negative control %s still passed the gate\n' "$name" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name=$PASSED/$TOTAL"
+}
+mutate rope-theta '(f64-to-bits 1000000.0)' '(f64-to-bits 100000.0)'
+mutate rope-pair '(fadd (fmul x1 c) (fmul x0 s))' '(fsub (fmul x1 c) (fmul x0 s))'
+mutate gqa-mapping 'kvb (\* (quot h 2) 128)' 'kvb (* (mod h 8) 128)'
+mutate score-scale '(f64-sqrt 128.0)' '(f64-sqrt 64.0)'
+mutate causal-length 'len (+ (+ pos0 t) 1)' 'len (+ pos0 n)'
+mutate qk-norm-weights '(norm-rope q0 n 16 (read-vec path qn 128)' '(norm-rope q0 n 16 (read-vec path kn 128)'
+mutate mlp-gate '(fmul (qo\/silu (vector-at g i)) (vector-at u i))' '(qo\/silu (vector-at g i))'
+mutate rms-eps '(f64-to-bits 0.000001)' '(f64-to-bits 0.001)'
+mutate attn-residual '(add-vecs x o 0 (vector-alloc (\* n 1024)))' '(add-vecs o o 0 (vector-alloc (* n 1024)))'
+mutate cache-offset '(copy-into (copy-into out old 0 (\* pos0 1024) 0) fresh 0 (\* n 1024) (\* pos0 1024))' '(copy-into (copy-into out old 0 (* pos0 1024) 0) fresh 0 (* n 1024) 0)'
+mutate head-norm-dropped '(let \[hn (rms-seg x 0 1024 w (vector-alloc 1024) 0)' '(let [hn x'
+mutate position-offset '(itof (+ pos0 t))' '(itof t)'
+
+# negative control: a source changed after locking is refused
+printf '\n' >> "$POS/src/qwen_decoder.kotoba"
+if "$CLI" compile "$POS/src/qwen_decoder_cli.kotoba" --source-lock "$POS/qwen_decoder_cli.ksl" \
+  --runtime-profile amu-command-fs35 -o "$OUT_DIR/should-not-exist.macho" \
+  > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+rm -f "$SCOPE/d/model.safetensors"
+{
+  printf 'format: itonami.qwen-decoder-selfhost-gate.v1\n'
+  printf 'amu_cli_sha256: %s\n' "$EXPECTED_CLI_SHA256"
+  printf 'model_sha256: %s\n' "$EXPECTED_MODEL_SHA256"
+  printf 'qwen_decoder_source_sha256: %s\n' "$EXPECTED_SOURCE_SHA256"
+  printf 'decoder_cli_sha256: %s\n' "$EXPECTED_DECODER_SHA256"
+  printf 'calc_cli_sha256: %s\n' "$EXPECTED_CALC_SHA256"
+  printf 'runtime_profile: amu-command-fs35 (directory on fd 3), one process per layer and vocabulary slice\n'
+  printf 'checks_passed: %s of %s (3 for the system prompt, 3 for "The capital of France is", 3 for one cached token, 5 refusals)\n' "$POS_PASSED" "$TOTAL"
+  printf 'negative_control_checks_passed:%s\n' "$NEG_RESULTS"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: prefill of 5 and 6 tokens and one cached decode step through the 28 layers, the final norm and the 151,936-row lm_head on the real Qwen3-ASR-0.6B weights to 1e-9 against CPython float64; mrope treated as plain RoPE; no audio injection, tokenizer, generation loop, turn or launcher\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"
