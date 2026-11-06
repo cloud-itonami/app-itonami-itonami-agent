@@ -11,7 +11,7 @@ reads the header); activations are internal `vector-f64` arrays. LayerNorm uses 
 torch default; `config.json` names no eps) and the exact GELU (`itonami.gelu-erf`). The input
 token is x[i] = (((3 i + 1) mod 11) - 5) / 4.
 
-Gate: `bin/check-audio-ffn-selfhost <cli> <out-dir> <model.safetensors>`, 22 cases (11 feed-forward, 11 attention; see the last section), one process
+Gate: `bin/check-audio-ffn-selfhost <cli> <out-dir> <model.safetensors>`, 33 cases (11 feed-forward, 11 attention, 11 whole layer; see the last sections), one process
 per case: layers 0 and 5, the sum of the 896 outputs and outputs 0, 447, 895, plus an index past
 the end, a layer that does not exist and a missing file returning -1. Expected values come from a
 one-off CPython float64 computation of the same sublayer (struct/json for the weights, `math.erf`
@@ -30,9 +30,9 @@ Findings for the Amu seed gaps in JUN-876:
   (three arguments). They work in private functions and in `let`, with `:vector-f64` parameter
   types, under `--source-lock`; a plain single-file `amu run` reports EABI.
 - There is no collector in the native runtime: a fourth evaluation of the sublayer in one process
-  traps (exit 133) while two succeed. The gate therefore runs one process per case. Building the
-  vectors by `conj` allocates a lot; a pre-sized vector would need a constructor the seed does not
-  have.
+  traps (exit 133) while two succeed. The gate therefore runs one process per case. Building a
+  `vector-f64` by `conj` copies the whole vector on every append (a 3584-element vector costs about
+  50 MB, 100 of them exhaust the roughly 1 GB arena); see the layer section for the fix.
 - `E6015 a multi-module compile needs pinned inputs` again came from unbalanced parentheses in
   the gate source (found with a paren-depth check), not from the compiler's limits.
 
@@ -61,3 +61,24 @@ caught.
 Not covered: how the real model chunks or windows the audio, positional embeddings, the conv2d
 front end, the projector, the decoder. The function above is the standard definition, not read
 from the model code, so equality with the original implementation is not claimed.
+
+## The whole layer (JUN-921)
+
+`layer-at path layer idx` and `layer-sum path layer` compose the two halves for the three tokens:
+h_t = x_t + attn(LN1(x))_t, then out_t = h_t + ffn(LN2(h_t)) with the layer's own
+`final_layer_norm`, `fc1` and `fc2`. Layers 0 and 5 agree with the CPython composition to 1e-12
+relative (the sum and outputs 0, 1000, 2687, an index past the end, a missing layer, a missing
+file: 11 more cases, 33 in all). One evaluation takes about 1.2 s and 570 MB.
+
+The first composition trapped (exit 133, 1.1 GB resident): feed-forward after attention for
+three tokens needs about 3584-element vectors nine times over, and `conj` copies. The module now
+keeps activations in `vector-i64` arrays of f64 bit patterns, allocated with `vector-alloc` and
+filled in place with `vector-assoc!` (the weights are already handled as bit patterns). That
+measured 100 allocations of 3584 elements in 4 MB against 1 GB for `conj`, and the feed-forward
+evaluation went from about 1 GB to 126 MB. The numbers are unchanged: the earlier 22 cases pass
+without edits to their expected values. Four more mutations (the feed-forward input of token 1,
+the token order of the concatenation, the feed-forward skipped for token 2, a slice offset) are
+caught, 21 in all.
+
+Not covered: positional embeddings, how the real model chunks audio, the conv2d front end, the
+projector, the decoder, any layer other than 0 and 5, equality with the original implementation.
