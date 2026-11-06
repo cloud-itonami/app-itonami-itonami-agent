@@ -24,7 +24,7 @@
 
 ;; One sublayer evaluation allocates a lot and the seed has no collector, so a process can run
 ;; only a couple of them. The gate script therefore runs this program once per case (argv 0 is the
-;; case number 0..21) and adds up the exit statuses (1 = case passed).
+;; case number 0..32) and adds up the exit statuses (1 = case passed).
 (defn- arg [i :i64] :string (typed-cap-call :cli/args :string :string (string-from-i64 i)))
 
 (defn- case-result [k :i64] :i64
@@ -50,6 +50,17 @@
         (= k 19) (b2i (= (af/attn-at (model) 0 2688) -1))
         (= k 20) (b2i (= (af/attn-sum (model) 99) -1))
         (= k 21) (b2i (= (af/attn-sum "/d/missing.bin" 0) -1))
+        (= k 22) (b2i (near? (af/layer-sum (model) 0) 4621473550632080843))
+        (= k 23) (b2i (near? (af/layer-at (model) 0 0) -4617256392001445219))
+        (= k 24) (b2i (near? (af/layer-at (model) 0 1000) 4607044219684668432))
+        (= k 25) (b2i (near? (af/layer-at (model) 0 2687) -4618585706938139114))
+        (= k 26) (b2i (near? (af/layer-sum (model) 5) -4606545420463390511))
+        (= k 27) (b2i (near? (af/layer-at (model) 5 0) -4614245064221868174))
+        (= k 28) (b2i (near? (af/layer-at (model) 5 1000) 4609435117640878197))
+        (= k 29) (b2i (near? (af/layer-at (model) 5 2687) -4619906852700434452))
+        (= k 30) (b2i (= (af/layer-at (model) 0 2688) -1))
+        (= k 31) (b2i (= (af/layer-sum (model) 99) -1))
+        (= k 32) (b2i (= (af/layer-sum "/d/missing.bin" 0) -1))
         :else 0))
 
 (defn- digit-run [s :string i :i64 acc :i64] :i64

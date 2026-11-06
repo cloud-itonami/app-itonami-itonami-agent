@@ -2,7 +2,9 @@
 ;;   out = x + fc2(gelu(fc1(LayerNorm(x))))      (every projection with its bias)
 ;; for one 896-wide token. The weights stay in the safetensors file and are read one row at a
 ;; time with FS2 E requests (itonami.weights-file reads the header); activations live in internal
-;; vector-f64 arrays, which the seed allows only inside a module (exports are i64 bit patterns).
+;; vector-i64 arrays of f64 bit patterns (vector-alloc, filled in place with vector-assoc!; a
+;; vector-f64 built by conj copies itself on every append and exhausts the arena), which the
+;; seed allows only inside a module (exports are i64 bit patterns).
 ;; LayerNorm uses eps 1e-5 (the torch default; config.json names none) and the exact GELU.
 ;; erf and exp are series, so results are compared with CPython to a tolerance, not bit for bit.
 ;; The input token t is x[i] = (((3 i + 1 + 5 t) mod 11) - 5) / 4 (t = 0 for the feed-forward half).
@@ -15,7 +17,7 @@
             [itonami.nn-ops :as nn]
             [itonami.safetensors :as st]
             [itonami.weights-file :as wf])
-  (:export [ffn-at ffn-sum attn-at attn-sum])
+  (:export [ffn-at ffn-sum attn-at attn-sum layer-at layer-sum])
   (:capabilities [:fs/app-data]))
 
 (defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
@@ -39,21 +41,21 @@
           (f64-to-bits (f64-neg (f64-from-bits pos)))
           pos)))))
 
-(defn- push-bf16 [r :bytes i :i64 n :i64 v :vector-f64] :vector-f64
+(defn- push-bf16 [r :bytes i :i64 n :i64 v :vector-i64] :vector-i64
   (if (>= i n)
     v
     (push-bf16 r (+ i 1) n
-      (vector-f64-conj v (f64-from-bits
-        (bf16-fast (+ (bytes-at r (+ 5 (* 2 i))) (* 256 (bytes-at r (+ 6 (* 2 i)))))))))))
+      (vector-assoc! v i
+        (bf16-fast (+ (bytes-at r (+ 5 (* 2 i))) (* 256 (bytes-at r (+ 6 (* 2 i))))))))))
 
-;; count BF16 elements at absolute file offset off, as a vector ((vector-f64-new) when short)
-(defn- read-vec [path :string off :i64 count :i64] :vector-f64
+;; count BF16 elements at absolute file offset off, as a vector (empty when short)
+(defn- read-vec [path :string off :i64 count :i64] :vector-i64
   (let [r (typed-cap-call :fs/app-data :string :bytes
             (frame "E" path (string-concat (string-from-i64 off)
                               (string-concat ":" (string-from-i64 (* count 2))))))]
     (if (= (bytes-count r) (+ 5 (* count 2)))
-      (push-bf16 r 0 count (vector-f64-new))
-      (vector-f64-new))))
+      (push-bf16 r 0 count (vector-alloc count))
+      (vector-alloc 0))))
 
 ;; absolute data offset of a 2-D or 1-D BF16 tensor, or -1
 (defn- tensor-off [h :string n :i64 name :string] :i64
@@ -66,41 +68,40 @@
   (string-concat "thinker.audio_tower.layers."
     (string-concat (string-from-i64 layer) (string-concat "." tail))))
 
-(defn- vec-sum [v :vector-f64 i :i64 acc :i64] :i64
-  (if (>= i (vector-f64-count v))
+(defn- vec-sum [v :vector-i64 i :i64 acc :i64] :i64
+  (if (>= i (vector-count v))
     acc
-    (vec-sum v (+ i 1) (fadd acc (f64-to-bits (vector-f64-at v i))))))
+    (vec-sum v (+ i 1) (fadd acc (vector-at v i)))))
 
-(defn- sq-dev [v :vector-f64 i :i64 mean :i64 acc :i64] :i64
-  (if (>= i (vector-f64-count v))
+(defn- sq-dev [v :vector-i64 i :i64 mean :i64 acc :i64] :i64
+  (if (>= i (vector-count v))
     acc
-    (let [d (fsub (f64-to-bits (vector-f64-at v i)) mean)]
+    (let [d (fsub (vector-at v i) mean)]
       (sq-dev v (+ i 1) mean (fadd acc (fmul d d))))))
 
-(defn- ln-run [x :vector-f64 g :vector-f64 b :vector-f64 i :i64 mean :i64 inv :i64 out :vector-f64] :vector-f64
-  (if (>= i (vector-f64-count x))
+(defn- ln-run [x :vector-i64 g :vector-i64 b :vector-i64 i :i64 mean :i64 inv :i64 out :vector-i64] :vector-i64
+  (if (>= i (vector-count x))
     out
     (ln-run x g b (+ i 1) mean inv
-      (vector-f64-conj out (f64-from-bits
-        (nn/ln-normalize (f64-to-bits (vector-f64-at x i)) mean inv
-          (f64-to-bits (vector-f64-at g i)) (f64-to-bits (vector-f64-at b i))))))))
+      (vector-assoc! out i
+        (nn/ln-normalize (vector-at x i) mean inv (vector-at g i) (vector-at b i))))))
 
-(defn- layer-norm [x :vector-f64 g :vector-f64 b :vector-f64] :vector-f64
-  (let [n (itof (vector-f64-count x))
+(defn- layer-norm [x :vector-i64 g :vector-i64 b :vector-i64] :vector-i64
+  (let [n (itof (vector-count x))
         mean (fdiv (vec-sum x 0 (zero)) n)
         var (fdiv (sq-dev x 0 mean (zero)) n)
         inv (nn/inv-std var (f64-to-bits 0.00001))]
-    (ln-run x g b 0 mean inv (vector-f64-new))))
+    (ln-run x g b 0 mean inv (vector-alloc (vector-count x)))))
 
-(defn- dot-vec [r :bytes i :i64 cols :i64 x :vector-f64 acc :i64] :i64
+(defn- dot-vec [r :bytes i :i64 cols :i64 x :vector-i64 acc :i64] :i64
   (if (>= i cols)
     acc
     (dot-vec r (+ i 1) cols x
       (fadd acc (fmul (bf16-fast (+ (bytes-at r (+ 5 (* 2 i))) (* 256 (bytes-at r (+ 6 (* 2 i))))))
-                      (f64-to-bits (vector-f64-at x i)))))))
+                      (vector-at x i))))))
 
-;; y[r] = W[r] . x + bias[r] for every row; a short read leaves the vector short
-(defn- linear-run [path :string woff :i64 rows :i64 cols :i64 x :vector-f64 bias :vector-f64 r :i64 out :vector-f64] :vector-f64
+;; y[r] = W[r] . x + bias[r] for every row; a short read gives an empty vector
+(defn- linear-run [path :string woff :i64 rows :i64 cols :i64 x :vector-i64 bias :vector-i64 r :i64 out :vector-i64] :vector-i64
   (if (>= r rows)
     out
     (let [row (typed-cap-call :fs/app-data :string :bytes
@@ -108,32 +109,28 @@
                                   (string-concat ":" (string-from-i64 (* cols 2))))))]
       (if (= (bytes-count row) (+ 5 (* cols 2)))
         (linear-run path woff rows cols x bias (+ r 1)
-          (vector-f64-conj out (f64-from-bits
-            (fadd (dot-vec row 0 cols x (zero)) (f64-to-bits (vector-f64-at bias r))))))
-        (vector-f64-new)))))
+          (vector-assoc! out r (fadd (dot-vec row 0 cols x (zero)) (vector-at bias r))))
+        (vector-alloc 0)))))
 
-(defn- gelu-run [v :vector-f64 i :i64 out :vector-f64] :vector-f64
-  (if (>= i (vector-f64-count v))
+(defn- gelu-run [v :vector-i64 i :i64 out :vector-i64] :vector-i64
+  (if (>= i (vector-count v))
     out
-    (gelu-run v (+ i 1)
-      (vector-f64-conj out (f64-from-bits (ge/gelu-erf (f64-to-bits (vector-f64-at v i))))))))
+    (gelu-run v (+ i 1) (vector-assoc! out i (ge/gelu-erf (vector-at v i))))))
 
-(defn- add-run [a :vector-f64 b :vector-f64 i :i64 out :vector-f64] :vector-f64
-  (if (>= i (vector-f64-count a))
+(defn- add-run [a :vector-i64 b :vector-i64 i :i64 out :vector-i64] :vector-i64
+  (if (>= i (vector-count a))
     out
-    (add-run a b (+ i 1)
-      (vector-f64-conj out (f64-from-bits
-        (fadd (f64-to-bits (vector-f64-at a i)) (f64-to-bits (vector-f64-at b i))))))))
+    (add-run a b (+ i 1) (vector-assoc! out i (fadd (vector-at a i) (vector-at b i))))))
 
-(defn- input-run [t :i64 i :i64 n :i64 v :vector-f64] :vector-f64
+(defn- input-run [t :i64 i :i64 n :i64 v :vector-i64] :vector-i64
   (if (>= i n)
     v
     (input-run t (+ i 1) n
-      (vector-f64-conj v (f64-from-bits
-        (fdiv (itof (- (mod (+ (* 3 i) (+ 1 (* 5 t))) 11) 5)) (f64-to-bits 4.0)))))))
+      (vector-assoc! v i
+        (fdiv (itof (- (mod (+ (* 3 i) (+ 1 (* 5 t))) 11) 5)) (f64-to-bits 4.0))))))
 
 ;; the whole sublayer, or an empty vector when anything cannot be read
-(defn- ffn [path :string layer :i64] :vector-f64
+(defn- ffn-on [path :string layer :i64 x :vector-i64] :vector-i64
   (let [h (wf/wf-header-text path)
         n (wf/wf-header-len path)
         gn (tensor-off h n (lname layer "final_layer_norm.weight"))
@@ -147,56 +144,57 @@
             (not (= (st/st-dim h (lname layer "fc1.weight") 1) 896))
             (not (= (st/st-dim h (lname layer "fc2.weight") 0) 896))
             (not (= (st/st-dim h (lname layer "fc2.weight") 1) 3584)))
-      (vector-f64-new)
-      (let [x (input-run 0 0 896 (vector-f64-new))
-            y (layer-norm x (read-vec path gn 896) (read-vec path bn 896))
-            a (linear-run path w1 3584 896 y (read-vec path b1 3584) 0 (vector-f64-new))
-            g (gelu-run a 0 (vector-f64-new))
-            c (linear-run path w2 896 3584 g (read-vec path b2 896) 0 (vector-f64-new))]
-        (if (and (= (vector-f64-count a) 3584) (= (vector-f64-count c) 896))
-          (add-run x c 0 (vector-f64-new))
-          (vector-f64-new))))))
+      (vector-alloc 0)
+      (let [y (layer-norm x (read-vec path gn 896) (read-vec path bn 896))
+            a (linear-run path w1 3584 896 y (read-vec path b1 3584) 0 (vector-alloc 3584))
+            g (gelu-run a 0 (vector-alloc 3584))
+            c (linear-run path w2 896 3584 g (read-vec path b2 896) 0 (vector-alloc 896))]
+        (if (and (= (vector-count a) 3584) (= (vector-count c) 896))
+          (add-run x c 0 (vector-alloc 896))
+          (vector-alloc 0))))))
+
+(defn- ffn [path :string layer :i64] :vector-i64
+  (ffn-on path layer (input-run 0 0 896 (vector-alloc 896))))
 
 ;; output element idx as f64 bits, or -1
 (defn ffn-at [path :string layer :i64 idx :i64] :i64
   (let [o (ffn path layer)]
-    (if (or (< idx 0) (>= idx (vector-f64-count o)))
+    (if (or (< idx 0) (>= idx (vector-count o)))
       -1
-      (f64-to-bits (vector-f64-at o idx)))))
+      (vector-at o idx))))
 
 ;; sequential sum of the 896 outputs as f64 bits, or -1
 (defn ffn-sum [path :string layer :i64] :i64
   (let [o (ffn path layer)]
-    (if (= (vector-f64-count o) 896) (vec-sum o 0 (zero)) -1)))
+    (if (= (vector-count o) 896) (vec-sum o 0 (zero)) -1)))
 
 ;; ---- the attention half ---------------------------------------------------------------------
-(defn- dot-range [a :vector-f64 b :vector-f64 base :i64 i :i64 n :i64 acc :i64] :i64
+(defn- dot-range [a :vector-i64 b :vector-i64 base :i64 i :i64 n :i64 acc :i64] :i64
   (if (>= i n)
     acc
     (dot-range a b base (+ i 1) n
-      (fadd acc (fmul (f64-to-bits (vector-f64-at a (+ base i)))
-                      (f64-to-bits (vector-f64-at b (+ base i))))))))
+      (fadd acc (fmul (vector-at a (+ base i)) (vector-at b (+ base i)))))))
 
 ;; q . k over one head of 64 times the scale 1/8
-(defn- score [q :vector-f64 k :vector-f64 base :i64] :i64
+(defn- score [q :vector-i64 k :vector-i64 base :i64] :i64
   (fmul (dot-range q k base 0 64 (zero)) (f64-to-bits 0.125)))
 
 (defn- fmax [a :i64 b :i64] :i64 (if (f64-lt (f64-from-bits a) (f64-from-bits b)) b a))
 
 ;; p0 v0[j] + p1 v1[j] + p2 v2[j]
-(defn- mix [v0 :vector-f64 v1 :vector-f64 v2 :vector-f64 j :i64 p0 :i64 p1 :i64 p2 :i64] :i64
-  (fadd (fadd (fmul p0 (f64-to-bits (vector-f64-at v0 j)))
-              (fmul p1 (f64-to-bits (vector-f64-at v1 j))))
-        (fmul p2 (f64-to-bits (vector-f64-at v2 j)))))
+(defn- mix [v0 :vector-i64 v1 :vector-i64 v2 :vector-i64 j :i64 p0 :i64 p1 :i64 p2 :i64] :i64
+  (fadd (fadd (fmul p0 (vector-at v0 j))
+              (fmul p1 (vector-at v1 j)))
+        (fmul p2 (vector-at v2 j))))
 
-(defn- ctx-fill [v0 :vector-f64 v1 :vector-f64 v2 :vector-f64 base :i64 d :i64 p0 :i64 p1 :i64 p2 :i64 out :vector-f64] :vector-f64
+(defn- ctx-fill [v0 :vector-i64 v1 :vector-i64 v2 :vector-i64 base :i64 d :i64 p0 :i64 p1 :i64 p2 :i64 out :vector-i64] :vector-i64
   (if (>= d 64)
     out
     (ctx-fill v0 v1 v2 base (+ d 1) p0 p1 p2
-      (vector-f64-conj out (f64-from-bits (mix v0 v1 v2 (+ base d) p0 p1 p2))))))
+      (vector-assoc! out (+ base d) (mix v0 v1 v2 (+ base d) p0 p1 p2)))))
 
 ;; the context vector of token q over all 14 heads, softmax over the three keys
-(defn- ctx-heads [q :vector-f64 k0 :vector-f64 k1 :vector-f64 k2 :vector-f64 v0 :vector-f64 v1 :vector-f64 v2 :vector-f64 h :i64 out :vector-f64] :vector-f64
+(defn- ctx-heads [q :vector-i64 k0 :vector-i64 k1 :vector-i64 k2 :vector-i64 v0 :vector-i64 v1 :vector-i64 v2 :vector-i64 h :i64 out :vector-i64] :vector-i64
   (if (>= h 14)
     out
     (let [base (* h 64)
@@ -211,25 +209,27 @@
       (ctx-heads q k0 k1 k2 v0 v1 v2 (+ h 1)
         (ctx-fill v0 v1 v2 base 0 (fdiv e0 z) (fdiv e1 z) (fdiv e2 z) out)))))
 
-(defn- project [path :string woff :i64 boff :i64 x :vector-f64] :vector-f64
-  (linear-run path woff 896 896 x (read-vec path boff 896) 0 (vector-f64-new)))
+(defn- project [path :string woff :i64 boff :i64 x :vector-i64] :vector-i64
+  (linear-run path woff 896 896 x (read-vec path boff 896) 0 (vector-alloc 896)))
 
 ;; out vector of token t: x_t + out_proj(ctx_t)
-(defn- attn-token [path :string wo :i64 bo :i64 x :vector-f64 q :vector-f64 k0 :vector-f64 k1 :vector-f64 k2 :vector-f64 v0 :vector-f64 v1 :vector-f64 v2 :vector-f64] :vector-f64
-  (let [ctx (ctx-heads q k0 k1 k2 v0 v1 v2 0 (vector-f64-new))
-        o (linear-run path wo 896 896 ctx (read-vec path bo 896) 0 (vector-f64-new))]
-    (if (= (vector-f64-count o) 896) (add-run x o 0 (vector-f64-new)) (vector-f64-new))))
+(defn- attn-token [path :string wo :i64 bo :i64 x :vector-i64 q :vector-i64 k0 :vector-i64 k1 :vector-i64 k2 :vector-i64 v0 :vector-i64 v1 :vector-i64 v2 :vector-i64] :vector-i64
+  (let [ctx (ctx-heads q k0 k1 k2 v0 v1 v2 0 (vector-alloc 896))
+        o (linear-run path wo 896 896 ctx (read-vec path bo 896) 0 (vector-alloc 896))]
+    (if (= (vector-count o) 896) (add-run x o 0 (vector-alloc 896)) (vector-alloc 0))))
 
-(defn- concat-run [src :vector-f64 i :i64 acc :vector-f64] :vector-f64
-  (if (>= i (vector-f64-count src))
-    acc
-    (concat-run src (+ i 1) (vector-f64-conj acc (vector-f64-at src i)))))
+(defn- concat-run [src :vector-i64 i :i64 at :i64 out :vector-i64] :vector-i64
+  (if (>= i (vector-count src))
+    out
+    (concat-run src (+ i 1) at (vector-assoc! out (+ at i) (vector-at src i)))))
 
-(defn- concat3 [a :vector-f64 b :vector-f64 c :vector-f64] :vector-f64
-  (concat-run c 0 (concat-run b 0 a)))
+(defn- concat3 [a :vector-i64 b :vector-i64 c :vector-i64] :vector-i64
+  (let [n (vector-count a)
+        out (vector-alloc (* 3 n))]
+    (concat-run c 0 (* 2 n) (concat-run b 0 n (concat-run a 0 0 out)))))
 
 ;; all three outputs concatenated (2688 elements), or an empty vector when anything cannot be read
-(defn- attn [path :string layer :i64] :vector-f64
+(defn- attn [path :string layer :i64] :vector-i64
   (let [h (wf/wf-header-text path)
         n (wf/wf-header-len path)
         gn (tensor-off h n (lname layer "self_attn_layer_norm.weight"))
@@ -245,12 +245,12 @@
     (if (or (< gn 0) (< bn 0) (< wq 0) (< bq 0) (< wk 0) (< bk 0) (< wv 0) (< bv 0) (< wo 0) (< bo 0)
             (not (= (st/st-dim h (lname layer "self_attn.q_proj.weight") 0) 896))
             (not (= (st/st-dim h (lname layer "self_attn.q_proj.weight") 1) 896)))
-      (vector-f64-new)
+      (vector-alloc 0)
       (let [g (read-vec path gn 896)
             b (read-vec path bn 896)
-            x0 (input-run 0 0 896 (vector-f64-new))
-            x1 (input-run 1 0 896 (vector-f64-new))
-            x2 (input-run 2 0 896 (vector-f64-new))
+            x0 (input-run 0 0 896 (vector-alloc 896))
+            x1 (input-run 1 0 896 (vector-alloc 896))
+            x2 (input-run 2 0 896 (vector-alloc 896))
             h0 (layer-norm x0 g b)
             h1 (layer-norm x1 g b)
             h2 (layer-norm x2 g b)
@@ -266,19 +266,52 @@
             o0 (attn-token path wo bo x0 q0 k0 k1 k2 v0 v1 v2)
             o1 (attn-token path wo bo x1 q1 k0 k1 k2 v0 v1 v2)
             o2 (attn-token path wo bo x2 q2 k0 k1 k2 v0 v1 v2)]
-        (if (and (= (vector-f64-count k2) 896) (= (vector-f64-count v2) 896) (= (vector-f64-count q2) 896)
-                 (= (vector-f64-count o0) 896) (= (vector-f64-count o1) 896) (= (vector-f64-count o2) 896))
+        (if (and (= (vector-count k2) 896) (= (vector-count v2) 896) (= (vector-count q2) 896)
+                 (= (vector-count o0) 896) (= (vector-count o1) 896) (= (vector-count o2) 896))
           (concat3 o0 o1 o2)
-          (vector-f64-new))))))
+          (vector-alloc 0))))))
 
 ;; output element idx (token idx / 896, dimension idx mod 896) as f64 bits, or -1
 (defn attn-at [path :string layer :i64 idx :i64] :i64
   (let [o (attn path layer)]
-    (if (or (< idx 0) (>= idx (vector-f64-count o)))
+    (if (or (< idx 0) (>= idx (vector-count o)))
       -1
-      (f64-to-bits (vector-f64-at o idx)))))
+      (vector-at o idx))))
 
 ;; sequential sum of the 2688 outputs as f64 bits, or -1
 (defn attn-sum [path :string layer :i64] :i64
   (let [o (attn path layer)]
-    (if (= (vector-f64-count o) 2688) (vec-sum o 0 (zero)) -1)))
+    (if (= (vector-count o) 2688) (vec-sum o 0 (zero)) -1)))
+
+;; ---- the whole layer: attention half, then the feed-forward half on each token -----------------
+(defn- slice-run [v :vector-i64 i :i64 end :i64 out :vector-i64] :vector-i64
+  (if (>= i end)
+    out
+    (slice-run v (+ i 1) end (vector-assoc! out (- i (- end 896)) (vector-at v i)))))
+
+(defn- token-of [v :vector-i64 t :i64] :vector-i64
+  (slice-run v (* t 896) (* (+ t 1) 896) (vector-alloc 896)))
+
+;; h = x + attn(LN1(x));  out = h + ffn(LN2(h)), for the three tokens; empty when anything fails
+(defn- encoder-layer [path :string layer :i64] :vector-i64
+  (let [a (attn path layer)]
+    (if (= (vector-count a) 2688)
+      (let [f0 (ffn-on path layer (token-of a 0))
+            f1 (ffn-on path layer (token-of a 1))
+            f2 (ffn-on path layer (token-of a 2))]
+        (if (and (= (vector-count f0) 896) (= (vector-count f1) 896) (= (vector-count f2) 896))
+          (concat3 f0 f1 f2)
+          (vector-alloc 0)))
+      (vector-alloc 0))))
+
+;; output element idx of the layer (token idx / 896, dimension idx mod 896) as f64 bits, or -1
+(defn layer-at [path :string layer-index :i64 idx :i64] :i64
+  (let [o (encoder-layer path layer-index)]
+    (if (or (< idx 0) (>= idx (vector-count o)))
+      -1
+      (vector-at o idx))))
+
+;; sequential sum of the 2688 layer outputs as f64 bits, or -1
+(defn layer-sum [path :string layer-index :i64] :i64
+  (let [o (encoder-layer path layer-index)]
+    (if (= (vector-count o) 2688) (vec-sum o 0 (zero)) -1)))
