@@ -17,23 +17,25 @@
 ## Two CLIs — 分離の正本（hermes agent CLI / itonami agent CLI）
 
 `hermes` と `itonami-agent` は **同じ profile フォーマットを共有する別物**。
-store・状態・推論 rail を混ぜない:
+store・状態を混ぜない。推論 rail も、下の Awai Otehon の例外を除いて混ぜない:
 
 | | hermes agent CLI | itonami-agent CLI |
 |---|---|---|
 | 実体 | Hermes Agent（Python, upstream） | 本 repo（Kotoba/Amu selfhost native kexe が必須。旧 `.cljk`/kbb 経路は移行中） |
 | profile store | `~/.hermes/profiles/<name>/` | `~/.itonami/profiles/<name>/`（`ITONAMI_DIR`） |
 | 状態 / DB | `~/.hermes/` 配下（sessions・executions.db 等） | `~/.itonami/` 配下（runs・receipts 等） |
-| 推論 | config.yaml `model:` — openrouter 等 | itonami.edn `:inference` — murakumo（mishima 等） |
-| murakumo / mishima | **使わない** | **専用** |
+| 推論 | config.yaml `model:` — openrouter 等。Awai Otehon の profile は、明示した Awai node の `/v1` も使える | itonami.edn `:inference` — murakumo（mishima 等） |
+| murakumo / mishima | Awai Otehon の profile に限り、Awai node の `/v1` 経由で使える。それ以外は**使わない** | **使う** |
 | 移動 | `profile export`（itonami store → Hermes） | `profile import`（Hermes → itonami store） |
 
 この表は profile 形式と store の契約を示す。`profile import/export` の現行
 CLI route は selfhost 資格未取得であり、移行完了まで起動手順に使わない。
 
-- **Hermes agent profile に murakumo / mishima を使わない** — config.yaml の
+- **Awai Otehon 以外の Hermes agent profile に murakumo / mishima を使わない** — config.yaml の
   `model:` でも、cron job の `model` / `provider` pin でも（job の pin が
   config より優先で拾われるため、両方を禁じる）。
+- **Awai Otehon の例外は Hermes 側だけに適用する**（`network-awai/network-awai-apex` ADR 0026 D4）。
+  本 repo の selfhost 必須と、下の `:deny-hosts` は変えない。
 - **itonami.edn の `:inference` は itonami-agent CLI 専用。** Hermes は
   itonami.edn を読まない（読み飛ばすだけ）。逆に itonami-agent の推論は
   `:inference` の rails のみ（`:deny-hosts` に openrouter）。
