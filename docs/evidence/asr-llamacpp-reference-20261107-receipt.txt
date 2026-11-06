@@ -1,0 +1,17 @@
+format: itonami.asr-llamacpp-reference.v1
+ran: 2026-11-07, local one-off oracle (not CI, not a gate)
+llama.cpp: 0.7.0 build 11669 commit 620d2225c (Homebrew llama-mtmd-cli)
+model_source: huggingface.co ggml-org/Qwen3-ASR-0.6B-GGUF revision 928ab958557df9aa2ef1c93e0e83c7ad0933fae2
+Qwen3-ASR-0.6B-bf16.gguf: 1509343168 bytes sha256 12b2894d9a7c98cd8f26670f5a47ab738f42bcc98df21e109be493870c71ba50
+mmproj-Qwen3-ASR-0.6B-bf16.gguf: 378575520 bytes sha256 dae36c855f9a82a8916bea2238b24bda69a39d8da8b2f46dee7c103775656039
+command: llama-mtmd-cli -m <gguf> -mm <mmproj> --audio <wav> -p "<__media__>" --temp 0 -n 80 < /dev/null
+clips:
+  c55 (5.5 s cut (88,000 samples)): language Japanese<asr_text>ザウェザー は いつ に し て そう ワイダサイデット 2 ううううウォーク トゥザ パーク しと バイザン。
+  c60 (6.0 s cut (96,000)): language Japanese<asr_text>ザウェザー は いつ 9 歳 で そう ワイダサイデット 2 うう walk 2 ザ パーク しと バイザ レイク。
+  c65 (6.5 s cut (104,000)): language Japanese<asr_text>ザウェザー は 2 人 で そう、ウィダサイデット 2 は 2 人 、ウォーク 2 は パーク 、シット バイザレック 、アンドハブ あ。
+  off (100,000 samples from 1.5 s): language Japanese<asr_text>そう、ウィーダサイドトゥーをウォークトゥザパークシットバイザレイクアンドハウスはロングランチ。
+  c60z (6.0 s cut + 0.25 s silence): language Japanese<asr_text>ザウェザー は いつ に し て そう ウィダサイデット 2 2 2 ロック 2 ザ パーク 7 バイザ レイク
+  c60f (6.0 s cut, 0.1 s fade-out): language Japanese<asr_text>ザウェザー は いつ に し て そう ウィダサイデット 2 うう walk 2 ザ パーク しと バイザ レイク
+  e7cut (first 7.0 s cut mid-word (112,000)): language Japanese<asr_text>ザウェザーイズナイスデスをウィダサイデット2をウォークトゥザパークシットバイザレイクアンドハブは。
+  long8 (verified clip + silence, 128,000 (long_8p0s.wav)): language English<asr_text>The weather is nice today, so we decided to walk to the park, sit by the lake, and have a long lunch together.
+  e7s (verified clip + silence, 112,000): language English<asr_text>The weather is nice today, so we decided to walk to the park, sit by the lake, and have a long lunch together.

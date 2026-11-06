@@ -55,9 +55,11 @@ conv_out and the positions and writes `a.bin`. The driver runs `fpart` in groups
 `fjoin` wrote an `a.bin` byte-identical to `front` (sha256 c7b84021...1cc1, `cmp` identical). The exactly 8 s clip
 then transcribed correctly (128,000 samples, 104 audio tokens, 30 tokens decoded, 21 min).
 
-Also observed, not explained (JUN-935): clips cut mid-speech from a longer `say` rendering were detected as Japanese
-and mis-transcribed, with or without appended silence or a fade-out, while clips from another render of the first
-sentence were transcribed correctly. No reference run of the original model exists to say which side is at fault.
+Mid-speech cuts (JUN-935): clips cut mid-speech from a longer `say` rendering are detected as Japanese and
+mis-transcribed, with or without appended silence or a fade-out, while clips from another render of the first
+sentence are transcribed correctly. A llama.cpp run of the original weights (bf16 GGUF, 2026-11-07) gives the same
+language on all nine clips tried, so this is the model's behaviour on this audio, not a native defect; see
+`asr-llamacpp-reference-20261107.md`.
 
 Mistakes made on the way, kept here:
 - The first runs of the driver printed garbage (`language English<LM THE QUICK BROWN FOX ...`, repeated). The
