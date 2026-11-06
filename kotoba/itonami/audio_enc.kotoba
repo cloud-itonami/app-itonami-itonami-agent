@@ -1,0 +1,313 @@
+;; The Qwen3-ASR audio encoder for one full 100-frame chunk (JUN-928): 16,000 samples of 16 kHz speech
+;; -> 128 x 100 log-mel -> three 3x3 stride-2 pad-1 conv2d blocks (480 channels, bias, exact GELU) ->
+;; 13 time steps of c * 16 + h features -> conv_out (no bias) -> sinusoidal positions 0..12 -> 18
+;; pre-LN layers (14 heads of 64, full attention over all 13 tokens, biased projections, exact GELU
+;; FFN of 3584) -> ln_post -> proj1 -> exact GELU -> proj2: 13 x 1024 embeddings for the decoder.
+;; This is the n-token form of itonami.audio-ffn (which handles 3 tokens by hand): every weight row is
+;; read once and applied to all tokens, and the state lives in f64 files (itonami.nn-vec) in the
+;; granted directory: /d/st/mel.bin (128 x 100, index bin * 100 + frame), /d/st/a.bin (13 x 896),
+;; /d/st/audio.bin (13 x 1024). The structure follows the local llama.cpp mtmd qwen3a graph.
+(ns itonami.audio-enc
+  (:require [itonami.gelu-erf :as ge]
+            [itonami.log-mel :as lm]
+            [itonami.nn-ops :as nn]
+            [itonami.nn-vec :as nv]
+            [itonami.qwen-ops :as qo])
+  (:export [enc-mel enc-front enc-layer enc-tail enc-sum])
+  (:capabilities [:fs/app-data :fs/app-data-bytes]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+(defn- neg [a :i64] :i64 (f64-to-bits (f64-neg (f64-from-bits a))))
+
+(defn- aname [tail :string] :string (string-concat "thinker.audio_tower." tail))
+(defn- lname [layer :i64 tail :string] :string
+  (aname (string-concat "layers." (string-concat (string-from-i64 layer) (string-concat "." tail)))))
+
+(defn- off [path :string name :string] :i64 (nv/tensor-offset path name))
+
+;; ---- the log-mel of 16,000 samples ---------------------------------------------------------------
+(defn- reflect-ix [i :i64] :i64
+  (if (< i 0) (- 0 i) (if (>= i 16000) (- 31998 i) i)))
+
+(defn- clip-frame [clip :string t :i64 j :i64 acc :string] :string
+  (if (>= j 400)
+    acc
+    (let [src (reflect-ix (- (+ (* t 160) j) 200))]
+      (clip-frame clip t (+ j 1)
+        (string-concat acc (string-substring clip (* 4 src) (+ (* 4 src) 4)))))))
+
+(defn- mel-bins [frame :string m :i64 t :i64 out :vector-i64] :vector-i64
+  (if (>= m 128)
+    out
+    (mel-bins frame (+ m 1) t (vector-assoc! out (+ (* m 100) t) (lm/log-mel-bin-n frame 128 m)))))
+
+(defn- mel-frames [clip :string t :i64 out :vector-i64] :vector-i64
+  (if (>= t 100)
+    out
+    (mel-frames clip (+ t 1) (mel-bins (clip-frame clip t 0 "") 0 t out))))
+
+(defn- vmax [v :vector-i64 i :i64 acc :i64] :i64
+  (if (>= i (vector-count v))
+    acc
+    (vmax v (+ i 1) (if (f64-lt (f64-from-bits acc) (f64-from-bits (vector-at v i))) (vector-at v i) acc))))
+
+(defn- norm-run [v :vector-i64 mx :i64 i :i64 out :vector-i64] :vector-i64
+  (if (>= i (vector-count v))
+    out
+    (norm-run v mx (+ i 1) (vector-assoc! out i (lm/normalize-log (vector-at v i) mx)))))
+
+(defn- all-hex? [s :string i :i64 n :i64] :bool
+  (if (>= i n)
+    true
+    (let [c (string-code-point-at s i)]
+      (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102))) (all-hex? s (+ i 1) n) false))))
+
+;; status 0 = /d/st/mel.bin holds the 128 x 100 log-mel of the clip (64,000 hex characters: 16,000
+;; samples of int16 + 32768, 4 digits each); 2 = malformed clip; 1 = the file could not be written
+(defn enc-mel [clip :string] :i64
+  (if (or (not (= (string-length clip) 64000)) (not (all-hex? clip 0 64000)))
+    2
+    (let [raw (mel-frames clip 0 (vector-alloc 12800))
+          mx (vmax raw 0 (vector-at raw 0))]
+      (if (nv/write-f64 "/d/st/mel.bin" (norm-run raw mx 0 (vector-alloc 12800))) 0 1))))
+
+;; ---- the front end --------------------------------------------------------------------------------
+(defn- conv-tap [w :vector-i64 x :vector-i64 cin :i64 hin :i64 win :i64 oh :i64 ow :i64 k :i64 acc :i64] :i64
+  (if (>= k (* cin 9))
+    acc
+    (let [ci (quot k 9)
+          r (mod k 9)
+          ih (- (+ (* 2 oh) (quot r 3)) 1)
+          iw (- (+ (* 2 ow) (mod r 3)) 1)]
+      (if (and (>= ih 0) (< ih hin) (>= iw 0) (< iw win))
+        (conv-tap w x cin hin win oh ow (+ k 1)
+          (fadd acc (fmul (vector-at w k) (vector-at x (+ (* ci (* hin win)) (+ (* ih win) iw))))))
+        (conv-tap w x cin hin win oh ow (+ k 1) acc)))))
+
+(defn- conv-pos [w :vector-i64 x :vector-i64 cin :i64 hin :i64 win :i64 wout :i64 npos :i64 b :i64 i :i64 base :i64 out :vector-i64] :vector-i64
+  (if (>= i npos)
+    out
+    (conv-pos w x cin hin win wout npos b (+ i 1) base
+      (vector-assoc! out (+ base i)
+        (ge/gelu-erf (fadd (conv-tap w x cin hin win (quot i wout) (mod i wout) 0 (zero)) b))))))
+
+(defn- conv-all [path :string woff :i64 cin :i64 hin :i64 win :i64 hout :i64 wout :i64 cout :i64 bias :vector-i64 co :i64 x :vector-i64 out :vector-i64] :vector-i64
+  (if (>= co cout)
+    out
+    (let [w (nv/read-bf16 path (+ woff (* co (* cin 18))) (* cin 9))]
+      (if (= (vector-count w) (* cin 9))
+        (conv-all path woff cin hin win hout wout cout bias (+ co 1) x
+          (conv-pos w x cin hin win wout (* hout wout) (vector-at bias co) 0 (* co (* hout wout)) out))
+        (vector-alloc 0)))))
+
+(defn- conv-layer [path :string woff :i64 boff :i64 cin :i64 hin :i64 win :i64 cout :i64 x :vector-i64] :vector-i64
+  (let [hout (+ (quot (- hin 1) 2) 1)
+        wout (+ (quot (- win 1) 2) 1)]
+    (conv-all path woff cin hin win hout wout cout (nv/read-bf16 path boff cout) 0 x
+      (vector-alloc (* cout (* hout wout))))))
+
+;; features of time step w from the conv3 output [480][16][13]: index c * 16 + h; token vectors are
+;; laid out token after token
+(defn- feat-run [x :vector-i64 t :i64 i :i64 out :vector-i64] :vector-i64
+  (if (>= t 13)
+    out
+    (if (>= i 7680)
+      (feat-run x (+ t 1) 0 out)
+      (feat-run x t (+ i 1)
+        (vector-assoc! out (+ (* t 7680) i)
+          (vector-at x (+ (* (quot i 16) 208) (+ (* (mod i 16) 13) t))))))))
+
+;; sinusoid table: dims 0..447 sin(p inv_j), 448..895 cos(p inv_j), inv_j = exp(-j ln(10000) / 447)
+(defn- pos-at [p :i64 d :i64] :i64
+  (let [j (if (< d 448) d (- d 448))
+        inv (nn/exp-wide (neg (fmul (fdiv (lm/ln-pos (f64-to-bits 10000.0)) (f64-to-bits 447.0)) (itof j))))
+        a (fmul (itof p) inv)]
+    (if (< d 448) (qo/sin-real a) (qo/cos-real a))))
+
+(defn- pos-add [x :vector-i64 t :i64 d :i64 out :vector-i64] :vector-i64
+  (if (>= t 13)
+    out
+    (if (>= d 896)
+      (pos-add x (+ t 1) 0 out)
+      (pos-add x t (+ d 1)
+        (vector-assoc! out (+ (* t 896) d) (fadd (vector-at x (+ (* t 896) d)) (pos-at t d)))))))
+
+;; status 0 = /d/st/a.bin holds the 13 position-encoded tokens of /d/st/mel.bin
+(defn enc-front [path :string] :i64
+  (let [w1 (off path (aname "conv2d1.weight"))
+        b1 (off path (aname "conv2d1.bias"))
+        w2 (off path (aname "conv2d2.weight"))
+        b2 (off path (aname "conv2d2.bias"))
+        w3 (off path (aname "conv2d3.weight"))
+        b3 (off path (aname "conv2d3.bias"))
+        wco (off path (aname "conv_out.weight"))
+        mel (nv/read-f64 "/d/st/mel.bin" 0 12800)]
+    (if (or (< w1 0) (< b1 0) (< w2 0) (< b2 0) (< w3 0) (< b3 0) (< wco 0) (not (= (vector-count mel) 12800)))
+      1
+      (let [x1 (conv-layer path w1 b1 1 128 100 480 mel)
+            x2 (conv-layer path w2 b2 480 64 50 480 x1)
+            x3 (conv-layer path w3 b3 480 32 25 480 x2)]
+        (if (not (= (vector-count x3) 99840))
+          1
+          (let [feats (feat-run x3 0 0 (vector-alloc (* 13 7680)))
+                tok (nv/linear-multi path wco 896 7680 feats 13 (vector-alloc 0))
+                a (pos-add tok 0 0 (vector-alloc (* 13 896)))]
+            (if (and (= (vector-count tok) (* 13 896)) (nv/write-f64 "/d/st/a.bin" a)) 0 1)))))))
+
+;; ---- layers ----------------------------------------------------------------------------------------
+;; LayerNorm (eps 1e-5) of each of n rows of d values, with weight g and bias b
+(defn- row-sum [x :vector-i64 b :i64 i :i64 d :i64 acc :i64] :i64
+  (if (>= i d) acc (row-sum x b (+ i 1) d (fadd acc (vector-at x (+ b i))))))
+
+(defn- row-dev [x :vector-i64 b :i64 i :i64 d :i64 mean :i64 acc :i64] :i64
+  (if (>= i d)
+    acc
+    (let [dv (fsub (vector-at x (+ b i)) mean)]
+      (row-dev x b (+ i 1) d mean (fadd acc (fmul dv dv))))))
+
+(defn- ln-fill [x :vector-i64 b :i64 i :i64 d :i64 mean :i64 inv :i64 g :vector-i64 bb :vector-i64 out :vector-i64] :vector-i64
+  (if (>= i d)
+    out
+    (ln-fill x b (+ i 1) d mean inv g bb
+      (vector-assoc! out (+ b i)
+        (nn/ln-normalize (vector-at x (+ b i)) mean inv (vector-at g i) (vector-at bb i))))))
+
+(defn- ln-rows [x :vector-i64 n :i64 d :i64 g :vector-i64 bb :vector-i64 t :i64 out :vector-i64] :vector-i64
+  (if (>= t n)
+    out
+    (let [b (* t d)
+          mean (fdiv (row-sum x b 0 d (zero)) (itof d))
+          var (fdiv (row-dev x b 0 d mean (zero)) (itof d))
+          inv (nn/inv-std var (f64-to-bits 0.00001))]
+      (ln-rows x n d g bb (+ t 1) (ln-fill x b 0 d mean inv g bb out)))))
+
+(defn- dot64 [q :vector-i64 qb :i64 k :vector-i64 kb :i64 i :i64 acc :i64] :i64
+  (if (>= i 64)
+    acc
+    (dot64 q qb k kb (+ i 1) (fadd acc (fmul (vector-at q (+ qb i)) (vector-at k (+ kb i)))))))
+
+(defn- scores [q :vector-i64 qb :i64 k :vector-i64 kb :i64 u :i64 n :i64 sc :vector-i64] :vector-i64
+  (if (>= u n)
+    sc
+    (scores q qb k kb (+ u 1) n
+      (vector-assoc! sc u (fmul (dot64 q qb k (+ (* u 896) kb) 0 (zero)) (f64-to-bits 0.125))))))
+
+(defn- vmax2 [v :vector-i64 i :i64 n :i64 acc :i64] :i64
+  (if (>= i n) acc (vmax2 v (+ i 1) n (if (f64-lt (f64-from-bits acc) (f64-from-bits (vector-at v i))) (vector-at v i) acc))))
+
+(defn- exps [sc :vector-i64 i :i64 n :i64 m :i64 z :i64] :i64
+  (if (>= i n)
+    z
+    (let [e (nn/exp-wide (fsub (vector-at sc i) m))]
+      (exps (vector-assoc! sc i e) (+ i 1) n m (fadd z e)))))
+
+(defn- mix [sc :vector-i64 z :i64 v :vector-i64 kb :i64 d :i64 u :i64 n :i64 acc :i64] :i64
+  (if (>= u n)
+    acc
+    (mix sc z v kb d (+ u 1) n
+      (fadd acc (fmul (fdiv (vector-at sc u) z) (vector-at v (+ (* u 896) (+ kb d))))))))
+
+(defn- ctx-fill [sc :vector-i64 z :i64 v :vector-i64 kb :i64 n :i64 ob :i64 d :i64 out :vector-i64] :vector-i64
+  (if (>= d 64)
+    out
+    (ctx-fill sc z v kb n ob (+ d 1)
+      (vector-assoc! out (+ ob d) (mix sc z v kb d 0 n (zero))))))
+
+;; full (non-causal) attention of n tokens, 14 heads of 64
+(defn- attend [q :vector-i64 k :vector-i64 v :vector-i64 n :i64 t :i64 h :i64 out :vector-i64] :vector-i64
+  (if (>= t n)
+    out
+    (if (>= h 14)
+      (attend q k v n (+ t 1) 0 out)
+      (let [qb (+ (* t 896) (* h 64))
+            kb (* h 64)
+            sc (scores q qb k kb 0 n (vector-alloc n))
+            m (vmax2 sc 0 n (vector-at sc 0))
+            z (exps sc 0 n m (zero))]
+        (attend q k v n t (+ h 1) (ctx-fill sc z v kb n qb 0 out))))))
+
+(defn- add-vecs [a :vector-i64 b :vector-i64 i :i64 out :vector-i64] :vector-i64
+  (if (>= i (vector-count a))
+    out
+    (add-vecs a b (+ i 1) (vector-assoc! out i (fadd (vector-at a i) (vector-at b i))))))
+
+(defn- gelu-vec [v :vector-i64 i :i64 out :vector-i64] :vector-i64
+  (if (>= i (vector-count v))
+    out
+    (gelu-vec v (+ i 1) (vector-assoc! out i (ge/gelu-erf (vector-at v i))))))
+
+;; status 0 = layer `layer` applied to the 13 tokens of /d/st/a.bin
+(defn enc-layer [path :string layer :i64] :i64
+  (if (or (< layer 0) (> layer 17))
+    2
+    (let [g1 (off path (lname layer "self_attn_layer_norm.weight"))
+          bb1 (off path (lname layer "self_attn_layer_norm.bias"))
+          wq (off path (lname layer "self_attn.q_proj.weight"))
+          bq (off path (lname layer "self_attn.q_proj.bias"))
+          wk (off path (lname layer "self_attn.k_proj.weight"))
+          bk (off path (lname layer "self_attn.k_proj.bias"))
+          wv (off path (lname layer "self_attn.v_proj.weight"))
+          bv (off path (lname layer "self_attn.v_proj.bias"))
+          wo (off path (lname layer "self_attn.out_proj.weight"))
+          bo (off path (lname layer "self_attn.out_proj.bias"))
+          g2 (off path (lname layer "final_layer_norm.weight"))
+          bb2 (off path (lname layer "final_layer_norm.bias"))
+          w1 (off path (lname layer "fc1.weight"))
+          b1 (off path (lname layer "fc1.bias"))
+          w2 (off path (lname layer "fc2.weight"))
+          b2 (off path (lname layer "fc2.bias"))
+          x (nv/read-f64 "/d/st/a.bin" 0 (* 13 896))]
+      (if (or (< g1 0) (< bb1 0) (< wq 0) (< bq 0) (< wk 0) (< bk 0) (< wv 0) (< bv 0) (< wo 0) (< bo 0)
+              (< g2 0) (< bb2 0) (< w1 0) (< b1 0) (< w2 0) (< b2 0) (not (= (vector-count x) (* 13 896))))
+        1
+        (let [a (ln-rows x 13 896 (nv/read-bf16 path g1 896) (nv/read-bf16 path bb1 896) 0 (vector-alloc (* 13 896)))
+              q (nv/linear-multi path wq 896 896 a 13 (nv/read-bf16 path bq 896))
+              k (nv/linear-multi path wk 896 896 a 13 (nv/read-bf16 path bk 896))
+              v (nv/linear-multi path wv 896 896 a 13 (nv/read-bf16 path bv 896))
+              ctx (attend q k v 13 0 0 (vector-alloc (* 13 896)))
+              o (nv/linear-multi path wo 896 896 ctx 13 (nv/read-bf16 path bo 896))
+              x1 (add-vecs x o 0 (vector-alloc (* 13 896)))
+              y (ln-rows x1 13 896 (nv/read-bf16 path g2 896) (nv/read-bf16 path bb2 896) 0 (vector-alloc (* 13 896)))
+              f1 (nv/linear-multi path w1 3584 896 y 13 (nv/read-bf16 path b1 3584))
+              gl (gelu-vec f1 0 (vector-alloc (* 13 3584)))
+              f2 (nv/linear-multi path w2 896 3584 gl 13 (nv/read-bf16 path b2 896))
+              out (add-vecs x1 f2 0 (vector-alloc (* 13 896)))]
+          (if (and (= (vector-count q) (* 13 896)) (= (vector-count k) (* 13 896)) (= (vector-count v) (* 13 896))
+                   (= (vector-count o) (* 13 896)) (= (vector-count f1) (* 13 3584)) (= (vector-count f2) (* 13 896))
+                   (nv/write-f64 "/d/st/a.bin" out))
+            0
+            1))))))
+
+;; ---- the tail --------------------------------------------------------------------------------------
+;; status 0 = /d/st/audio.bin holds the 13 x 1024 embeddings (ln_post, proj1, GELU, proj2) of /d/st/a.bin
+(defn enc-tail [path :string] :i64
+  (let [g (off path (aname "ln_post.weight"))
+        bb (off path (aname "ln_post.bias"))
+        w1 (off path (aname "proj1.weight"))
+        b1 (off path (aname "proj1.bias"))
+        w2 (off path (aname "proj2.weight"))
+        b2 (off path (aname "proj2.bias"))
+        x (nv/read-f64 "/d/st/a.bin" 0 (* 13 896))]
+    (if (or (< g 0) (< bb 0) (< w1 0) (< b1 0) (< w2 0) (< b2 0) (not (= (vector-count x) (* 13 896))))
+      1
+      (let [y (ln-rows x 13 896 (nv/read-bf16 path g 896) (nv/read-bf16 path bb 896) 0 (vector-alloc (* 13 896)))
+            a (nv/linear-multi path w1 896 896 y 13 (nv/read-bf16 path b1 896))
+            gl (gelu-vec a 0 (vector-alloc (* 13 896)))
+            o (nv/linear-multi path w2 1024 896 gl 13 (nv/read-bf16 path b2 1024))]
+        (if (and (= (vector-count o) (* 13 1024)) (nv/write-f64 "/d/st/audio.bin" o)) 0 1)))))
+
+;; ---- checksums for the gate ---------------------------------------------------------------------
+(defn- vec-sum [v :vector-i64 i :i64 acc :i64] :i64
+  (if (>= i (vector-count v)) acc (vec-sum v (+ i 1) (fadd acc (vector-at v i)))))
+
+;; sequential sum of the first count values of an f64 file, or -1; element idx when idx >= 0
+(defn enc-sum [file :string count :i64 idx :i64] :i64
+  (let [v (nv/read-f64 file 0 count)]
+    (if (not (= (vector-count v) count))
+      -1
+      (if (< idx 0) (vec-sum v 0 (zero)) (if (< idx count) (vector-at v idx) -1)))))

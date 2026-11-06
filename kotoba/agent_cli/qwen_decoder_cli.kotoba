@@ -3,6 +3,8 @@
   state directory (/d/st, holding h.bin and the k<l>.bin / v<l>.bin caches) come from the granted
   directory on fd 3 (amu-command-fs35). Subcommands, argv 0 first:
     embed <model> <comma-separated token ids>  writes the embeddings to /d/st/h.bin, prints ok
+    embedaudio <model> <ids> <rows>            the same, filling every <|audio_pad|> (151676) from the
+                                               <rows> rows of 1024 values in /d/st/audio.bin
     layer <model> <layer> <pos0> <n>           applies decoder layer <layer> to the n tokens in
                                                /d/st/h.bin at positions pos0.., prints ok
     head <model> <start> <end>                 prints '<best row> <best logit bits> <logit sum>'
@@ -43,6 +45,10 @@
           (if (= (qd/dec-embed path (wire-arg 2)) 0)
             (let [_ (wire-say "ok\n")] 0)
             (fail "embed failed (ids or model unreadable)"))
+          (string=? cmd "embedaudio")
+          (if (= (qd/dec-embed-audio path (wire-arg 2) (num-arg 3)) 0)
+            (let [_ (wire-say "ok\n")] 0)
+            (fail "embedaudio failed (ids, audio or model unreadable)"))
           (string=? cmd "layer")
           (if (= (qd/dec-layer path (num-arg 2) (num-arg 3) (num-arg 4)) 0)
             (let [_ (wire-say "ok\n")] 0)
@@ -52,4 +58,4 @@
             (if (= (string-length out) 0)
               (fail "head failed (arguments or state unreadable)")
               (let [_ (wire-say (string-concat out "\n"))] 0)))
-          :else (fail "argv 0 must be embed, layer or head"))))
+          :else (fail "argv 0 must be embed, embedaudio, layer or head"))))

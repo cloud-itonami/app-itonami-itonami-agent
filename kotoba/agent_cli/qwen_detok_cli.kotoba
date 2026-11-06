@@ -1,0 +1,25 @@
+(ns agent-cli.qwen-detok-cli
+  "One-shot native guest that turns Qwen token ids into text (JUN-928). argv 0 is the path of the
+  vocabulary (vocab.json) inside the granted directory on fd 3 (amu-command-fs35), argv 1 the
+  comma-separated token ids. It prints the UTF-8 text of the ids in order on one line, exit 0. Ids from
+  151643 up are named for <|endoftext|>, <|im_start|>, <|im_end|> and <asr_text>, any other prints as
+  <special:id>. A missing or unreadable vocabulary, an id that is not in it, or a malformed list prints
+  one named line on stderr, nothing on stdout, exit 2."
+  (:require [itonami.qwen-vocab :as qv])
+  (:export [main])
+  (:capabilities #{:cli/args :io/write :io/write-error :fs/app-data}))
+
+(defn- wire-arg [i :i64] :string
+  (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- wire-say [s :string] :string
+  (typed-cap-call :io/write :string :string s))
+
+(defn- wire-die [s :string] :string
+  (typed-cap-call :io/write-error :string :string s))
+
+(defn main [] :i64
+  (let [out (qv/vocab-text (wire-arg 0) (wire-arg 1))]
+    (if (= (string-length out) 0)
+      (let [_ (wire-die "qwen-detok: vocabulary or ids unreadable\n")] 2)
+      (let [_ (wire-say (string-concat out "\n"))] 0))))

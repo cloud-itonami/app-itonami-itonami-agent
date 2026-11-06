@@ -17,7 +17,7 @@
             [itonami.qwen-ops :as qo]
             [itonami.safetensors :as st]
             [itonami.weights-file :as wf])
-  (:export [dec-embed dec-layer dec-head])
+  (:export [dec-embed dec-embed-audio dec-layer dec-head])
   (:capabilities [:fs/app-data :fs/app-data-bytes]))
 
 (defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
@@ -375,20 +375,32 @@
     (id-val s (+ i 1) (+ (* acc 10) (- (string-code-point-at s i) 48)))
     acc))
 
-(defn- embed-run [path :string eoff :i64 s :string i :i64 t :i64 n :i64 out :vector-i64] :vector-i64
+(defn- copy-from [dst :vector-i64 src :vector-i64 sb :i64 i :i64 n :i64 at :i64] :vector-i64
+  (if (>= i n)
+    dst
+    (copy-from (vector-assoc! dst (+ at i) (vector-at src (+ sb i))) src sb (+ i 1) n at)))
+
+;; token t of the prompt: the embedding row of its id, except that every <|audio_pad|> (151676)
+;; takes the next 1024 values of aud (the audio encoder's output rows, in order); ai counts them
+(defn- embed-run [path :string eoff :i64 s :string i :i64 t :i64 n :i64 aud :vector-i64 ai :i64 out :vector-i64] :vector-i64
   (if (>= t n)
     out
     (let [e (id-end s i)
-          id (id-val s i 0)
-          row (if (= e i) (vector-alloc 0) (read-vec path (+ eoff (* id 2048)) 1024))]
-      (if (or (= e i) (not (= (vector-count row) 1024)) (>= id 151936))
-        (vector-alloc 0)
-        (let [o (copy-into out row 0 1024 (* t 1024))]
-          (embed-run path eoff s (+ e 1) (+ t 1) n o))))))
+          id (id-val s i 0)]
+      (cond (= e i) (vector-alloc 0)
+            (= id 151676)
+            (if (< (* (+ ai 1) 1024) (+ (vector-count aud) 1))
+              (embed-run path eoff s (+ e 1) (+ t 1) n aud (+ ai 1)
+                (copy-from out aud (* ai 1024) 0 1024 (* t 1024)))
+              (vector-alloc 0))
+            (>= id 151936) (vector-alloc 0)
+            :else
+            (let [row (read-vec path (+ eoff (* id 2048)) 1024)]
+              (if (not (= (vector-count row) 1024))
+                (vector-alloc 0)
+                (embed-run path eoff s (+ e 1) (+ t 1) n aud ai (copy-into out row 0 1024 (* t 1024)))))))))
 
-;; status 0 = /d/st/h.bin holds the embeddings of the comma-separated token ids; 1 = unreadable;
-;; 2 = bad arguments
-(defn dec-embed [path :string ids :string] :i64
+(defn- embed-all [path :string ids :string aud :vector-i64] :i64
   (let [n (+ (ids-count ids 0 0) 1)]
     (if (or (= (string-length ids) 0) (> n 64))
       2
@@ -397,8 +409,23 @@
             eoff (tensor-off hdr hl "thinker.model.embed_tokens.weight")]
         (if (< eoff 0)
           1
-          (let [h (embed-run path eoff ids 0 0 n (vector-alloc (* n 1024)))]
+          (let [h (embed-run path eoff ids 0 0 n aud 0 (vector-alloc (* n 1024)))]
             (if (and (= (vector-count h) (* n 1024)) (write-f64 "/d/st/h.bin" h)) 0 1)))))))
+
+;; status 0 = /d/st/h.bin holds the embeddings of the comma-separated token ids; 1 = unreadable (an
+;; <|audio_pad|> id with no audio is unreadable here); 2 = bad arguments
+(defn dec-embed [path :string ids :string] :i64
+  (embed-all path ids (vector-alloc 0)))
+
+;; the same, with the <|audio_pad|> (151676) positions filled from /d/st/audio.bin, which holds
+;; `audio-rows` rows of 1024 values (the audio encoder's output)
+(defn dec-embed-audio [path :string ids :string audio-rows :i64] :i64
+  (if (or (< audio-rows 1) (> audio-rows 60))
+    2
+    (let [aud (read-f64 "/d/st/audio.bin" 0 (* audio-rows 1024))]
+      (if (= (vector-count aud) (* audio-rows 1024))
+        (embed-all path ids aud)
+        1))))
 
 ;; ---- final norm and lm_head over a slice of the vocabulary ---------------------------------------
 ;; st3 = [best logit bits, best row (-1 = none yet), sum of the logits], updated in place

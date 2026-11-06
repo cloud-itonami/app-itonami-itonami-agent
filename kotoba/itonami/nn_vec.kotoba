@@ -1,0 +1,159 @@
+;; Shared vector helpers for the native Qwen3-ASR modules that keep their state in f64 files
+;; (JUN-928): BF16 tensor reads, f64 state files (FS2 B/C writes, E reads), and a linear map that
+;; reads each weight row once and applies it to all n token vectors. Vectors are :vector-i64 holding
+;; f64 bit patterns, which the seed lets modules pass to one another (a :vector-f64 it does not); the
+;; native runtime never reclaims memory and keeps about eight bytes for every byte read, so callers
+;; run one layer per process.
+(ns itonami.nn-vec
+  (:require [itonami.bf16 :as bf]
+            [itonami.safetensors :as st]
+            [itonami.weights-file :as wf])
+  (:export [bf16-fast read-bf16 read-f64 write-f64 tensor-offset linear-multi])
+  (:capabilities [:fs/app-data :fs/app-data-bytes]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+
+(defn- frame [op :string path :string tail :string] :string
+  (string-concat "\u0000FS2\u0000"
+    (string-concat op (string-concat path (string-concat "\u0000" tail)))))
+
+;; integer BF16 -> f64; zero and subnormals take the exact decoder
+(defn bf16-fast [v :i64] :i64
+  (let [e (mod (quot v 128) 256)]
+    (if (= e 0)
+      (bf/bf16-to-f64 v)
+      (let [pos (+ (i64-shift-left (+ e 896) 52) (i64-shift-left (mod v 128) 45))]
+        (if (>= v 32768)
+          (f64-to-bits (f64-neg (f64-from-bits pos)))
+          pos)))))
+
+(defn- push-bf16 [r :bytes i :i64 n :i64 v :vector-i64] :vector-i64
+  (if (>= i n)
+    v
+    (push-bf16 r (+ i 1) n
+      (vector-assoc! v i
+        (bf16-fast (+ (bytes-at r (+ 5 (* 2 i))) (* 256 (bytes-at r (+ 6 (* 2 i))))))))))
+
+;; count BF16 elements at absolute file offset off, decoded (empty when short)
+(defn read-bf16 [path :string off :i64 count :i64] :vector-i64
+  (let [r (typed-cap-call :fs/app-data :string :bytes
+            (frame "E" path (string-concat (string-from-i64 off)
+                              (string-concat ":" (string-from-i64 (* count 2))))))]
+    (if (= (bytes-count r) (+ 5 (* count 2)))
+      (push-bf16 r 0 count (vector-alloc count))
+      (vector-alloc 0))))
+
+;; absolute data offset of the BF16 tensor `name`, or -1
+(defn tensor-offset [path :string name :string] :i64
+  (let [h (wf/wf-header-text path)
+        n (wf/wf-header-len path)]
+    (if (string=? (st/st-dtype h name) "BF16")
+      (let [b (st/st-begin h name)]
+        (if (< b 0) -1 (+ (+ 8 n) b)))
+      -1)))
+
+;; ---- f64 state files ----------------------------------------------------------------------------
+(defn- le-value [r :bytes at :i64 k :i64 acc :i64] :i64
+  (if (< k 0)
+    acc
+    (le-value r at (- k 1) (bit-or (i64-shift-left acc 8) (bytes-at r (+ at k))))))
+
+(defn- unpack-f64 [r :bytes i :i64 n :i64 base :i64 out :vector-i64] :vector-i64
+  (if (>= i n)
+    out
+    (unpack-f64 r (+ i 1) n base (vector-assoc! out (+ base i) (le-value r (+ 5 (* 8 i)) 7 0)))))
+
+(defn- read-f64-run [path :string first :i64 count :i64 done :i64 out :vector-i64] :vector-i64
+  (if (>= done count)
+    out
+    (let [n (if (< (- count done) 32768) (- count done) 32768)
+          r (typed-cap-call :fs/app-data :string :bytes
+              (frame "E" path (string-concat (string-from-i64 (* 8 (+ first done)))
+                                (string-concat ":" (string-from-i64 (* 8 n))))))]
+      (if (= (bytes-count r) (+ 5 (* 8 n)))
+        (read-f64-run path first count (+ done n) (unpack-f64 r 0 n done out))
+        (vector-alloc 0)))))
+
+;; values [first, first + count) of an f64 file (empty when short)
+(defn read-f64 [path :string first :i64 count :i64] :vector-i64
+  (read-f64-run path first count 0 (vector-alloc count)))
+
+(defn- put-hdr [out :vector-i64 hb :bytes i :i64 n :i64] :vector-i64
+  (if (>= i n)
+    out
+    (put-hdr (vector-assoc! out i (bytes-at hb i)) hb (+ i 1) n)))
+
+(defn- put-val [out :vector-i64 x :i64 k :i64 at :i64] :vector-i64
+  (if (>= k 8)
+    out
+    (put-val (vector-assoc! out (+ at k) (bit-and (u64-shift-right x (* 8 k)) 255)) x (+ k 1) at)))
+
+(defn- put-vals [out :vector-i64 v :vector-i64 i :i64 to :i64 at :i64] :vector-i64
+  (if (>= i to)
+    out
+    (put-vals (put-val out (vector-at v i) 0 at) v (+ i 1) to (+ at 8))))
+
+(defn- write-piece [path :string op :string v :vector-i64 from :i64 to :i64] :i64
+  (let [hb (string-to-utf8 (frame op path ""))
+        nh (bytes-count hb)
+        req (put-vals (put-hdr (vector-alloc (+ nh (* 8 (- to from)))) hb 0 nh) v from to nh)
+        z (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 req))]
+    0))
+
+(defn- write-run [path :string v :vector-i64 from :i64 n :i64] :i64
+  (if (>= from n)
+    0
+    (let [to (if (< (- n from) 32768) n (+ from 32768))
+          z (write-piece path (if (= from 0) "B" "C") v from to)]
+      (write-run path v to n))))
+
+;; replace the file with the values of v; true when it reads back at the expected size
+(defn write-f64 [path :string v :vector-i64] :bool
+  (let [z (if (= (vector-count v) 0) 0 (write-run path v 0 (vector-count v)))]
+    (= (wf/wf-size path) (* 8 (vector-count v)))))
+
+;; ---- y = W x + bias for n token vectors, each weight row read once -----------------------------
+(defn- decode-row [blk :bytes base :i64 i :i64 cols :i64 rowv :vector-i64] :vector-i64
+  (if (>= i cols)
+    rowv
+    (decode-row blk base (+ i 1) cols
+      (vector-assoc! rowv i
+        (bf16-fast (+ (bytes-at blk (+ base (* 2 i))) (* 256 (bytes-at blk (+ (+ base 1) (* 2 i))))))))))
+
+(defn- row-dot [rowv :vector-i64 x :vector-i64 xb :i64 i :i64 cols :i64 acc :i64] :i64
+  (if (>= i cols)
+    acc
+    (row-dot rowv x xb (+ i 1) cols (fadd acc (fmul (vector-at rowv i) (vector-at x (+ xb i)))))))
+
+(defn- lm-tokens [rowv :vector-i64 x :vector-i64 cols :i64 rows :i64 r :i64 n :i64 t :i64 bias :i64 out :vector-i64] :vector-i64
+  (if (>= t n)
+    out
+    (lm-tokens rowv x cols rows r n (+ t 1) bias
+      (vector-assoc! out (+ (* t rows) r) (fadd (row-dot rowv x (* t cols) 0 cols (zero)) bias)))))
+
+(defn- lm-block [blk :bytes k :i64 cnt :i64 r0 :i64 cols :i64 rows :i64 x :vector-i64 n :i64 bias :vector-i64 rowv :vector-i64 out :vector-i64] :vector-i64
+  (if (>= k cnt)
+    out
+    (let [rv (decode-row blk (+ 5 (* k (* cols 2))) 0 cols rowv)
+          b (if (= (vector-count bias) 0) (zero) (vector-at bias (+ r0 k)))]
+      (lm-block blk (+ k 1) cnt r0 cols rows x n bias rv
+        (lm-tokens rv x cols rows (+ r0 k) n 0 b out)))))
+
+(defn- lm-run [path :string woff :i64 rows :i64 cols :i64 x :vector-i64 n :i64 bias :vector-i64 r :i64 rowv :vector-i64 out :vector-i64] :vector-i64
+  (if (>= r rows)
+    out
+    (let [per (quot 262144 (* cols 2))
+          cnt (if (< (- rows r) per) (- rows r) per)
+          blk (typed-cap-call :fs/app-data :string :bytes
+                (frame "E" path (string-concat (string-from-i64 (+ woff (* r (* cols 2))))
+                                  (string-concat ":" (string-from-i64 (* cnt (* cols 2)))))))]
+      (if (= (bytes-count blk) (+ 5 (* cnt (* cols 2))))
+        (lm-run path woff rows cols x n bias (+ r cnt) rowv
+          (lm-block blk 0 cnt r cols rows x n bias rowv out))
+        (vector-alloc 0)))))
+
+;; out[t * rows + r] = W[r] . x[t * cols ..] + bias[r] (bias empty = none); an empty vector on a short read
+(defn linear-multi [path :string woff :i64 rows :i64 cols :i64 x :vector-i64 n :i64 bias :vector-i64] :vector-i64
+  (lm-run path woff rows cols x n bias 0 (vector-alloc cols) (vector-alloc (* n rows))))

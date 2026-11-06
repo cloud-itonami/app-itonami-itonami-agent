@@ -1,0 +1,456 @@
+#!/bin/sh
+# Native speech-to-text on the real Qwen3-ASR-0.6B model (JUN-928): 1 s of speech (16,000 samples) ->
+# log-mel -> audio encoder (conv front end, 18 layers, projector; 13 tokens) -> the audio embeddings
+# injected at the <|audio_pad|> positions of the chat prompt -> the 28-layer decoder with key/value
+# caches, greedy until <|im_end|> -> token ids -> text through the native vocabulary reader. Every
+# stage is a separate native guest run with the pinned Amu multi-module project CLI; the model and
+# vocab.json are cloned/copied into the directory granted on fd 3 together with an empty /d/st state
+# directory, and the guests keep their state there as f64 files. Expected encoder values come from a
+# one-off CPython float64 pipeline of the same definition (struct/json weights, math.erf/sin/cos/exp,
+# direct DFT); the decoder is checked against CPython by check-qwen-decoder-selfhost, and here the
+# transcript is checked against the words actually spoken in the clip. The vocabulary reader is also
+# checked against an independent read of vocab.json (test/native/detok_cases.txt).
+
+set -eu
+
+if [ "$#" -ne 5 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir> <model.safetensors> <vocab.json> <speech_clip_1s.hex>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+MODEL=$3
+VOCAB=$4
+CLIP=$5
+EXPECTED_CLI_SHA256=ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
+EXPECTED_MODEL_SHA256=79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
+EXPECTED_CLIP_SHA256=d04aa95a6644ce43114548649cc4615e750859490afefc10ca822a2b3c87e311
+EXPECTED_CASES_SHA256=08f236034cf2c62177990c4a4c9fb3d328ebacacdfc3d2db2e2121524f830a83
+EXPECTED_BF16_SHA256=09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b
+EXPECTED_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
+EXPECTED_LOGMEL_SHA256=daf0d273329a7b5a05aef4255b985f2e1c031c74f32596e9578add46980b1f5e
+EXPECTED_NNOPS_SHA256=4693d227291a31b8c59378b0ab114715a983dfbfd17308d5b478181793a3604d
+EXPECTED_GELU_SHA256=36b4c98a4df8fd817695a62d1602320f23d93fb38ddf97c1fb124bdcbd7c18a6
+EXPECTED_QWENOPS_SHA256=a5a8744046a81edd21d0740395e874c89ed518e24092a5e889c78b2b2ba51576
+EXPECTED_ST_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
+EXPECTED_WF_SHA256=8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
+EXPECTED_NNVEC_SHA256=ee8fe6f387f2d1fc2ae7ff7b636f1faf4c72a97a4de0ae6f8dcce5fabc1b7847
+EXPECTED_ENC_SHA256=7b256f920ff264b0ec0a38cfef03df439d4af932c3a3c5ee3f9cd20e26f9a2df
+EXPECTED_DEC_SHA256=84568ebda2ef9700b06b4555a7b5e0cbb4f253f59f98106dfb1b3d997387fd43
+EXPECTED_VOC_SHA256=275019cabe34aeb60ab2628eab78daeae0ae15fdecd530e7984e3ecf44f4dcc9
+EXPECTED_ENCCLI_SHA256=925832e63e3479d6b374e349e45b62709cce208bacdf65ae11ac0bb08898d36f
+EXPECTED_DECCLI_SHA256=126aa19294928dbd3684510662d9a81233ec4c42dacd73ee84f1eb08242a68b6
+EXPECTED_DETOK_SHA256=26a6c9c32ab12d6879fcc3f4749540caf89f3cc68799e2024f3c993e46860ae7
+EXPECTED_CALC_SHA256=0e4c2b8cdb6388474f36996c938aaea7578b90490e8eb3c5e8e8218e7cd1cd60
+# prompt: <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|> 13 x <|audio_pad|> <|audio_end|>
+# <|im_end|>\n<|im_start|>assistant\n
+PROMPT=151644,8948,198,151645,198,151644,872,198,151669,151676,151676,151676,151676,151676,151676,151676,151676,151676,151676,151676,151676,151676,151670,151645,198,151644,77091,198
+PROMPT_TOKENS=28
+AUDIO_ROWS=13
+# the first token's logit as the native code computed it: a regression pin, not a CPython reference (the
+# decoder with audio is too slow for CPython here); the first token's id alone does not depend on the audio
+FIRST_LOGIT=4629172127120524673
+EXPECTED_IDS=11528,6364,151704,785,3974,13876,38835,13,151645
+EXPECTED_TEXT="language English<asr_text>The quick brown fox.<|im_end|>"
+MAX_NEW=12
+TOTAL=26
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+for p in "$CLI" "$MODEL" "$VOCAB" "$CLIP"; do
+  case "$p" in /*) ;; *) printf '%s\n' "paths must be absolute: $p" >&2; exit 2 ;; esac
+done
+if [ ! -x "$CLI" ]; then printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2; exit 2; fi
+for f in "$MODEL" "$VOCAB" "$CLIP"; do
+  if [ ! -f "$f" ]; then printf '%s\n' "input file is missing: $f" >&2; exit 2; fi
+done
+if [ -e "$OUT_DIR" ]; then printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2; exit 2; fi
+
+check_sha() {
+  actual=$(shasum -a 256 "$1" | cut -d ' ' -f 1)
+  if [ "$actual" != "$2" ]; then
+    printf 'unexpected digest for %s: %s\n' "$1" "$actual" >&2
+    exit 2
+  fi
+}
+KD="$REPO_ROOT/kotoba/itonami"
+AD="$REPO_ROOT/kotoba/agent_cli"
+CASES="$REPO_ROOT/test/native/detok_cases.txt"
+check_sha "$CLI" "$EXPECTED_CLI_SHA256"
+check_sha "$MODEL" "$EXPECTED_MODEL_SHA256"
+check_sha "$CLIP" "$EXPECTED_CLIP_SHA256"
+check_sha "$CASES" "$EXPECTED_CASES_SHA256"
+check_sha "$KD/bf16.kotoba" "$EXPECTED_BF16_SHA256"
+check_sha "$KD/ggml_dequant.kotoba" "$EXPECTED_DEQUANT_SHA256"
+check_sha "$KD/log_mel.kotoba" "$EXPECTED_LOGMEL_SHA256"
+check_sha "$KD/nn_ops.kotoba" "$EXPECTED_NNOPS_SHA256"
+check_sha "$KD/gelu_erf.kotoba" "$EXPECTED_GELU_SHA256"
+check_sha "$KD/qwen_ops.kotoba" "$EXPECTED_QWENOPS_SHA256"
+check_sha "$KD/safetensors.kotoba" "$EXPECTED_ST_SHA256"
+check_sha "$KD/weights_file.kotoba" "$EXPECTED_WF_SHA256"
+check_sha "$KD/nn_vec.kotoba" "$EXPECTED_NNVEC_SHA256"
+check_sha "$KD/audio_enc.kotoba" "$EXPECTED_ENC_SHA256"
+check_sha "$KD/qwen_decoder.kotoba" "$EXPECTED_DEC_SHA256"
+check_sha "$KD/qwen_vocab.kotoba" "$EXPECTED_VOC_SHA256"
+check_sha "$AD/audio_enc_cli.kotoba" "$EXPECTED_ENCCLI_SHA256"
+check_sha "$AD/qwen_decoder_cli.kotoba" "$EXPECTED_DECCLI_SHA256"
+check_sha "$AD/qwen_detok_cli.kotoba" "$EXPECTED_DETOK_SHA256"
+check_sha "$AD/qwen_calc_cli.kotoba" "$EXPECTED_CALC_SHA256"
+
+SCOPE="$OUT_DIR/scope"
+mkdir -m 700 -p "$SCOPE/d/st"
+/bin/cp -c "$MODEL" "$SCOPE/d/model.safetensors"
+cp "$VOCAB" "$SCOPE/d/vocab.json"
+
+# module/file pairs per binary; entry modules are listed last
+LIBS_ENC="itonami.bf16:bf16 itonami.gelu-erf:gelu_erf itonami.ggml-dequant:ggml_dequant itonami.log-mel:log_mel itonami.nn-ops:nn_ops itonami.nn-vec:nn_vec itonami.qwen-ops:qwen_ops itonami.safetensors:safetensors itonami.weights-file:weights_file itonami.audio-enc:audio_enc"
+LIBS_DEC="itonami.bf16:bf16 itonami.ggml-dequant:ggml_dequant itonami.log-mel:log_mel itonami.nn-ops:nn_ops itonami.qwen-ops:qwen_ops itonami.safetensors:safetensors itonami.weights-file:weights_file itonami.qwen-decoder:qwen_decoder"
+LIBS_DETOK="itonami.qwen-vocab:qwen_vocab"
+
+# compile_one <dir> <entry-file> <entry-module> <libs>: lock + compile with the FS35 command profile
+compile_one() {
+  dir=$1
+  entry=$2
+  emod=$3
+  libs=$4
+  s="$dir/src"
+  {
+    printf 'KSL2\nentry %s/%s.kotoba\n' "$s" "$entry"
+    # module lines sorted by name, the entry module among them
+    { printf '%s:%s\n' "$emod" "$entry"; for pair in $libs; do printf '%s\n' "$pair"; done; } | LC_ALL=C sort |
+    while read -r pair; do
+      printf 'module %s %s/%s.kotoba\n' "${pair%%:*}" "$s" "${pair##*:}"
+    done
+    for f in $(printf '%s\n' "$entry" $(for pair in $libs; do printf '%s\n' "${pair##*:}"; done) | LC_ALL=C sort); do
+      printf 'file %s %s/%s.kotoba\n' "$(shasum -a 256 "$s/$f.kotoba" | cut -d ' ' -f 1)" "$s" "$f"
+    done
+  } > "$dir/$entry.ksl"
+  "$CLI" compile "$s/$entry.kotoba" --source-lock "$dir/$entry.ksl" \
+    --runtime-profile amu-command-fs35 -o "$dir/$entry.macho"
+  codesign --verify --strict "$dir/$entry.macho"
+}
+
+# build_variant <dir> <audio_enc> <qwen_decoder> <qwen_vocab>: sources of this variant + the four binaries
+build_variant() {
+  dir=$1
+  s="$dir/src"
+  mkdir -p "$s"
+  for f in bf16 ggml_dequant log_mel nn_ops gelu_erf qwen_ops safetensors weights_file nn_vec; do
+    cp "$KD/$f.kotoba" "$s/$f.kotoba"
+  done
+  cp "$2" "$s/audio_enc.kotoba"
+  cp "$3" "$s/qwen_decoder.kotoba"
+  cp "$4" "$s/qwen_vocab.kotoba"
+  cp "$AD/audio_enc_cli.kotoba" "$AD/qwen_decoder_cli.kotoba" "$AD/qwen_detok_cli.kotoba" "$AD/qwen_calc_cli.kotoba" "$s/"
+  compile_one "$dir" audio_enc_cli agent-cli.audio-enc-cli "$LIBS_ENC"
+  compile_one "$dir" qwen_decoder_cli agent-cli.qwen-decoder-cli "$LIBS_DEC"
+  compile_one "$dir" qwen_detok_cli agent-cli.qwen-detok-cli "$LIBS_DETOK"
+  compile_one "$dir" qwen_calc_cli agent-cli.qwen-calc-cli ""
+}
+
+# prog_status <program> <args...>: runs a guest with the scope on fd 3; sets OUT and STATUS
+prog_status() {
+  prog=$1
+  shift
+  set +e
+  OUT=$("$prog" "$@" 3< "$SCOPE" 2>/dev/null)
+  STATUS=$?
+  set -e
+}
+
+# near <a-bits> <b-bits>: succeeds when the doubles agree to 1e-9 (relative above 1, absolute below)
+near() {
+  set +e
+  "$CALC" near "$1" "$2" 9 > /dev/null 2>&1
+  r=$?
+  set -e
+  [ "$r" -eq 1 ]
+}
+
+greater() {
+  set +e
+  "$CALC" greater "$1" "$2" > /dev/null 2>&1
+  r=$?
+  set -e
+  [ "$r" -eq 1 ]
+}
+
+# stage_checks <dir> <name>: compares the sum and three values of a state file with the CPython pipeline;
+# sets STAGE_PASSED out of 4
+stage_checks() {
+  dir=$1
+  STAGE_PASSED=0
+  line=$(printf '%s\n' "$EXPECT" | grep "^$2 ")
+  set -- $line
+  file=$2
+  count=$3
+  prog_status "$dir/audio_enc_cli.macho" sum "/d/st/$file" "$count"
+  near "$OUT" "$4" && STAGE_PASSED=$((STAGE_PASSED + 1))
+  prog_status "$dir/audio_enc_cli.macho" sum "/d/st/$file" "$count" 0
+  near "$OUT" "$5" && STAGE_PASSED=$((STAGE_PASSED + 1))
+  prog_status "$dir/audio_enc_cli.macho" sum "/d/st/$file" "$count" 1000
+  near "$OUT" "$6" && STAGE_PASSED=$((STAGE_PASSED + 1))
+  prog_status "$dir/audio_enc_cli.macho" sum "/d/st/$file" "$count" $((count - 1))
+  near "$OUT" "$7" && STAGE_PASSED=$((STAGE_PASSED + 1))
+  return 0
+}
+
+EXPECT="mel mel.bin 12800 4652722560813430124 -4621378623620096852 4588874422938185536 -4624304188514869140
+front a.bin 11648 4663037601523769876 4594001283379832386 -4623587141907348635 -4624515666174311186
+stack18 a.bin 11648 4662502638280618538 4601128519974525975 4604432692152399859 4603671617935560219
+tail audio.bin 13312 4621466046952091455 4587157085358046232 4585026837144017126 -4660611815583789724"
+
+# run_encoder <dir>: mel, front end, 18 layers, tail; each stage is checked before the next runs.
+# Sets PASSED (out of 16)
+run_encoder() {
+  dir=$1
+  PASSED=0
+  rm -f "$SCOPE"/d/st/*.bin
+  enc="$dir/audio_enc_cli.macho"
+  prog_status "$enc" mel "$(cat "$CLIP")"
+  [ "$STATUS" -eq 0 ] || return 0
+  stage_checks "$dir" mel
+  PASSED=$((PASSED + STAGE_PASSED))
+  [ "$STAGE_PASSED" -eq 4 ] || return 0
+  prog_status "$enc" front /d/model.safetensors
+  [ "$STATUS" -eq 0 ] || return 0
+  stage_checks "$dir" front
+  PASSED=$((PASSED + STAGE_PASSED))
+  [ "$STAGE_PASSED" -eq 4 ] || return 0
+  l=0
+  while [ "$l" -lt 18 ]; do
+    prog_status "$enc" layer /d/model.safetensors "$l"
+    [ "$STATUS" -eq 0 ] || return 0
+    l=$((l + 1))
+  done
+  stage_checks "$dir" stack18
+  PASSED=$((PASSED + STAGE_PASSED))
+  [ "$STAGE_PASSED" -eq 4 ] || return 0
+  prog_status "$enc" tail /d/model.safetensors
+  [ "$STATUS" -eq 0 ] || return 0
+  stage_checks "$dir" tail
+  PASSED=$((PASSED + STAGE_PASSED))
+  return 0
+}
+
+# best_row <dir>: the row with the largest logit over the whole vocabulary for the last token
+best_row() {
+  dir=$1
+  BEST=""
+  bv=""
+  for range in 0:30000 30000:60000 60000:90000 90000:120000 120000:151936; do
+    prog_status "$dir/qwen_decoder_cli.macho" head /d/model.safetensors "${range%:*}" "${range##*:}"
+    [ "$STATUS" -eq 0 ] || return 1
+    set -- $OUT
+    if [ -z "$bv" ] || greater "$2" "$bv"; then
+      BEST=$1
+      bv=$2
+    fi
+  done
+  BESTBITS=$bv
+}
+
+# prefill_audio <dir>: the 28 prompt tokens with the audio rows injected, through the 28 layers
+prefill_audio() {
+  dir=$1
+  dec="$dir/qwen_decoder_cli.macho"
+  rm -f "$SCOPE"/d/st/h.bin "$SCOPE"/d/st/k*.bin "$SCOPE"/d/st/v*.bin
+  prog_status "$dec" embedaudio /d/model.safetensors "$PROMPT" "$AUDIO_ROWS"
+  [ "$STATUS" -eq 0 ] || return 1
+  l=0
+  while [ "$l" -lt 28 ]; do
+    prog_status "$dec" layer /d/model.safetensors "$l" 0 "$PROMPT_TOKENS"
+    [ "$STATUS" -eq 0 ] || return 1
+    l=$((l + 1))
+  done
+}
+
+# generate <dir>: greedy decoding from the prefilled caches until <|im_end|>; sets IDS
+generate() {
+  dir=$1
+  dec="$dir/qwen_decoder_cli.macho"
+  best_row "$dir" || return 1
+  tok=$BEST
+  IDS=$tok
+  pos=$PROMPT_TOKENS
+  step=0
+  while [ "$tok" != "151645" ] && [ "$step" -lt "$MAX_NEW" ]; do
+    prog_status "$dec" embed /d/model.safetensors "$tok"
+    [ "$STATUS" -eq 0 ] || return 1
+    l=0
+    while [ "$l" -lt 28 ]; do
+      prog_status "$dec" layer /d/model.safetensors "$l" "$pos" 1
+      [ "$STATUS" -eq 0 ] || return 1
+      l=$((l + 1))
+    done
+    pos=$((pos + 1))
+    best_row "$dir" || return 1
+    tok=$BEST
+    IDS="$IDS,$tok"
+    step=$((step + 1))
+  done
+}
+
+# detok_cases <dir>: every id of the fixture gives the bytes of an independent read of vocab.json;
+# succeeds when all do
+detok_cases() {
+  dir=$1
+  ok=0
+  total=0
+  while read -r id hex; do
+    total=$((total + 1))
+    # the output goes to a file so that a token ending in a newline keeps it (the guest adds one more)
+    set +e
+    "$dir/qwen_detok_cli.macho" /d/vocab.json "$id" 3< "$SCOPE" > "$dir/detok.out" 2>/dev/null
+    status=$?
+    set -e
+    [ "$status" -eq 0 ] || continue
+    got=$(xxd -p < "$dir/detok.out" | tr -d '\n')
+    if [ "$got" = "${hex}0a" ]; then ok=$((ok + 1)); fi
+  done < "$CASES"
+  [ "$ok" -eq "$total" ] && [ "$total" -gt 0 ]
+}
+
+POS="$OUT_DIR/positive"
+build_variant "$POS" "$KD/audio_enc.kotoba" "$KD/qwen_decoder.kotoba" "$KD/qwen_vocab.kotoba"
+CALC="$POS/qwen_calc_cli.macho"
+
+run_encoder "$POS"
+if [ "$PASSED" -ne 16 ]; then
+  printf 'asr-transcribe: the encoder passed %s of 16 checks\n' "$PASSED" >&2
+  exit 1
+fi
+POS_PASSED=$PASSED
+cp "$SCOPE/d/st/audio.bin" "$OUT_DIR/audio.good"
+
+prefill_audio "$POS" || { printf '%s\n' "asr-transcribe: the decoder prefill failed" >&2; exit 1; }
+best_row "$POS" || { printf '%s\n' "asr-transcribe: the first token failed" >&2; exit 1; }
+[ "$BEST" = "11528" ] && POS_PASSED=$((POS_PASSED + 1))
+near "$BESTBITS" "$FIRST_LOGIT" && POS_PASSED=$((POS_PASSED + 1))
+generate "$POS" || { printf '%s\n' "asr-transcribe: generation failed" >&2; exit 1; }
+[ "$IDS" = "$EXPECTED_IDS" ] && POS_PASSED=$((POS_PASSED + 1))
+prog_status "$POS/qwen_detok_cli.macho" /d/vocab.json "$IDS"
+TEXT=$OUT
+[ "$TEXT" = "$EXPECTED_TEXT" ] && POS_PASSED=$((POS_PASSED + 1))
+detok_cases "$POS" && POS_PASSED=$((POS_PASSED + 1))
+# refusals: exit 2 and nothing on stdout
+prog_status "$POS/audio_enc_cli.macho" layer /d/model.safetensors 18
+[ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && POS_PASSED=$((POS_PASSED + 1))
+prog_status "$POS/audio_enc_cli.macho" mel "$(cut -c 2- "$CLIP")"
+[ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && POS_PASSED=$((POS_PASSED + 1))
+prog_status "$POS/qwen_decoder_cli.macho" embedaudio /d/model.safetensors "$PROMPT" 61
+[ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && POS_PASSED=$((POS_PASSED + 1))
+prog_status "$POS/qwen_detok_cli.macho" /d/vocab.json x
+[ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && POS_PASSED=$((POS_PASSED + 1))
+prog_status "$POS/qwen_detok_cli.macho" /d/missing.json 785
+[ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && POS_PASSED=$((POS_PASSED + 1))
+if [ "$POS_PASSED" -ne "$TOTAL" ]; then
+  printf 'asr-transcribe: %s of %s checks passed (ids %s, text %s)\n' "$POS_PASSED" "$TOTAL" "$IDS" "$TEXT" >&2
+  exit 1
+fi
+
+# negative controls. Each mutates one source, rebuilds, and runs only as much of the pipeline as it
+# takes to see the damage: vocabulary mutations the fixture and the transcript, encoder mutations the
+# encoder stages, decoder mutations the first token of the audio prompt.
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+NEG_RESULTS=""
+mutate() {
+  kind=$1
+  name=$2
+  pattern=$3
+  replacement=$4
+  case "$kind" in
+    enc) base="$KD/audio_enc.kotoba" ;;
+    dec) base="$KD/qwen_decoder.kotoba" ;;
+    voc) base="$KD/qwen_vocab.kotoba" ;;
+  esac
+  sed "s/$pattern/$replacement/" "$base" > "$NEG/$name.kotoba"
+  if cmp -s "$base" "$NEG/$name.kotoba"; then
+    printf 'negative control %s did not change the source\n' "$name" >&2
+    exit 1
+  fi
+  enc="$KD/audio_enc.kotoba"; dec="$KD/qwen_decoder.kotoba"; voc="$KD/qwen_vocab.kotoba"
+  case "$kind" in
+    enc) enc="$NEG/$name.kotoba" ;;
+    dec) dec="$NEG/$name.kotoba" ;;
+    voc) voc="$NEG/$name.kotoba" ;;
+  esac
+  build_variant "$NEG/$name" "$enc" "$dec" "$voc"
+  caught=0
+  case "$kind" in
+    enc)
+      run_encoder "$NEG/$name"
+      [ "$PASSED" -lt 16 ] && caught=1
+      ;;
+    dec)
+      rm -f "$SCOPE"/d/st/*.bin
+      cp "$OUT_DIR/audio.good" "$SCOPE/d/st/audio.bin"
+      if prefill_audio "$NEG/$name" && best_row "$NEG/$name"; then
+        [ "$BEST" != "11528" ] && caught=1
+        near "$BESTBITS" "$FIRST_LOGIT" || caught=1
+      else
+        caught=1
+      fi
+      ;;
+    voc)
+      if ! detok_cases "$NEG/$name"; then caught=1; fi
+      ;;
+  esac
+  if [ "$caught" -ne 1 ]; then
+    printf 'negative control %s still passed the gate\n' "$name" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name"
+}
+mutate voc table-high-bytes '(+ 127 (- n 33))' '(+ 128 (- n 33))'
+mutate voc table-last-byte '(if (<= n 66) (+ 127 (- n 33)) 173)' '(if (<= n 66) (+ 127 (- n 33)) 174)'
+mutate voc quote-parity '(= (mod (backslashes v (- p 1) 0) 2) 0)' '(= (mod (backslashes v (- p 1) 0) 2) 1)'
+mutate voc escape-skip '(emit-key v (+ i 2) end out (+ at (put-byte out at c)) )' '(emit-key v (+ i 1) end out (+ at (put-byte out at c)) )'
+mutate enc mel-reflect '(- 31998 i)' '(- 31999 i)'
+mutate enc conv-stride '(+ (quot (- win 1) 2) 1)' '(+ (quot win 2) 1)'
+mutate enc feature-order '(\* (quot i 16) 208)' '(* (quot i 16) 207)'
+mutate enc attention-scale '(f64-to-bits 0.125)' '(f64-to-bits 0.25)'
+mutate dec audio-row-offset '(copy-from out aud (\* ai 1024) 0 1024 (\* t 1024))' '(copy-from out aud (* ai 512) 0 1024 (* t 1024))'
+mutate dec audio-pad-id '(= id 151676)' '(= id 151677)'
+
+# negative control: a source changed after locking is refused
+printf '\n' >> "$POS/src/qwen_vocab.kotoba"
+if "$CLI" compile "$POS/src/qwen_detok_cli.kotoba" --source-lock "$POS/qwen_detok_cli.ksl" \
+  --runtime-profile amu-command-fs35 -o "$OUT_DIR/should-not-exist.macho" \
+  > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+rm -f "$SCOPE/d/model.safetensors"
+{
+  printf 'format: itonami.asr-transcribe-selfhost-gate.v1\n'
+  printf 'amu_cli_sha256: %s\n' "$EXPECTED_CLI_SHA256"
+  printf 'model_sha256: %s\n' "$EXPECTED_MODEL_SHA256"
+  printf 'clip_sha256: %s\n' "$EXPECTED_CLIP_SHA256"
+  printf 'runtime_profile: amu-command-fs35 (directory on fd 3), one process per stage, layer and vocabulary slice\n'
+  printf 'checks_passed: %s of %s (16 encoder values, first token and its logit, token ids, text, vocabulary fixture, 5 refusals)\n' "$POS_PASSED" "$TOTAL"
+  printf 'token_ids: %s\n' "$IDS"
+  printf 'text: %s\n' "$TEXT"
+  printf 'negative_controls_caught:%s\n' "$NEG_RESULTS"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: 1 s of real speech (16,000 samples, 13 audio tokens) transcribed natively on the real Qwen3-ASR-0.6B weights; the transcript matches the words spoken in the clip ("The quick brown fox", the first second of a longer sentence); encoder values to 1e-9 against CPython float64; not HF feature-extractor padding to 30 s, more than one 100-frame chunk, the original implementation beyond the transcript, a turn or launcher\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"

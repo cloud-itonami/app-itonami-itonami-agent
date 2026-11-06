@@ -1,0 +1,57 @@
+(ns agent-cli.audio-enc-cli
+  "One-shot native guest for the Qwen3-ASR audio encoder on one 100-frame chunk (JUN-928). The model
+  and the state directory (/d/st, holding mel.bin, a.bin and audio.bin as f64 files) come from the
+  granted directory on fd 3 (amu-command-fs35). Subcommands, argv 0 first:
+    mel <hex>                  16,000 samples (4 hex digits each: int16 + 32768, 64,000 characters)
+                               -> /d/st/mel.bin (128 x 100 log-mel), prints ok
+    front <model>              mel.bin -> three conv2d blocks, conv_out, positions -> a.bin (13 x 896)
+    layer <model> <l>          encoder layer l (0..17) on the 13 tokens of a.bin
+    tail <model>               ln_post, proj1, GELU, proj2 -> /d/st/audio.bin (13 x 1024)
+    sum <file> <count> [idx]   the sequential sum of the first count values of an f64 file, or value
+                               idx, as f64 bits
+  A bad command, argument or unreadable file prints one named line on stderr, nothing on stdout,
+  exit 2."
+  (:require [itonami.audio-enc :as ae])
+  (:export [main])
+  (:capabilities #{:cli/args :io/write :io/write-error :fs/app-data :fs/app-data-bytes}))
+
+(defn- wire-arg [i :i64] :string
+  (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- wire-say [s :string] :string
+  (typed-cap-call :io/write :string :string s))
+
+(defn- wire-die [s :string] :string
+  (typed-cap-call :io/write-error :string :string s))
+
+(defn- digits-val [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s))
+    acc
+    (let [c (string-code-point-at s i)]
+      (if (and (>= c 48) (<= c 57)) (digits-val s (+ i 1) (+ (* acc 10) (- c 48))) -1))))
+
+(defn- num-arg [i :i64 default :i64] :i64
+  (let [a (wire-arg i)]
+    (if (= (string-length a) 0) default (if (> (string-length a) 9) -1 (digits-val a 0 0)))))
+
+(defn- fail [msg :string] :i64
+  (let [_ (wire-die (string-concat "audio-enc: " (string-concat msg "\n")))] 2))
+
+(defn- ok [status :i64 what :string] :i64
+  (if (= status 0)
+    (let [_ (wire-say "ok\n")] 0)
+    (fail (string-concat what " failed"))))
+
+(defn main [] :i64
+  (let [cmd (wire-arg 0)
+        path (wire-arg 1)]
+    (cond (string=? cmd "mel") (ok (ae/enc-mel path) "mel")
+          (string=? cmd "front") (ok (ae/enc-front path) "front")
+          (string=? cmd "layer") (ok (ae/enc-layer path (num-arg 2 -1)) "layer")
+          (string=? cmd "tail") (ok (ae/enc-tail path) "tail")
+          (string=? cmd "sum")
+          (let [r (ae/enc-sum path (num-arg 2 -1) (num-arg 3 -2))]
+            (if (and (= r -1) true)
+              (fail "sum failed")
+              (let [_ (wire-say (string-concat (string-from-i64 r) "\n"))] 0)))
+          :else (fail "argv 0 must be mel, front, layer, tail or sum"))))
