@@ -17,7 +17,7 @@
             [itonami.nn-ops :as nn]
             [itonami.safetensors :as st]
             [itonami.weights-file :as wf])
-  (:export [ffn-at ffn-sum attn-at attn-sum layer-at layer-sum])
+  (:export [ffn-at ffn-sum attn-at attn-sum layer-at layer-sum step-hex hex-elem hex-sum])
   (:capabilities [:fs/app-data]))
 
 (defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
@@ -93,23 +93,36 @@
         inv (nn/inv-std var (f64-to-bits 0.00001))]
     (ln-run x g b 0 mean inv (vector-alloc (vector-count x)))))
 
-(defn- dot-vec [r :bytes i :i64 cols :i64 x :vector-i64 acc :i64] :i64
+(defn- dot-vec [r :bytes base :i64 i :i64 cols :i64 x :vector-i64 acc :i64] :i64
   (if (>= i cols)
     acc
-    (dot-vec r (+ i 1) cols x
-      (fadd acc (fmul (bf16-fast (+ (bytes-at r (+ 5 (* 2 i))) (* 256 (bytes-at r (+ 6 (* 2 i))))))
+    (dot-vec r base (+ i 1) cols x
+      (fadd acc (fmul (bf16-fast (+ (bytes-at r (+ base (* 2 i))) (* 256 (bytes-at r (+ (+ base 1) (* 2 i))))))
                       (vector-at x i))))))
 
-;; y[r] = W[r] . x + bias[r] for every row; a short read gives an empty vector
+;; rows r0 .. r0+cnt-1 of one block reply (5-byte acknowledgement, then cnt rows of cols BF16)
+(defn- block-rows [blk :bytes k :i64 cnt :i64 r0 :i64 cols :i64 x :vector-i64 bias :vector-i64 out :vector-i64] :vector-i64
+  (if (>= k cnt)
+    out
+    (block-rows blk (+ k 1) cnt r0 cols x bias
+      (vector-assoc! out (+ r0 k)
+        (fadd (dot-vec blk (+ 5 (* k (* cols 2))) 0 cols x (zero)) (vector-at bias (+ r0 k)))))))
+
+;; y[r] = W[r] . x + bias[r] for every row. Rows are read in blocks of up to 262,144 bytes (one
+;; FS2 E request each): every request leaves tens of kilobytes of garbage in an arena that is
+;; never collected, so one request per row would not let a stack of layers fit in one process.
+;; A short read gives an empty vector.
 (defn- linear-run [path :string woff :i64 rows :i64 cols :i64 x :vector-i64 bias :vector-i64 r :i64 out :vector-i64] :vector-i64
   (if (>= r rows)
     out
-    (let [row (typed-cap-call :fs/app-data :string :bytes
+    (let [per (quot 262144 (* cols 2))
+          cnt (if (< (- rows r) per) (- rows r) per)
+          blk (typed-cap-call :fs/app-data :string :bytes
                 (frame "E" path (string-concat (string-from-i64 (+ woff (* r (* cols 2))))
-                                  (string-concat ":" (string-from-i64 (* cols 2))))))]
-      (if (= (bytes-count row) (+ 5 (* cols 2)))
-        (linear-run path woff rows cols x bias (+ r 1)
-          (vector-assoc! out r (fadd (dot-vec row 0 cols x (zero)) (vector-at bias r))))
+                                  (string-concat ":" (string-from-i64 (* cnt (* cols 2)))))))]
+      (if (= (bytes-count blk) (+ 5 (* cnt (* cols 2))))
+        (linear-run path woff rows cols x bias (+ r cnt)
+          (block-rows blk 0 cnt r cols x bias out))
         (vector-alloc 0)))))
 
 (defn- gelu-run [v :vector-i64 i :i64 out :vector-i64] :vector-i64
@@ -228,8 +241,16 @@
         out (vector-alloc (* 3 n))]
     (concat-run c 0 (* 2 n) (concat-run b 0 n (concat-run a 0 0 out)))))
 
+(defn- slice-run [v :vector-i64 i :i64 end :i64 out :vector-i64] :vector-i64
+  (if (>= i end)
+    out
+    (slice-run v (+ i 1) end (vector-assoc! out (- i (- end 896)) (vector-at v i)))))
+
+(defn- token-of [v :vector-i64 t :i64] :vector-i64
+  (slice-run v (* t 896) (* (+ t 1) 896) (vector-alloc 896)))
+
 ;; all three outputs concatenated (2688 elements), or an empty vector when anything cannot be read
-(defn- attn [path :string layer :i64] :vector-i64
+(defn- attn-on [path :string layer :i64 xin :vector-i64] :vector-i64
   (let [h (wf/wf-header-text path)
         n (wf/wf-header-len path)
         gn (tensor-off h n (lname layer "self_attn_layer_norm.weight"))
@@ -248,9 +269,9 @@
       (vector-alloc 0)
       (let [g (read-vec path gn 896)
             b (read-vec path bn 896)
-            x0 (input-run 0 0 896 (vector-alloc 896))
-            x1 (input-run 1 0 896 (vector-alloc 896))
-            x2 (input-run 2 0 896 (vector-alloc 896))
+            x0 (token-of xin 0)
+            x1 (token-of xin 1)
+            x2 (token-of xin 2)
             h0 (layer-norm x0 g b)
             h1 (layer-norm x1 g b)
             h2 (layer-norm x2 g b)
@@ -271,6 +292,14 @@
           (concat3 o0 o1 o2)
           (vector-alloc 0))))))
 
+(defn- synth-input [] :vector-i64
+  (concat3 (input-run 0 0 896 (vector-alloc 896))
+           (input-run 1 0 896 (vector-alloc 896))
+           (input-run 2 0 896 (vector-alloc 896))))
+
+(defn- attn [path :string layer :i64] :vector-i64
+  (attn-on path layer (synth-input)))
+
 ;; output element idx (token idx / 896, dimension idx mod 896) as f64 bits, or -1
 (defn attn-at [path :string layer :i64 idx :i64] :i64
   (let [o (attn path layer)]
@@ -284,17 +313,9 @@
     (if (= (vector-count o) 2688) (vec-sum o 0 (zero)) -1)))
 
 ;; ---- the whole layer: attention half, then the feed-forward half on each token -----------------
-(defn- slice-run [v :vector-i64 i :i64 end :i64 out :vector-i64] :vector-i64
-  (if (>= i end)
-    out
-    (slice-run v (+ i 1) end (vector-assoc! out (- i (- end 896)) (vector-at v i)))))
-
-(defn- token-of [v :vector-i64 t :i64] :vector-i64
-  (slice-run v (* t 896) (* (+ t 1) 896) (vector-alloc 896)))
-
 ;; h = x + attn(LN1(x));  out = h + ffn(LN2(h)), for the three tokens; empty when anything fails
-(defn- encoder-layer [path :string layer :i64] :vector-i64
-  (let [a (attn path layer)]
+(defn- layer-on [path :string layer :i64 xin :vector-i64] :vector-i64
+  (let [a (attn-on path layer xin)]
     (if (= (vector-count a) 2688)
       (let [f0 (ffn-on path layer (token-of a 0))
             f1 (ffn-on path layer (token-of a 1))
@@ -303,6 +324,9 @@
           (concat3 f0 f1 f2)
           (vector-alloc 0)))
       (vector-alloc 0))))
+
+(defn- encoder-layer [path :string layer :i64] :vector-i64
+  (layer-on path layer (synth-input)))
 
 ;; output element idx of the layer (token idx / 896, dimension idx mod 896) as f64 bits, or -1
 (defn layer-at [path :string layer-index :i64 idx :i64] :i64
@@ -315,3 +339,66 @@
 (defn layer-sum [path :string layer-index :i64] :i64
   (let [o (encoder-layer path layer-index)]
     (if (= (vector-count o) 2688) (vec-sum o 0 (zero)) -1)))
+
+;; ---- one layer per process: activations travel between layers as hex ---------------------------
+;; The native runtime never reclaims memory and keeps eight bytes for every byte of a reply, so one
+;; layer reads about 19 MB of weights and holds about 150 MB for good; 18 of them cannot share the
+;; 1 GB arena. A layer is therefore one process: it takes the 2688 activations (3 tokens x 896) as
+;; 43,008 hex characters (16 per f64 bit pattern, high digit first), runs the layer, and prints the
+;; same format. An empty input means the synthetic tokens of the earlier gates.
+(defn- hex-char [n :i64] :string (string-substring "0123456789abcdef" n (+ n 1)))
+
+(defn- enc-nib [v :i64 k :i64 acc :string] :string
+  (if (< k 0)
+    acc
+    (enc-nib v (- k 1) (string-concat acc (hex-char (bit-and (u64-shift-right v (* 4 k)) 15))))))
+
+;; balanced concatenation keeps the copying at n log n instead of n squared
+(defn- enc-range [v :vector-i64 lo :i64 hi :i64] :string
+  (if (= (- hi lo) 1)
+    (enc-nib (vector-at v lo) 15 "")
+    (let [mid (quot (+ lo hi) 2)]
+      (string-concat (enc-range v lo mid) (enc-range v mid hi)))))
+
+(defn- hex-val [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87)
+        :else -1))
+
+(defn- all-hex? [b :bytes i :i64 n :i64] :bool
+  (if (>= i n) true (if (< (hex-val (bytes-at b i)) 0) false (all-hex? b (+ i 1) n))))
+
+(defn- dec-elem [b :bytes i :i64 k :i64 acc :i64] :i64
+  (if (>= k 16)
+    acc
+    (dec-elem b i (+ k 1) (bit-or (i64-shift-left acc 4) (hex-val (bytes-at b (+ i k)))))))
+
+(defn- dec-run [b :bytes e :i64 n :i64 out :vector-i64] :vector-i64
+  (if (>= e n)
+    out
+    (dec-run b (+ e 1) n (vector-assoc! out e (dec-elem b (* e 16) 0 0)))))
+
+;; layer `layer` applied to the activations in in-hex; "" when the input is not exactly 2688
+;; hex-encoded values or the layer cannot be read
+(defn step-hex [path :string layer :i64 in-hex :string] :string
+  (let [b (string-to-utf8 in-hex)
+        synth (= (bytes-count b) 0)]
+    (if (and (not synth) (or (not (= (bytes-count b) 43008)) (not (all-hex? b 0 43008))))
+      ""
+      (let [v (if synth (synth-input) (dec-run b 0 2688 (vector-alloc 2688)))
+            o (layer-on path layer v)]
+        (if (= (vector-count o) 2688) (enc-range o 0 2688) "")))))
+
+;; element idx of a 2688-value hex string, or -1
+(defn hex-elem [hex :string idx :i64] :i64
+  (let [b (string-to-utf8 hex)]
+    (if (or (not (= (bytes-count b) 43008)) (< idx 0) (>= idx 2688) (not (all-hex? b 0 43008)))
+      -1
+      (dec-elem b (* idx 16) 0 0))))
+
+;; sequential sum of the 2688 values of a hex string as f64 bits, or -1
+(defn hex-sum [hex :string] :i64
+  (let [b (string-to-utf8 hex)]
+    (if (or (not (= (bytes-count b) 43008)) (not (all-hex? b 0 43008)))
+      -1
+      (vec-sum (dec-run b 0 2688 (vector-alloc 2688)) 0 (zero)))))

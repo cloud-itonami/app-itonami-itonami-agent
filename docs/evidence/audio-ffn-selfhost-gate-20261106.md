@@ -11,7 +11,7 @@ reads the header); activations are internal `vector-f64` arrays. LayerNorm uses 
 torch default; `config.json` names no eps) and the exact GELU (`itonami.gelu-erf`). The input
 token is x[i] = (((3 i + 1) mod 11) - 5) / 4.
 
-Gate: `bin/check-audio-ffn-selfhost <cli> <out-dir> <model.safetensors>`, 33 cases (11 feed-forward, 11 attention, 11 whole layer; see the last sections), one process
+Gate: `bin/check-audio-ffn-selfhost <cli> <out-dir> <model.safetensors>`, 46 checks (11 feed-forward, 11 attention, 11 whole layer, 8 values after 3 and 18 stacked layers, 5 refusals of the one-layer CLI; see the last sections), one process
 per case: layers 0 and 5, the sum of the 896 outputs and outputs 0, 447, 895, plus an index past
 the end, a layer that does not exist and a missing file returning -1. Expected values come from a
 one-off CPython float64 computation of the same sublayer (struct/json for the weights, `math.erf`
@@ -82,3 +82,30 @@ caught, 21 in all.
 
 Not covered: positional embeddings, how the real model chunks audio, the conv2d front end, the
 projector, the decoder, any layer other than 0 and 5, equality with the original implementation.
+
+## The 18-layer stack (JUN-922)
+
+`kotoba/agent_cli/audio_layer_step_cli.kotoba` runs one layer as its own process: argv 0 is the model
+path inside the granted directory, argv 1 the layer index, optional argv 2 the activations of the
+three tokens as 43,008 hex characters (16 per f64 bit pattern); it prints the activations after the
+layer in the same format (exit 2 and one named line on stderr for a bad index, a malformed input or
+an unreadable layer). The gate script chains layers 0..17 (synthetic tokens in, hex on argv between
+processes, about 11 s for all 18) and compares the activations after 3 and 18 layers with a CPython
+float64 stack: the sum and outputs 0, 1000, 2687, to 1e-11 relative (absolute below magnitude 1).
+Measured differences: after 3 layers 2e-15 on the sum and below 1e-15 on the outputs; after 18
+layers 2.9e-13 on the sum (which is only 0.06, so its low digits cancel) and 1.4e-14 to 2.1e-14
+on the outputs (largest output magnitude 15.2). Five refusals of the CLI (a layer past the last,
+an input one character short, a non-hex character, a non-numeric layer, a missing model file) exit
+2 with nothing on stdout. Five further mutations (hex decode shift, encode order, nibble table, the
+step ignoring its input, the step skipping the hex check; 26 in all) are caught.
+
+Why one process per layer: the native runtime never reclaims memory and keeps about eight bytes for
+every byte a file read returns. That was measured, not assumed: ten reads of the header cost 15 MB,
+the activation vectors are tens of kilobytes, but one layer reads 19 MB of weights and holds about
+150 MB for good (one layer evaluated for the synthetic tokens peaks at 530 MB), so 18 layers would
+need roughly 2.8 GB against an arena of about 1 GB. Reading the weights in blocks of 256 KiB
+instead of row by row (done here, and about 3x faster) did not change the total. A single process
+therefore reaches about two layers.
+
+Not covered: positional embeddings, the conv2d front end, how the real model chunks audio, `ln_post`,
+the projector into the language model, the decoder, equality with the original implementation.
