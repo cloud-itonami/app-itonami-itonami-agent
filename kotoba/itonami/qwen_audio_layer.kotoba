@@ -1,0 +1,184 @@
+;; One Qwen3-ASR audio-encoder layer wired end to end (JUN-887), pre-LN:
+;;   h1 = LayerNorm(x; weight, bias)                       (eps 1e-5)
+;;   q,k,v = Wq h1 + bq, Wk h1 + bk, Wv h1 + bv             (BF16 weight rows, biases)
+;;   non-causal softmax attention over all keys, 1/sqrt(head width) scale, heads side by side
+;;   x2 = x + Wo . attention + bo
+;;   h2 = LayerNorm(x2);  x3 = x2 + W2 . gelu(W1 h2 + b1) + b2      (exact erf GELU)
+;; Every weight, bias and norm parameter is a BF16 hex row. The seed has no vectors or
+;; memoisation, so each value is recomputed where it is used; the gate sizes are small (d_model
+;; 4, 2 heads of width 2, sequence 3, ffn 6). The audio tower has no RoPE in its layers
+;; (positions enter before them). Built on itonami.bf16, itonami.gelu-erf and itonami.nn-ops
+;; (LayerNorm steps, exp-wide). Every f64 value is an i64 bit pattern.
+(ns itonami.qwen-audio-layer
+  (:require [itonami.bf16 :as bf]
+            [itonami.gelu-erf :as ge]
+            [itonami.nn-ops :as nn])
+  (:export [layer-out match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- flt [a :i64 b :i64] :bool (f64-lt (f64-from-bits a) (f64-from-bits b)))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+(defn- ln-eps [] :i64 (f64-to-bits 0.00001))
+
+(defn- mac [acc :i64 w :string j :i64 x :i64] :i64
+  (fadd acc (fmul (bf/bf16-to-f64 (bf/bf16-bits w (* 2 j))) x)))
+(defn- dec [w :string j :i64] :i64 (bf/bf16-to-f64 (bf/bf16-bits w (* 2 j))))
+
+;; ---- parameters (BF16 hex rows) ---------------------------------------------------------------
+(defn- wq-row [r :i64] :string
+  (cond
+        (= r 0) "00bf403f803e80be"
+        (= r 1) "803e80be40bf003f"
+        (= r 2) "40bf003f000000bf"
+        (= r 3) "000000bf403f803e"
+        :else ""))
+
+(defn- wk-row [r :i64] :string
+  (cond
+        (= r 0) "80be003f00bf803e"
+        (= r 1) "40bf0000403f80be"
+        (= r 2) "003f00bf803e40bf"
+        (= r 3) "0000403f80be003f"
+        :else ""))
+
+(defn- wv-row [r :i64] :string
+  (cond
+        (= r 0) "000000bf403f803e"
+        (= r 1) "000000bf403f803e"
+        (= r 2) "000000bf403f803e"
+        (= r 3) "000000bf403f803e"
+        :else ""))
+
+(defn- wo-row [r :i64] :string
+  (cond
+        (= r 0) "00bf803e803f00bf"
+        (= r 1) "403f40bf0000403f"
+        (= r 2) "80be003f80bf80be"
+        (= r 3) "803f00bf803e803f"
+        :else ""))
+
+(defn- w1-row [r :i64] :string
+  (cond
+        (= r 0) "40bf0000403f40bf"
+        (= r 1) "803f00bf803e803f"
+        (= r 2) "003f80bf80be003f"
+        (= r 3) "0000403f40bf0000"
+        (= r 4) "00bf803e803f00bf"
+        (= r 5) "80bf80be003f80bf"
+        :else ""))
+
+(defn- w2-row [r :i64] :string
+  (cond
+        (= r 0) "80be803f000080bf803e40bf"
+        (= r 1) "003f00bf403f80be803f0000"
+        (= r 2) "80bf803e40bf003f00bf403f"
+        (= r 3) "80be803f000080bf803e40bf"
+        :else ""))
+
+(defn- bq-row [] :string "00be803e000080be")
+(defn- bk-row [] :string "0000000000000000")
+(defn- bv-row [] :string "003e80be0000803e")
+(defn- bo-row [] :string "00be003e80be0000")
+(defn- l1w-row [] :string "403f603f803f903f")
+(defn- l1b-row [] :string "80bd003e000000be")
+(defn- l2w-row [] :string "a03f903f803f603f")
+(defn- l2b-row [] :string "803d00be0000003e")
+(defn- b1-row [] :string "000080be003e00be803e0000")
+(defn- b2-row [] :string "00be80be803e003e")
+
+;; ---- input and LayerNorm 1 ----------------------------------------------------------------------
+(defn- xv [i :i64 c :i64] :i64
+  (fdiv (itof (- (mod (+ (+ (* i 5) (* c 3)) 1) 9) 4)) (f64-to-bits 4.0)))
+
+;; LayerNorm of a 4-element row given by the accessor-free pair (sum, squared deviations)
+(defn- mean1 [i :i64] :i64
+  (fdiv (fadd (fadd (fadd (xv i 0) (xv i 1)) (xv i 2)) (xv i 3)) (f64-to-bits 4.0)))
+(defn- var1 [i :i64] :i64
+  (let [m (mean1 i)]
+    (fdiv (fadd (fadd (fadd (fmul (fsub (xv i 0) m) (fsub (xv i 0) m)) (fmul (fsub (xv i 1) m) (fsub (xv i 1) m)))
+                      (fmul (fsub (xv i 2) m) (fsub (xv i 2) m)))
+                (fmul (fsub (xv i 3) m) (fsub (xv i 3) m)))
+          (f64-to-bits 4.0))))
+(defn- h1 [i :i64 c :i64] :i64
+  (nn/ln-normalize (xv i c) (mean1 i) (nn/inv-std (var1 i) (ln-eps)) (dec (l1w-row) c) (dec (l1b-row) c)))
+
+;; ---- q, k, v with biases ----------------------------------------------------------------------------
+(defn- lin-h1 [row :string i :i64 j :i64 acc :i64] :i64
+  (if (>= j 4) acc (lin-h1 row i (+ j 1) (mac acc row j (h1 i j)))))
+(defn- q [i :i64 r :i64] :i64 (fadd (lin-h1 (wq-row r) i 0 (zero)) (dec (bq-row) r)))
+(defn- k [j :i64 r :i64] :i64 (fadd (lin-h1 (wk-row r) j 0 (zero)) (dec (bk-row) r)))
+(defn- v [j :i64 r :i64] :i64 (fadd (lin-h1 (wv-row r) j 0 (zero)) (dec (bv-row) r)))
+
+;; ---- non-causal softmax attention (all 3 keys) -------------------------------------------------------
+(defn- score [i :i64 h :i64 j :i64] :i64
+  (fdiv (fadd (fmul (q i (* 2 h)) (k j (* 2 h))) (fmul (q i (+ (* 2 h) 1)) (k j (+ (* 2 h) 1))))
+        (f64-to-bits (f64-sqrt 2.0))))
+(defn- max-run [i :i64 h :i64 j :i64 acc :i64] :i64
+  (cond (>= j 3) acc
+        :else (max-run i h (+ j 1) (let [s (score i h j)] (if (flt acc s) s acc)))))
+(defn- denom-run [i :i64 h :i64 mx :i64 j :i64 acc :i64] :i64
+  (cond (>= j 3) acc
+        :else (denom-run i h mx (+ j 1) (fadd acc (nn/exp-wide (fsub (score i h j) mx))))))
+(defn- mix-run [i :i64 h :i64 e :i64 mx :i64 z :i64 j :i64 acc :i64] :i64
+  (cond (>= j 3) acc
+        :else (mix-run i h e mx z (+ j 1)
+                       (fadd acc (fmul (fdiv (nn/exp-wide (fsub (score i h j) mx)) z) (v j (+ (* 2 h) e)))))))
+(defn- attn-out [i :i64 h :i64 e :i64] :i64
+  (let [mx (max-run i h 0 (fsub (zero) (f64-to-bits 1000000000.0)))
+        z (denom-run i h mx 0 (zero))]
+    (mix-run i h e mx z 0 (zero))))
+(defn- cat [i :i64 r :i64] :i64 (attn-out i (quot r 2) (mod r 2)))
+
+(defn- o-run [row :string i :i64 r :i64 acc :i64] :i64
+  (if (>= r 4) acc (o-run row i (+ r 1) (mac acc row r (cat i r)))))
+(defn- x2 [i :i64 c :i64] :i64 (fadd (xv i c) (fadd (o-run (wo-row c) i 0 (zero)) (dec (bo-row) c))))
+
+;; ---- LayerNorm 2 and the FFN ------------------------------------------------------------------------------
+(defn- mean2 [i :i64] :i64
+  (fdiv (fadd (fadd (fadd (x2 i 0) (x2 i 1)) (x2 i 2)) (x2 i 3)) (f64-to-bits 4.0)))
+(defn- var2 [i :i64] :i64
+  (let [m (mean2 i)]
+    (fdiv (fadd (fadd (fadd (fmul (fsub (x2 i 0) m) (fsub (x2 i 0) m)) (fmul (fsub (x2 i 1) m) (fsub (x2 i 1) m)))
+                      (fmul (fsub (x2 i 2) m) (fsub (x2 i 2) m)))
+                (fmul (fsub (x2 i 3) m) (fsub (x2 i 3) m)))
+          (f64-to-bits 4.0))))
+(defn- h2 [i :i64 c :i64] :i64
+  (nn/ln-normalize (x2 i c) (mean2 i) (nn/inv-std (var2 i) (ln-eps)) (dec (l2w-row) c) (dec (l2b-row) c)))
+(defn- lin-h2 [row :string i :i64 j :i64 acc :i64] :i64
+  (if (>= j 4) acc (lin-h2 row i (+ j 1) (mac acc row j (h2 i j)))))
+(defn- f1 [i :i64 r :i64] :i64 (ge/gelu-erf (fadd (lin-h2 (w1-row r) i 0 (zero)) (dec (b1-row) r))))
+(defn- f2-run [row :string i :i64 r :i64 acc :i64] :i64
+  (if (>= r 6) acc (f2-run row i (+ r 1) (mac acc row r (f1 i r)))))
+
+;; output element c of position i: x2 + fc2(gelu(fc1(LN2(x2))))
+(defn layer-out [i :i64 c :i64] :i64
+  (fadd (x2 i c) (fadd (f2-run (w2-row c) i 0 (zero)) (dec (b2-row) c))))
+
+;; ---- gate: 3 positions x 4 elements = 12 ---------------------------------------------------------------------
+(defn- want [n :i64] :i64
+  (cond
+        (= n 0) -4611202534327143336
+        (= n 1) 4604446063531730678
+        (= n 2) 4601052185580845196
+        (= n 3) -4628257935181750560
+        (= n 4) 4603964288029434150
+        (= n 5) 4597526766372243302
+        (= n 6) -4613207073646492076
+        (= n 7) 4613312672843281194
+        (= n 8) -4611844950133741392
+        (= n 9) 4606697863345415926
+        (= n 10) 4604117302190431302
+        (= n 11) 4590786656407667264
+        :else (zero)))
+(defn- close? [a :i64 b :i64] :bool
+  (f64-le (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b)))
+          (f64-mul 0.000000001 (f64-max 1.0 (f64-abs (f64-from-bits b))))))
+(defn- out-run [n :i64 acc :i64] :i64
+  (if (>= n 12)
+    acc
+    (out-run (+ n 1) (if (close? (layer-out (quot n 4) (mod n 4)) (want n)) (+ acc 1) acc))))
+(defn match-count [] :i64 (out-run 0 0))
