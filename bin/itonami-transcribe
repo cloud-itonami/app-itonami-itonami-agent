@@ -15,7 +15,7 @@
 #
 # stdout: the transcript. stderr: the language the model reports. Exit 0 on success, 2 for a refused input
 # (the WAV reader says why), 78 when the guests or the model are not configured, 1 when a stage fails.
-# Input: 16 kHz mono 16-bit PCM WAV, 0.25 to 7 s. One transcription takes minutes on a laptop: the
+# Input: 16 kHz mono 16-bit PCM WAV, 0.25 to 8 s. One transcription takes minutes on a laptop: the
 # decoder reads about 1.2 GB of weights for every token it writes.
 
 set -eu
@@ -79,7 +79,16 @@ SAMPLES=$(( ${#CLIPHEX} / 4 ))
 
 M=/d/model.safetensors
 run audio_enc_cli mel "$CLIPHEX"; [ "$STATUS" -eq 0 ] || fail "the mel"
-run audio_enc_cli front "$M"; [ "$STATUS" -eq 0 ] || fail "the front end"
+# the conv front end in parts of at most 4 chunks (one process each: the Amu vector arena never reclaims, JUN-946)
+CHUNKS=$(( (SAMPLES / 160 + 99) / 100 ))
+c=0
+while [ "$c" -lt "$CHUNKS" ]; do
+  c1=$(( c + 4 ))
+  [ "$c1" -le "$CHUNKS" ] || c1=$CHUNKS
+  run audio_enc_cli fpart "$M" "$c" "$c1"; [ "$STATUS" -eq 0 ] || fail "the front end (chunks $c to $c1)"
+  c=$c1
+done
+run audio_enc_cli fjoin "$M"; [ "$STATUS" -eq 0 ] || fail "the front end join"
 l=0
 while [ "$l" -lt 18 ]; do
   run audio_enc_cli layer "$M" "$l"; [ "$STATUS" -eq 0 ] || fail "audio encoder layer $l"

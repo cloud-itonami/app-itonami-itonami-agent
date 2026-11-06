@@ -2,9 +2,11 @@
   "One-shot native guest for the Qwen3-ASR audio encoder on one 100-frame chunk (JUN-928). The model
   and the state directory (/d/st, holding mel.bin, a.bin and audio.bin as f64 files) come from the
   granted directory on fd 3 (amu-command-fs35). Subcommands, argv 0 first:
-    mel <hex>                  4,000 to 112,000 samples (4 hex digits each: int16 + 32768)
+    mel <hex>                  4,000 to 128,000 samples (4 hex digits each: int16 + 32768)
                                -> /d/st/mel.bin (128 x 100 log-mel), prints ok
     front <model>              mel.bin -> three conv2d blocks, conv_out, positions -> a.bin (13 x 896)
+    fpart <model> <c0> <c1>    conv features of chunks c0..c1-1 (at most 4) -> /d/st/feat<c0>.bin (JUN-946)
+    fjoin <model>              all fpart files, conv_out, positions -> a.bin, as front does (JUN-946)
     layer <model> <l>          encoder layer l (0..17) on the 13 tokens of a.bin
     tail <model>               ln_post, proj1, GELU, proj2 -> /d/st/audio.bin (13 x 1024)
     sum <file> <count> [idx]   the sequential sum of the first count values of an f64 file, or value
@@ -47,6 +49,8 @@
         path (wire-arg 1)]
     (cond (string=? cmd "mel") (ok (ae/enc-mel path) "mel")
           (string=? cmd "front") (ok (ae/enc-front path) "front")
+          (string=? cmd "fpart") (ok (ae/enc-front-part path (num-arg 2 -1) (num-arg 3 -1)) "fpart")
+          (string=? cmd "fjoin") (ok (ae/enc-front-join path) "fjoin")
           (string=? cmd "layer") (ok (ae/enc-layer path (num-arg 2 -1)) "layer")
           (string=? cmd "tail") (ok (ae/enc-tail path) "tail")
           (string=? cmd "sum")
@@ -54,4 +58,4 @@
             (if (and (= r -1) true)
               (fail "sum failed")
               (let [_ (wire-say (string-concat (string-from-i64 r) "\n"))] 0)))
-          :else (fail "argv 0 must be mel, front, layer, tail or sum"))))
+          :else (fail "argv 0 must be mel, front, fpart, fjoin, layer, tail or sum"))))
