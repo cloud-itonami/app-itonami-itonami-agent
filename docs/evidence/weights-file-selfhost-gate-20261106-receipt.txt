@@ -4,12 +4,12 @@ model_sha256: 79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
 bf16_source_sha256: 09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b
 ggml_dequant_source_sha256: c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
 safetensors_source_sha256: 20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
-weights_file_source_sha256: f3f1eadfe780c15905cffcbfd5a3267b0a06aeb2298836b3303a77788fba66d5
-gate_source_sha256: 078c986063cf35875aa93616bf36b7cda7300e4ad573668e5b797fe31540ffd0
+weights_file_source_sha256: 708c6dff5f022757be7250e7b7c6e4c99c311df865527fd7ea05b86ed92b2263
+gate_source_sha256: 42a315cd76dc7d531f308d4609e3de8fa9db03aa67350201bfa9bcde0a0af538
 runtime_profile: amu-command-fs35 (directory on fd 3)
-program_sha256: 01b99e918ded8946a63bfcd39809b440ab3a3fc36db2f59c0543f74a044ff0f4
-program_result: 30
+program_sha256: bbfd19655a580291bbbcc7a09e59ee99df534885a3fac424895105173e5c8970
+program_result: 36
 amu_run_without_fs35_status: 133 (not the full count)
-negative_control_results: le-scale=133 bf16-byte-order=21 header-offset=29 data-base=21 header-reply-size=133 element-bound=29
+negative_control_results: le-scale=133 bf16-byte-order=27 header-offset=35 data-base=27 header-reply-size=133 x-vector=34 row-stride=34 dot-order=33 element-bound=35
 changed_source_refusal: PASS
-qualification: bounded native reads of the real Qwen3-ASR-0.6B header and nine BF16 elements; no tensor-sized reads, no model run, turn or launcher
+qualification: bounded native reads of the real Qwen3-ASR-0.6B header and nine BF16 elements and three row dot products; no tensor-sized reads, no model run, turn or launcher

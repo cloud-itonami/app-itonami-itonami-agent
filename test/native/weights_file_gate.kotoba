@@ -17,7 +17,7 @@
 (defn- cout [] :string "thinker.audio_tower.conv_out.weight")
 (defn- embed [] :string "thinker.model.embed_tokens.weight")
 
-;; 30 checks (the header text starts with { and the closing } sits before two padding spaces)
+;; 36 checks (the header text starts with { and the closing } sits before two padding spaces)
 (defn- part-a [h :string] :i64
   (+ (b2i (= (wf/wf-size (model)) 1876091704))
     (+ (b2i (= (wf/wf-header-len (model)) 74544))
@@ -51,12 +51,24 @@
     (+ (b2i (= (wf/wf-header-len "/d/missing.bin") -1))
     (b2i (= (wf/wf-bf16 "/d/missing.bin" (bias) 0) -1))))))))))))))))
 
+(defn- fc1 [] :string "thinker.audio_tower.layers.0.fc1.weight")
+
+;; row dot products with x[i] = (((i + seed) mod 7) - 3) / 8, summed in index order
+(defn- part-c [] :i64
+  (+ (b2i (= (wf/wf-row-dot (model) (fc1) 0 0) 4576192732594176000))
+    (+ (b2i (= (wf/wf-row-dot (model) (fc1) 3583 5) -4637814587264073728))
+    (+ (b2i (= (wf/wf-row-dot (model) "thinker.audio_tower.layers.1.fc2.weight" 7 2) 4579017348270260224))
+    (+ (b2i (= (wf/wf-row-dot (model) (fc1) 3584 0) -1))
+    (+ (b2i (= (wf/wf-row-dot (model) (bias) 0 0) -1))
+    (b2i (= (wf/wf-row-dot (model) "no.such.tensor" 0 0) -1))))))))
+
 (defn- count-checks [] :i64
   (let [h (wf/wf-header-text (model))]
     (+ (part-a h)
       (+ (part-b h)
+      (+ (part-c)
          (b2i (and (= (string-code-point-at h 0) 123)
-                   (= (string-code-point-at h 74541) 125)))))))
+                   (= (string-code-point-at h 74541) 125))))))))
 
 (defn main [] :i64
   (let [n (count-checks)

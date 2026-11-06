@@ -9,7 +9,7 @@
 (ns itonami.weights-file
   (:require [itonami.bf16 :as bf]
             [itonami.safetensors :as st])
-  (:export [wf-size wf-header-len wf-header-text wf-bf16])
+  (:export [wf-size wf-header-len wf-header-text wf-bf16 wf-row-dot])
   (:capabilities [:fs/app-data]))
 
 (defn- frame [op :string path :string tail :string] :string
@@ -76,4 +76,45 @@
             (if (= (bytes-count r) 7)
               (let [v (+ (bytes-at r 5) (* 256 (bytes-at r 6)))]
                 (if (bf/bf16-finite? v) (bf/bf16-to-f64 v) -1))
+              -1)))))))
+
+;; x[i] = (((i + seed) mod 7) - 3) / 8, a deterministic dyadic input vector (exact in f64)
+(defn- x-at [i :i64 seed :i64] :i64
+  (f64-to-bits (f64-div (i64-to-f64-rounded (- (mod (+ i seed) 7) 3)) 8.0)))
+
+;; sum over i of w[i] * x[i], in index order, for the BF16 pairs that follow the
+;; acknowledgement in r; -1 when an element is not finite
+(defn- dot-run [r :bytes i :i64 c :i64 seed :i64 acc :i64] :i64
+  (if (>= i c)
+    acc
+    (let [v (+ (bytes-at r (+ 5 (* 2 i))) (* 256 (bytes-at r (+ 6 (* 2 i)))))]
+      (if (bf/bf16-finite? v)
+        (dot-run r (+ i 1) c seed
+          (f64-to-bits (f64-add (f64-from-bits acc)
+                                (f64-mul (f64-from-bits (bf/bf16-to-f64 v))
+                                         (f64-from-bits (x-at i seed))))))
+        -1))))
+
+;; dot product of one row of a 2-D BF16 weight (one E request, so at most 131072 columns)
+;; with the vector x above, as f64 bits; -1 when the file, tensor, shape or row is unusable
+(defn wf-row-dot [path :string name :string row :i64 seed :i64] :i64
+  (let [h (wf-header-text path)
+        n (wf-header-len path)]
+    (if (or (= (string-length h) 0) (< row 0) (not (string=? (st/st-dtype h name) "BF16"))
+            (not (= (st/st-ndim h name) 2)))
+      -1
+      (let [rows (st/st-dim h name 0)
+            cols (st/st-dim h name 1)
+            b (st/st-begin h name)
+            e (st/st-end h name)
+            off (+ (+ 8 n) (+ b (* row (* cols 2))))]
+        (if (or (< rows 1) (< cols 1) (>= row rows) (> (* cols 2) 262144)
+                (> (+ (+ b (* row (* cols 2))) (* cols 2)) e)
+                (> (+ off (* cols 2)) (wf-size path)))
+          -1
+          (let [r (typed-cap-call :fs/app-data :string :bytes
+                    (frame "E" path (string-concat (string-from-i64 off)
+                                      (string-concat ":" (string-from-i64 (* cols 2))))))]
+            (if (= (bytes-count r) (+ 5 (* cols 2)))
+              (dot-run r 0 cols seed 0)
               -1)))))))
