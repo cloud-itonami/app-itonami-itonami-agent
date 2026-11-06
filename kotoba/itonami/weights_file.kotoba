@@ -1,0 +1,79 @@
+;; Reading a real safetensors file natively (JUN-892): FS2 range reads through :fs/app-data.
+;; The host grants one directory on fd 3; paths are relative to it ("/d/model.safetensors").
+;; F returns the file's metadata (the second field is its size in bytes); E returns up to
+;; 262,144 bytes at "<offset>:<count>" after a 5-byte "\0FS2\0" acknowledgement. Every
+;; function here returns -1 (or "" for the header text) instead of touching the file when
+;; its arguments or the file cannot satisfy the request, because an invalid E request traps
+;; the whole program. The header is parsed by itonami.safetensors; one BF16 element is
+;; decoded by itonami.bf16. The data area is never held in memory.
+(ns itonami.weights-file
+  (:require [itonami.bf16 :as bf]
+            [itonami.safetensors :as st])
+  (:export [wf-size wf-header-len wf-header-text wf-bf16])
+  (:capabilities [:fs/app-data]))
+
+(defn- frame [op :string path :string tail :string] :string
+  (string-concat "\u0000FS2\u0000"
+    (string-concat op (string-concat path (string-concat "\u0000" tail)))))
+
+(defn- digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
+
+(defn- digits-end [s :string i :i64] :i64
+  (if (and (< i (string-length s)) (digit? (string-code-point-at s i))) (digits-end s (+ i 1)) i))
+(defn- digits-val [s :string i :i64 e :i64 acc :i64] :i64
+  (if (>= i e) acc (digits-val s (+ i 1) e (+ (* acc 10) (- (string-code-point-at s i) 48)))))
+
+;; the size field of an F reply ("<mode> <size> ..."), or -1 when the file is absent
+(defn wf-size [path :string] :i64
+  (let [r (typed-cap-call :fs/app-data :string :string (frame "F" path ""))]
+    (if (< (string-length r) 6)
+      -1
+      (let [body (string-substring r 5 (string-length r))
+            sp (string-index-of body " ")]
+        (if (< sp 0)
+          -1
+          (let [e (digits-end body (+ sp 1))]
+            (if (= e (+ sp 1)) -1 (digits-val body (+ sp 1) e 0))))))))
+
+;; little-endian fold of n bytes of r starting at index i (after the acknowledgement)
+(defn- le-fold [r :bytes i :i64 n :i64 acc :i64 scale :i64] :i64
+  (if (>= i n)
+    acc
+    (le-fold r (+ i 1) n (+ acc (* (bytes-at r i) scale)) (* scale 256))))
+
+;; the u64 header length at the start of the file, or -1
+(defn wf-header-len [path :string] :i64
+  (if (< (wf-size path) 8)
+    -1
+    (let [r (typed-cap-call :fs/app-data :string :bytes (frame "E" path "0:8"))]
+      (if (= (bytes-count r) 13) (le-fold r 5 13 0 1) -1))))
+
+;; the JSON header as text ("" when unreadable or larger than one E request)
+(defn wf-header-text [path :string] :string
+  (let [n (wf-header-len path)]
+    (if (or (<= n 0) (> n 262144) (> (+ 8 n) (wf-size path)))
+      ""
+      (let [r (typed-cap-call :fs/app-data :string :bytes
+                (frame "E" path (string-concat "8:" (string-from-i64 n))))]
+        (if (= (bytes-count r) (+ 5 n))
+          (string-from-utf8 (bytes-slice r 5 (+ 5 n)))
+          "")))))
+
+;; exact f64 bits of element idx of a BF16 tensor, or -1 when the file, tensor, dtype or
+;; index is not usable (-1 is a NaN pattern, never the bits of a finite bfloat16)
+(defn wf-bf16 [path :string name :string idx :i64] :i64
+  (let [h (wf-header-text path)
+        n (wf-header-len path)]
+    (if (or (= (string-length h) 0) (< idx 0) (not (string=? (st/st-dtype h name) "BF16")))
+      -1
+      (let [b (st/st-begin h name)
+            e (st/st-end h name)
+            off (+ (+ 8 n) (+ b (* 2 idx)))]
+        (if (or (< b 0) (< e 0) (> (+ (+ b (* 2 idx)) 2) e) (> (+ off 2) (wf-size path)))
+          -1
+          (let [r (typed-cap-call :fs/app-data :string :bytes
+                    (frame "E" path (string-concat (string-from-i64 off) ":2")))]
+            (if (= (bytes-count r) 7)
+              (let [v (+ (bytes-at r 5) (* 256 (bytes-at r 6)))]
+                (if (bf/bf16-finite? v) (bf/bf16-to-f64 v) -1))
+              -1)))))))
