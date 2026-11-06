@@ -1,0 +1,168 @@
+#!/bin/sh
+# Compile and execute one Qwen3 attention layer (QK-norm, NeoX RoPE, grouped-query
+# attention, causal softmax; built on itonami.qwen-ops, itonami.nn-ops and
+# itonami.log-mel) with the pinned Amu multi-module project CLI, against a one-off f64
+# reference. It does not load weights, run a model, or exercise the agent turn or
+# launcher.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
+EXPECTED_LOGMEL_SHA256=daf0d273329a7b5a05aef4255b985f2e1c031c74f32596e9578add46980b1f5e
+EXPECTED_NN_SHA256=4693d227291a31b8c59378b0ab114715a983dfbfd17308d5b478181793a3604d
+EXPECTED_QWENOPS_SHA256=a5a8744046a81edd21d0740395e874c89ed518e24092a5e889c78b2b2ba51576
+EXPECTED_ATTN_SHA256=c1ef7a27aedd9c74bf5598d02b5c870f2afef0b8add7b8919594231362d7f2cd
+AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
+EXPECTED_RESULT=48
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+[ -x "$CLI" ] || { printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2; exit 2; }
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+check_sha() {
+  actual=$(shasum -a 256 "$1" | cut -d ' ' -f 1)
+  if [ "$actual" != "$2" ]; then
+    printf 'unexpected digest for %s: %s\n' "$1" "$actual" >&2
+    exit 2
+  fi
+}
+CLI_SHA256=$(shasum -a 256 "$CLI" | cut -d ' ' -f 1)
+check_sha "$CLI" "$EXPECTED_CLI_SHA256"
+LOGMEL="$REPO_ROOT/kotoba/itonami/log_mel.kotoba"
+NNOPS="$REPO_ROOT/kotoba/itonami/nn_ops.kotoba"
+QWENOPS="$REPO_ROOT/kotoba/itonami/qwen_ops.kotoba"
+SOURCE="$REPO_ROOT/kotoba/itonami/qwen_attn.kotoba"
+check_sha "$LOGMEL" "$EXPECTED_LOGMEL_SHA256"
+check_sha "$NNOPS" "$EXPECTED_NN_SHA256"
+check_sha "$QWENOPS" "$EXPECTED_QWENOPS_SHA256"
+check_sha "$SOURCE" "$EXPECTED_ATTN_SHA256"
+SOURCE_SHA256=$EXPECTED_ATTN_SHA256
+
+# run_gate <dir> <qwen-attn-source-file>: lock + compile. Modules sorted by
+# name, files sorted by path.
+run_gate() {
+  dir=$1
+  src=$2
+  gate="$dir/src/qwen_attn_gate.kotoba"
+  mkdir -p "$dir/src"
+  cp "$LOGMEL" "$dir/src/log_mel.kotoba"
+  cp "$NNOPS" "$dir/src/nn_ops.kotoba"
+  cp "$QWENOPS" "$dir/src/qwen_ops.kotoba"
+  cp "$src" "$dir/src/qwen_attn.kotoba"
+  cat > "$gate" <<'EOF2'
+(ns itonami.qwen-attn-gate
+  (:require [itonami.qwen-attn :as qa])
+  (:export [main]))
+(defn main [] :i64 (qa/match-count))
+EOF2
+  lm="$dir/src/log_mel.kotoba"
+  nn="$dir/src/nn_ops.kotoba"
+  at="$dir/src/qwen_attn.kotoba"
+  qo="$dir/src/qwen_ops.kotoba"
+  # modules sorted by name, files sorted by path: log-mel < nn-ops < qwen-attn < qwen-attn-gate < qwen-ops
+  printf 'KSL2\nentry %s\nmodule itonami.log-mel %s\nmodule itonami.nn-ops %s\nmodule itonami.qwen-attn %s\nmodule itonami.qwen-attn-gate %s\nmodule itonami.qwen-ops %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\nfile %s %s\n' \
+    "$gate" "$lm" "$nn" "$at" "$gate" "$qo" \
+    "$(shasum -a 256 "$lm" | cut -d ' ' -f 1)" "$lm" \
+    "$(shasum -a 256 "$nn" | cut -d ' ' -f 1)" "$nn" \
+    "$(shasum -a 256 "$at" | cut -d ' ' -f 1)" "$at" \
+    "$(shasum -a 256 "$gate" | cut -d ' ' -f 1)" "$gate" \
+    "$(shasum -a 256 "$qo" | cut -d ' ' -f 1)" "$qo" > "$dir/qwen-attn.ksl"
+  "$CLI" compile "$gate" --source-lock "$dir/qwen-attn.ksl" -o "$dir/qwen-attn-tests.macho"
+  codesign --verify --strict "$dir/qwen-attn-tests.macho"
+}
+
+POS="$OUT_DIR/positive"
+run_gate "$POS" "$SOURCE"
+GATE_PATH="$POS/src/qwen_attn_gate.kotoba"
+LOCK="$POS/qwen-attn.ksl"
+PROGRAM="$POS/qwen-attn-tests.macho"
+DIRECT_RESULT=$("$PROGRAM")
+LOCKED_RESULT=$("$CLI" run "$GATE_PATH" --source-lock "$LOCK")
+ARTIFACT_RESULT=$("$CLI" run "$PROGRAM")
+for result in "$DIRECT_RESULT" "$LOCKED_RESULT" "$ARTIFACT_RESULT"; do
+  if [ "$result" != "$EXPECTED_RESULT" ]; then
+    printf 'qwen-attn result mismatch: expected %s, got %s\n' "$EXPECTED_RESULT" "$result" >&2
+    exit 1
+  fi
+done
+
+# negative controls: each mutation must change the source and stop the gate
+# from returning the full match count
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+NEG_RESULTS=""
+mutate() {
+  name=$1
+  pattern=$2
+  replacement=$3
+  sed "s/$pattern/$replacement/" "$SOURCE" > "$NEG/$name.kotoba"
+  if cmp -s "$SOURCE" "$NEG/$name.kotoba"; then
+    printf 'negative control %s did not change the source\n' "$name" >&2
+    exit 1
+  fi
+  run_gate "$NEG/$name" "$NEG/$name.kotoba"
+  result=$("$NEG/$name/qwen-attn-tests.macho")
+  if [ "$result" = "$EXPECTED_RESULT" ]; then
+    printf 'negative control %s still passed the gate\n' "$name" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name=$result"
+}
+mutate no-qk-norm '(qo\/rms-apply (fq i h e) (q-inv i h) (wq e))' '(fmul (fq i h e) (wq e))'
+mutate k-norm-weight '(qo\/rms-apply (fk j g e) (k-inv j g) (wk e))' '(qo\/rms-apply (fk j g e) (k-inv j g) (wq e))'
+mutate gqa-group '(quot h 2)' '(mod h 2)'
+mutate causal-mask '(cond (> j i) acc' '(cond (> j (+ i 1)) acc'
+mutate score-scale '(f64-to-bits 2.0))))' '(f64-to-bits 1.0))))'
+mutate k-rope-position '(qo\/rope-first (k-norm j g e) (k-norm j g (+ e 2)) j e 4 (theta))' '(qo\/rope-first (k-norm j g e) (k-norm j g (+ e 2)) 0 e 4 (theta))'
+mutate q-rope-second '(qo\/rope-second (q-norm i h (- e 2)) (q-norm i h e) i (- e 2) 4 (theta))' '(qo\/rope-second (q-norm i h (- e 2)) (q-norm i h e) i e 4 (theta))'
+mutate value-group '(fv j (kv-head h) e)' '(fv j 0 e)'
+mutate max-shift '(fsub (score i h j) mx)) z)' '(score i h j)) z)'
+
+# negative control: a source changed after locking is refused
+SOURCE_PATH="$POS/src/qwen_attn.kotoba"
+printf '\n' >> "$SOURCE_PATH"
+if "$CLI" compile "$GATE_PATH" --source-lock "$LOCK" \
+  -o "$OUT_DIR/should-not-exist.macho" > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr" || { cat "$OUT_DIR/refusal.stderr" >&2; printf '%s\n' "changed source refusal did not identify the locked input" >&2; exit 1; }
+[ ! -e "$OUT_DIR/should-not-exist.macho" ] || { printf '%s\n' "refused compile left an output artifact" >&2; exit 1; }
+
+{
+  printf 'format: itonami.qwen-attn-selfhost-gate.v1\n'
+  printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$CLI_SHA256"
+  printf 'log_mel_source_sha256: %s\n' "$EXPECTED_LOGMEL_SHA256"
+  printf 'nn_ops_source_sha256: %s\n' "$EXPECTED_NN_SHA256"
+  printf 'qwen_ops_source_sha256: %s\n' "$EXPECTED_QWENOPS_SHA256"
+  printf 'qwen-attn_source_sha256: %s\n' "$SOURCE_SHA256"
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)"
+  printf 'direct_result: %s\n' "$DIRECT_RESULT"
+  printf 'locked_run_result: %s\n' "$LOCKED_RESULT"
+  printf 'artifact_run_result: %s\n' "$ARTIFACT_RESULT"
+  printf 'negative_control_results:%s\n' "$NEG_RESULTS"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: bounded one-layer Qwen3 attention on an analytic fixture; no real sizes, o_proj, weights, KV cache, turn or launcher\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"
