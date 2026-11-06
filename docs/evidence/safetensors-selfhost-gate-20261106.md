@@ -40,9 +40,10 @@ mutations each stopped the gate returning 44: dtype offset (38), list start offs
 
 **Full header, measured once outside the repo.** A scratch program with the **whole**
 74,544-character header as one string literal and the same module answered 12 of 12
-queries (dtype, ndim, begin, end of three tensors near the end of the file, including
-`thinker.lm_head.weight` or `thinker.model.norm.weight` as present) correctly in 0.56 s
-wall time; the 74 KB literal is not committed.
+queries (dtype, ndim, begin and end of `thinker.audio_tower.layers.17.fc2.weight`,
+`thinker.model.layers.27.mlp.down_proj.weight` and `thinker.lm_head.weight`, each equal
+to CPython's reading) in 0.56 s wall time including compilation; the 74 KB literal is
+not committed.
 
 ## One-off reference (not a gate input)
 
