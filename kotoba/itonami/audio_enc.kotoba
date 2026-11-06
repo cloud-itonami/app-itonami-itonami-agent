@@ -1,4 +1,4 @@
-;; The Qwen3-ASR audio encoder for speech of up to 8 s (JUN-928, JUN-929): N samples of 16 kHz speech
+;; The Qwen3-ASR audio encoder for speech of up to 7 s (JUN-928, JUN-929): N samples of 16 kHz speech
 ;; -> 128 x T log-mel (T = N / 160 frames, split into chunks of 100 frames, the last zero-padded;
 ;; 13 tokens per full chunk and ceil(L / 8) for a last chunk of L frames, positions restarting at 0 in each
 ;; chunk, one attention window over all tokens). The text below describes one chunk: 128 x 100 log-mel -> three 3x3 stride-2 pad-1 conv2d blocks (480 channels, bias, exact GELU) ->
@@ -87,7 +87,7 @@
 (defn enc-mel [clip :string] :i64
   (let [len (string-length clip)
         n (quot len 4)]
-    (if (or (not (= (mod len 4) 0)) (< n 4000) (> n 128000) (not (all-hex? clip 0 len)))
+    (if (or (not (= (mod len 4) 0)) (< n 4000) (> n 112000) (not (all-hex? clip 0 len)))
       2
       (let [tt (quot n 160)
             tp (* 100 (quot (+ tt 99) 100))

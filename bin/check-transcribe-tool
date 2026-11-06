@@ -24,8 +24,8 @@ OUT_DIR=$2
 MODELDIR=$3
 EXPECTED_CLI_SHA256=ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
 EXPECTED_MODEL_SHA256=79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
-EXPECTED_WAV_READER_SHA256=80776f75a695d7c1cfdfa5fa5ee49bcbfcf1e98973fcbc5110595a8a3762ef5f
-EXPECTED_AUDIO_ENC_SHA256=6b94d6d849997db407ccfae3616f3903b4f5a5d067971d4af65d80416ec68946
+EXPECTED_WAV_READER_SHA256=ea0fa9c18b5e863e0cc410259cd47babf920eade73a5ab2d2acae6e399d86c4b
+EXPECTED_AUDIO_ENC_SHA256=6b1835826ba03bdf0fd2baf9b2487c27a1f6c521fa3d6b46131aa493cd22e6f3
 EXPECTED_BF16_SHA256=09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b
 EXPECTED_GELU_ERF_SHA256=36b4c98a4df8fd817695a62d1602320f23d93fb38ddf97c1fb124bdcbd7c18a6
 EXPECTED_GGML_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
@@ -37,14 +37,14 @@ EXPECTED_SAFETENSORS_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3
 EXPECTED_WEIGHTS_FILE_SHA256=8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
 EXPECTED_QWEN_DECODER_SHA256=8d6b3d8f9eb598825977f634c1714cf35bdad2825055cc18abd95fd44168e677
 EXPECTED_QWEN_VOCAB_SHA256=275019cabe34aeb60ab2628eab78daeae0ae15fdecd530e7984e3ecf44f4dcc9
-EXPECTED_WAV_HEX_CLI_SHA256=22a3eeace47dbb5e3d8a4f6f2d8f7c9cff15d077614f4b6d6be153c650cf2884
-EXPECTED_AUDIO_ENC_CLI_SHA256=e8aca903e185e9c308dfa8757dbe8b92d70b54fb9b79630886100593b9b74b6c
+EXPECTED_WAV_HEX_CLI_SHA256=19b481b332a1eced35e33273a5f157f960524a670246f822f9b1ee42f9997238
+EXPECTED_AUDIO_ENC_CLI_SHA256=b130b06d11761404e002058a59ca56d8e79b0583e31a39f7d09772df387b0012
 EXPECTED_QWEN_DECODER_CLI_SHA256=126aa19294928dbd3684510662d9a81233ec4c42dacd73ee84f1eb08242a68b6
 EXPECTED_QWEN_DETOK_CLI_SHA256=26a6c9c32ab12d6879fcc3f4749540caf89f3cc68799e2024f3c993e46860ae7
 EXPECTED_QWEN_CALC_CLI_SHA256=0e4c2b8cdb6388474f36996c938aaea7578b90490e8eb3c5e8e8218e7cd1cd60
-EXPECTED_DRIVER_SHA256=ecfaa2a8d1e0ae6e6c72fa8d4c9db83659ee5216952664e6b188b1911e000be5
+EXPECTED_DRIVER_SHA256=91c78497c54f7eece51b2e4eb9dd65d005ca5ee35ffc0806b4a224441c1b2029
 EXPECTED_BUILD_SHA256=8bdb80790ac515472397ced5d1072da0fa3305285724facb5a9524561eba72bb
-EXPECTED_AGENT_SHA256=a962814503342d431e45e2e66a192c496b0e4bf75aa956b63baa3baea2793a2d
+EXPECTED_AGENT_SHA256=1c795017229a52c001ff9caf6687ffb56f3c712c3d43a786764cfcf7fc3659ab
 EXPECTED_TEXT_EN="The quick brown fox jumps over the lazy dog."
 EXPECTED_TEXT_JA="今日はとてもいい天気ですね。"
 EXPECTED_TEXT_LONG="The weather is nice today, so we decided to walk to the park, sit by the lake, and have a long lunch together."
@@ -56,11 +56,11 @@ bad_rate8k.wav:not 16 kHz
 bad_bits8.wav:not 16-bit
 bad_truncated.wav:truncated data chunk
 bad_short.wav:shorter than 0.25 s
-bad_long.wav:longer than 8 s
+bad_long.wav:longer than 7 s
 bad_tiny.wav:too short to be a WAV file
 bad_nodata.wav:no data chunk
 bad_empty.wav:too short to be a WAV file
-bad_edge_128001.wav:longer than 8 s
+bad_edge_112001.wav:longer than 7 s
 bad_edge_3999.wav:shorter than 0.25 s
 bad_edge_one_byte_missing.wav:truncated data chunk"
 TOTAL=29
@@ -102,8 +102,8 @@ printf '%s\n' \
   "edge_exact_data.wav bf2c79811e3265602b31bef45f0aeba5e9056a89d909c262294471b72305315d" \
   "bad_edge_one_byte_missing.wav 7c69b21eb72c2af905a09df61584b400323aab092c017a78377e50ae3f7e06f3" \
   "bad_edge_3999.wav 56291c3cb9deb712bb94f14c64341527b35c229203b7641816a3f67835600b38" \
-  "bad_edge_128001.wav a4a7e2a6a624a193925075510965f286151fb1f359e45af486c3847a67d24675" \
-  "edge_max_128000.wav 08f0f5b1923fc4ce0d2eaa772c9c361df46493ca8255a7f14d1f45a0a7b8fe96" \
+  "bad_edge_112001.wav b4b974edb053a0616b9e8c145e06079b90db80f8e01f790744adfcf8703d9e69" \
+  "edge_max_112000.wav 9ce635b95fcafc6cf3a6d6320045104aa818ac02769be2f28ddc86316dca04d5" \
   "edge_min_4000.wav 9535d411103e9af2bc2cc3983b032167475efa8311edeae752c365854f2552d6" \
   "bad_bits8.wav a427c921cf265861c0da4285fd7c2d82b67d02f12401e2be4c88032501a58b4a" \
   "bad_empty.wav e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" \
@@ -117,7 +117,7 @@ printf '%s\n' \
   "bad_stereo.wav 68d5523ea60a0642e569714b5aecef18ace963d9eb51c550d91b84965fcbda1b" \
   "bad_tiny.wav a40ff3d5900fb7698b8c865041347cb49eccedc8f93945f89629ad104aaecce4" \
   "bad_truncated.wav b6e193dc65985615aac8280ce2501862d6b4319f0b1f445aa1433b5306bb839b" \
-  "long_6p9s.wav f0983ca50353355b2d78df0fbfce6fce4e6cc8d32de78fe29b51d34cad14ff50" \
+  "long_7p0s.wav 6eecd5be2d2c489578198c24b11862c32a9a31a2315a4d8fc61412d17b3f0ce1" \
   "ja_tenki.wav 0a8075350616f6575c703311c972f43ede066d28dda67d8066c9e60bcc01b5b2" \
   "quick_brown_fox.wav 904c039735a6eec4186bed49369408638421937fb02104729afafea8c41b266d" \
   | while read -r name want; do check_sha "$WD/$name" "$want"; done
@@ -166,8 +166,8 @@ printf '%s\n' "$REASONS" | {
   echo "$n" > "$OUT_DIR/reader.count"
 }
 [ "$(cat "$OUT_DIR/reader.count")" -eq 15 ] && ok
-reader "$GUESTS" edge_max_128000.wav
-[ "$STATUS" -eq 0 ] && [ "${#OUT}" -eq $((128000 * 4)) ] && ok
+reader "$GUESTS" edge_max_112000.wav
+[ "$STATUS" -eq 0 ] && [ "${#OUT}" -eq $((112000 * 4)) ] && ok
 reader "$GUESTS" edge_min_4000.wav
 [ "$STATUS" -eq 0 ] && [ "${#OUT}" -eq $((4000 * 4)) ] && ok
 reader "$GUESTS" edge_exact_data.wav
@@ -186,7 +186,7 @@ env -u ITONAMI_STT_MODEL "$DRIVER" "$WD/quick_brown_fox.wav" > /dev/null 2>&1; [
 "$DRIVER" "$WD/bad_stereo.wav" > "$OUT_DIR/bad.out" 2> "$OUT_DIR/bad.err"; st=$?
 [ "$st" -eq 2 ] && [ ! -s "$OUT_DIR/bad.out" ] && grep -q 'not mono' "$OUT_DIR/bad.err" && ok
 "$DRIVER" "$WD/bad_long.wav" > "$OUT_DIR/bad.out" 2> "$OUT_DIR/bad.err"; st=$?
-[ "$st" -eq 2 ] && [ ! -s "$OUT_DIR/bad.out" ] && grep -q 'longer than 8 s' "$OUT_DIR/bad.err" && ok
+[ "$st" -eq 2 ] && [ ! -s "$OUT_DIR/bad.out" ] && grep -q 'longer than 7 s' "$OUT_DIR/bad.err" && ok
 env -u ITONAMI_STT_GUESTS "$REPO_ROOT/bin/itonami-agent" stt "$WD/quick_brown_fox.wav" > /dev/null 2>&1; [ "$?" -eq 78 ] && ok
 "$REPO_ROOT/bin/itonami-agent" stt > /dev/null 2>&1; [ "$?" -eq 2 ] && ok
 set -e
@@ -200,10 +200,10 @@ grep -q '39946 samples, 33 audio tokens' "$OUT_DIR/en.err" && ok
 [ "$(cat "$OUT_DIR/ja.out")" = "$EXPECTED_TEXT_JA" ] && ok
 grep -q 'language Japanese' "$OUT_DIR/ja.err" && ok
 grep -q '38367 samples, 31 audio tokens' "$OUT_DIR/ja.err" && ok
-"$DRIVER" "$WD/long_6p9s.wav" > "$OUT_DIR/long.out" 2> "$OUT_DIR/long.err" || true
+"$DRIVER" "$WD/long_7p0s.wav" > "$OUT_DIR/long.out" 2> "$OUT_DIR/long.err" || true
 [ "$(cat "$OUT_DIR/long.out")" = "$EXPECTED_TEXT_LONG" ] && ok
 grep -q 'language English' "$OUT_DIR/long.err" && ok
-grep -q '110665 samples, 90 audio tokens' "$OUT_DIR/long.err" && ok
+grep -q '112000 samples, 91 audio tokens' "$OUT_DIR/long.err" && ok
 
 # ---- 5. the launcher's stt route on the English WAV -------------------------------------------------------------------------
 "$REPO_ROOT/bin/itonami-agent" stt "$WD/quick_brown_fox.wav" > "$OUT_DIR/agent.out" 2> "$OUT_DIR/agent.err" || true
@@ -252,8 +252,8 @@ mutate() {
     echo "$n" > "$d/count"
   }
   [ "$(cat "$d/count")" -ne 15 ] && bad=1
-  reader "$d/g" edge_max_128000.wav
-  if [ "$STATUS" -ne 0 ] || [ "${#OUT}" -ne $((128000 * 4)) ]; then bad=1; fi
+  reader "$d/g" edge_max_112000.wav
+  if [ "$STATUS" -ne 0 ] || [ "${#OUT}" -ne $((112000 * 4)) ]; then bad=1; fi
   reader "$d/g" edge_min_4000.wav
   if [ "$STATUS" -ne 0 ] || [ "${#OUT}" -ne $((4000 * 4)) ]; then bad=1; fi
   reader "$d/g" edge_exact_data.wav
@@ -271,7 +271,7 @@ mutate bits-offset '(le r (+ fmt 22) 1 0) 16)' '(le r (+ fmt 21) 1 0) 16)'
 mutate chunk-padding '(mod (le r (+ p 4) 3 0) 2)' '(mod (le r (+ p 4) 3 0) 3)'
 mutate sample-bias '(+ (+ lo (\* 256 hi)) 32768)' '(+ (+ lo (* 256 hi)) 32767)'
 mutate sample-order '(+ lo (\* 256 hi))' '(+ hi (* 256 lo))'
-mutate length-limit '(> n 128000) "longer than 8 s"' '(> n 128001) "longer than 8 s"'
+mutate length-limit '(> n 112000) "longer than 7 s"' '(> n 112001) "longer than 7 s"'
 mutate min-length '(< n 4000) "shorter than 0.25 s"' '(< n 3999) "shorter than 0.25 s"'
 mutate truncation-check '(> (+ data (+ 8 (\* n 2))) size)' '(> (+ data (+ 7 (* n 2))) size)'
 
@@ -289,6 +289,6 @@ fi
   printf 'english: %s | %s\n' "$(cat "$OUT_DIR/en.out")" "$(cat "$OUT_DIR/en.err" | tail -1)"
   printf 'japanese: %s | %s\n' "$(cat "$OUT_DIR/ja.out")" "$(cat "$OUT_DIR/ja.err" | tail -1)"
   printf 'reader_mutations_caught:%s\n' "$NEG_RESULTS"
-  printf 'qualification: WAV (16 kHz mono 16-bit PCM, 0.25 to 8 s) in, transcript out through bin/itonami-transcribe and itonami-agent stt on the real Qwen3-ASR-0.6B weights; the English and Japanese transcripts equal the spoken sentences; not other languages or speakers, longer audio, streaming, the original model beyond the transcripts, CI\n'
+  printf 'qualification: WAV (16 kHz mono 16-bit PCM, 0.25 to 7 s) in, transcript out through bin/itonami-transcribe and itonami-agent stt on the real Qwen3-ASR-0.6B weights; the English and Japanese transcripts equal the spoken sentences; not other languages or speakers, longer audio, streaming, the original model beyond the transcripts, CI\n'
 } > "$OUT_DIR/build-receipt.txt"
 cat "$OUT_DIR/build-receipt.txt"
