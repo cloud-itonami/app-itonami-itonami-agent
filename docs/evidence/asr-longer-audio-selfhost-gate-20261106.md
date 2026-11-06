@@ -48,7 +48,7 @@ tokens unchecked); audio over 8 s (one attention window, 104 tokens; prompts ove
 the decoder with audio against CPython (about half an hour per prefill). The 33-token decoder logits
 are a regression pin. The gate needs the 1.88 GB model and is not CI-runnable.
 
-## A Japanese sentence (JUN-936)
+## A Japanese sentence (JUN-940)
 
 `say -v Kyoko -o ja.aiff "今日はとてもいい天気ですね。"` converted with `afconvert -f WAVE -d LEI16@16000 -c 1`
 (38,367 samples, 2.4 s, WAV sha256 `0a807535...f657`, zero-padded to 38,400 = 240 frames): three chunks
