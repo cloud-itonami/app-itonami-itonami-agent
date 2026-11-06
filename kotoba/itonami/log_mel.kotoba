@@ -1,0 +1,290 @@
+;; Scalar core of whisper's log-mel front end (JUN-866, native STT step 1).
+;; The pinned Amu seed subset has no sin/cos/exp/log and no vectors, so the
+;; math is built here from f64 add/sub/mul/div on bit patterns held in i64:
+;;   - turn-cos / turn-sin: cos/sin(2*pi*r/n) by integer quarter-turn reduction
+;;     plus a 12-term Taylor series on [0, pi/2)
+;;   - exp: 30-term series (domain |x| <= 4, enough for the mel scale)
+;;   - ln: halving/doubling into [1/sqrt2, sqrt2), then 2*atanh(z) series
+;; On top: periodic Hann window, Slaney mel scale and filterbank weights
+;; (80 mels, 0-8000 Hz, sr 16000, n_fft 400, librosa htk=False norm=slaney),
+;; log10 with the 1e-10 floor, and whisper's normalisation. The DFT power bin
+;; below runs on a built-in synthetic frame (test-sample) because a frame
+;; cannot be passed in until the seed admits vectors or byte reads; it is
+;; the part a later unit replaces. Every f64 value is an i64 bit pattern.
+(ns itonami.log-mel
+  (:export [turn-cos turn-sin exp-series ln-pos log10-floor hann
+            hz-to-mel mel-to-hz mel-weight normalize-log
+            test-sample test-power-bin test-log-mel match-count]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- flt [a :i64 b :i64] :bool (f64-lt (f64-from-bits a) (f64-from-bits b)))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- one [] :i64 (f64-to-bits 1.0))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+(defn- half-pi [] :i64 4609753056924675352)
+(defn- neg [a :i64] :i64 (f64-to-bits (f64-neg (f64-from-bits a))))
+
+;; ---- sin / cos of a rational turn ---------------------------------------
+;; Horner on t2 = theta^2:  sin = theta*(1 - t2/(2*3)*(1 - t2/(4*5)*(...)))
+(defn- sin-poly [t2 :i64 k :i64 acc :i64] :i64
+  (if (< k 1)
+    acc
+    (sin-poly t2 (- k 1)
+              (fsub (one) (fmul (fdiv t2 (itof (* (* 2 k) (+ (* 2 k) 1)))) acc)))))
+
+;; cos = 1 - t2/(1*2)*(1 - t2/(3*4)*(...))
+(defn- cos-poly [t2 :i64 k :i64 acc :i64] :i64
+  (if (< k 1)
+    acc
+    (cos-poly t2 (- k 1)
+              (fsub (one) (fmul (fdiv t2 (itof (* (- (* 2 k) 1) (* 2 k)))) acc)))))
+
+(defn- theta [s :i64 quarter :i64] :i64
+  (fdiv (fmul (half-pi) (itof s)) (itof quarter)))
+
+(defn- sin-first [s :i64 quarter :i64] :i64
+  (let [t (theta s quarter)]
+    (fmul t (sin-poly (fmul t t) 12 (one)))))
+
+(defn- cos-first [s :i64 quarter :i64] :i64
+  (let [t (theta s quarter)]
+    (cos-poly (fmul t t) 12 (one))))
+
+;; cos(2*pi*r/n), n a positive multiple of 4, r >= 0
+(defn turn-cos [r :i64 n :i64] :i64
+  (let [quarter (quot n 4)
+        m (mod r n)
+        q (quot m quarter)
+        s (mod m quarter)]
+    (cond (= q 0) (cos-first s quarter)
+          (= q 1) (neg (sin-first s quarter))
+          (= q 2) (neg (cos-first s quarter))
+          :else (sin-first s quarter))))
+
+;; sin(2*pi*r/n)
+(defn turn-sin [r :i64 n :i64] :i64
+  (let [quarter (quot n 4)
+        m (mod r n)
+        q (quot m quarter)
+        s (mod m quarter)]
+    (cond (= q 0) (sin-first s quarter)
+          (= q 1) (cos-first s quarter)
+          (= q 2) (neg (sin-first s quarter))
+          :else (neg (cos-first s quarter)))))
+
+;; ---- exp / ln -------------------------------------------------------------
+;; exp(x) = 1 + x/1*(1 + x/2*(1 + x/3*(...))), 30 terms, for |x| <= 4
+(defn- exp-run [x :i64 k :i64 acc :i64] :i64
+  (if (< k 1)
+    acc
+    (exp-run x (- k 1) (fadd (one) (fmul (fdiv x (itof k)) acc)))))
+
+(defn exp-series [x :i64] :i64
+  (exp-run x 30 (one)))
+
+;; scale x > 0 into [1/sqrt2, sqrt2) by powers of two; the count is separate
+(defn- scaled [x :i64] :i64
+  (cond (not (flt x 4609047870845172685)) (scaled (fdiv x (f64-to-bits 2.0)))
+        (flt x 4604544271217802189) (scaled (fmul x (f64-to-bits 2.0)))
+        :else x))
+
+(defn- exponent [x :i64 e :i64] :i64
+  (cond (not (flt x 4609047870845172685)) (exponent (fdiv x (f64-to-bits 2.0)) (+ e 1))
+        (flt x 4604544271217802189) (exponent (fmul x (f64-to-bits 2.0)) (- e 1))
+        :else e))
+
+;; sum_{j=0..K} z^(2j)/(2j+1) by Horner in z2
+(defn- atanh-run [z2 :i64 j :i64 acc :i64] :i64
+  (if (< j 0)
+    acc
+    (atanh-run z2 (- j 1) (fadd (fdiv (one) (itof (+ (* 2 j) 1))) (fmul z2 acc)))))
+
+;; ln(x) for finite x > 0
+(defn ln-pos [x :i64] :i64
+  (let [m (scaled x)
+        e (exponent x 0)
+        z (fdiv (fsub m (one)) (fadd m (one)))
+        s (atanh-run (fmul z z) 15 (fdiv (one) (itof 31)))]
+    (fadd (fmul (itof e) 4604418534313441775)
+          (fmul (f64-to-bits 2.0) (fmul z s)))))
+
+;; log10(max(x, 1e-10))
+(defn log10-floor [x :i64] :i64
+  (let [v (if (flt x 4457293557087583675) 4457293557087583675 x)]
+    (fdiv (ln-pos v) 4612367379483415830)))
+
+;; ---- window, mel scale, filterbank -----------------------------------------
+;; periodic Hann, as torch.hann_window(400)
+(defn hann [n :i64] :i64
+  (fsub (f64-to-bits 0.5) (fmul (f64-to-bits 0.5) (turn-cos n 400))))
+
+(defn- f-sp [] :i64 (fdiv (f64-to-bits 200.0) (f64-to-bits 3.0)))
+(defn- logstep [] :i64 (fdiv (ln-pos (f64-to-bits 6.4)) (f64-to-bits 27.0)))
+
+;; Slaney mel scale
+(defn hz-to-mel [f :i64] :i64
+  (if (flt f (f64-to-bits 1000.0))
+    (fdiv f (f-sp))
+    (fadd (f64-to-bits 15.0)
+          (fdiv (ln-pos (fdiv f (f64-to-bits 1000.0))) (logstep)))))
+
+(defn mel-to-hz [m :i64] :i64
+  (if (flt m (f64-to-bits 15.0))
+    (fmul (f-sp) m)
+    (fmul (f64-to-bits 1000.0)
+          (exp-series (fmul (logstep) (fsub m (f64-to-bits 15.0)))))))
+
+;; edge i of the 82 mel-spaced points between 0 and 8000 Hz
+(defn- mel-point [i :i64] :i64
+  (mel-to-hz (fdiv (fmul (itof i) (hz-to-mel (f64-to-bits 8000.0))) (f64-to-bits 81.0))))
+
+;; weight of FFT bin k in mel filter m: triangle, then slaney area norm
+(defn mel-weight [m :i64 k :i64] :i64
+  (let [p0 (mel-point m)
+        p1 (mel-point (+ m 1))
+        p2 (mel-point (+ m 2))
+        fk (fdiv (fmul (itof k) (f64-to-bits 16000.0)) (f64-to-bits 400.0))
+        lower (fdiv (fsub fk p0) (fsub p1 p0))
+        upper (fdiv (fsub p2 fk) (fsub p2 p1))
+        tri (f64-to-bits (f64-max 0.0 (f64-min (f64-from-bits lower) (f64-from-bits upper))))]
+    (fdiv (fmul tri (f64-to-bits 2.0)) (fsub p2 p0))))
+
+;; whisper: clamp to (max over the whole window) - 8, then (x + 4) / 4
+(defn normalize-log [x :i64 window-max :i64] :i64
+  (fdiv (fadd (f64-to-bits (f64-max (f64-from-bits x)
+                                    (f64-sub (f64-from-bits window-max) 8.0)))
+              (f64-to-bits 4.0))
+        (f64-to-bits 4.0)))
+
+;; ---- gate-only synthetic frame and direct DFT -------------------------------
+;; two tones and a quadratic chirp (broadband)
+(defn test-sample [n :i64] :i64
+  (fadd (fadd (fmul (f64-to-bits 0.5) (turn-sin n 16))
+              (fmul (f64-to-bits 0.25) (turn-sin (* 3 n) 16)))
+        (fmul (f64-to-bits 0.2) (turn-sin (* n n) 400))))
+
+(defn- dft-run [k :i64 n :i64 re :i64 im :i64] :i64
+  (if (>= n 400)
+    (fadd (fmul re re) (fmul im im))
+    (let [xw (fmul (test-sample n) (hann n))
+          r (* k n)]
+      (dft-run k (+ n 1)
+               (fadd re (fmul xw (turn-cos r 400)))
+               (fadd im (fmul xw (turn-sin r 400)))))))
+
+;; |X_k|^2 of the Hann-windowed test frame
+(defn test-power-bin [k :i64] :i64 (dft-run k 0 (zero) (zero)))
+
+(defn- energy-run [m :i64 k :i64 acc :i64] :i64
+  (if (>= k 201)
+    acc
+    (let [w (mel-weight m k)]
+      (energy-run m (+ k 1)
+                  (if (flt (zero) w) (fadd acc (fmul w (test-power-bin k))) acc)))))
+
+;; log10(max(mel energy, 1e-10)) of mel filter m for the test frame
+(defn test-log-mel [m :i64] :i64 (log10-floor (energy-run m 0 (zero))))
+
+(defn- want [i :i64] :i64
+  (cond
+        (= i 0) -4616147752124040001
+        (= i 1) -4616118944541312227
+        (= i 2) -4616034048316500523
+        (= i 3) -4615941668053875984
+        (= i 4) -4615793515897370693
+        (= i 5) -4615618838844493877
+        (= i 6) -4615384323894869792
+        (= i 7) -4615088746818232697
+        (= i 8) -4614722298631866226
+        (= i 9) -4614225403460407966
+        (= i 10) -4613621517210595738
+        (= i 11) -4612716835877753676
+        (= i 12) -4611604588992047625
+        (= i 13) -4610451767720042389
+        (= i 14) -4606853102034812506
+        (= i 15) -4610090482630931984
+        (= i 16) -4611534662874957897
+        (= i 17) -4613099750520849775
+        (= i 18) -4614291291613657376
+        (= i 19) -4615176994399794856
+        (= i 20) -4615891448965722374
+        (= i 21) -4616673570913950806
+        (= i 22) -4617533204397892112
+        (= i 23) -4618174602339634219
+        (= i 24) 4603486228344037610
+        (= i 25) 4608840499599474966
+        (= i 26) 4610605438108607510
+        (= i 27) 4607807457954815521
+        (= i 28) -4617526369449194806
+        (= i 29) -4616194864636735479
+        (= i 30) -4614880065439228624
+        (= i 31) -4612710197468037409
+        (= i 32) -4610366026690185636
+        (= i 33) -4613407514298740478
+        (= i 34) -4615694766393401440
+        (= i 35) -4617240392526900062
+        (= i 36) -4618795159462376289
+        (= i 37) -4618081512115260068
+        (= i 38) -4616408141158846610
+        (= i 39) -4613390504499846826
+        (= i 40) -4612874999395125444
+        (= i 41) -4616141420695935076
+        (= i 42) -4618194520078882942
+        (= i 43) -4617306973376680316
+        (= i 44) -4613915374529505061
+        (= i 45) -4614810060226618351
+        (= i 46) -4617904876935364770
+        (= i 47) -4616318457875178961
+        (= i 48) -4613813966146746408
+        (= i 49) -4617230742382432273
+        (= i 50) -4615975168142750821
+        (= i 51) -4615130823715314999
+        (= i 52) -4617092790090744694
+        (= i 53) -4614825148376650457
+        (= i 54) 4604165578968804796
+        (= i 55) 4603283686914530298
+        (= i 56) -4616040435305782279
+        (= i 57) -4615875061566893667
+        (= i 58) -4615523080900787790
+        (= i 59) -4615787088437960626
+        (= i 60) -4615773618488143835
+        (= i 61) -4615645939687663981
+        (= i 62) -4615604580700029357
+        (= i 63) -4615576629215881446
+        (= i 64) -4615560150634267003
+        (= i 65) -4615528946871828177
+        (= i 66) -4615402919474525022
+        (= i 67) -4615357448406542975
+        (= i 68) -4615445594055060616
+        (= i 69) -4615278478743665580
+        (= i 70) -4615234055162382226
+        (= i 71) -4615114045370339002
+        (= i 72) -4615090968808602898
+        (= i 73) -4615262393700619366
+        (= i 74) -4614844055309918528
+        (= i 75) -4614983564786347406
+        (= i 76) -4614910623096974198
+        (= i 77) -4615433891916629770
+        (= i 78) -4612020624885559599
+        (= i 79) -4613665753184692127
+        :else (zero)))
+
+(defn- close? [a :i64 b :i64] :bool
+  (f64-lt (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b))) 0.000001))
+
+(defn- count-run [i :i64 mx :i64 acc :i64] :i64
+  (if (>= i 80)
+    acc
+    (count-run (+ i 1) mx (if (close? (test-log-mel i) (want i)) (+ acc 1) acc))))
+
+;; 80 log-mel matches + 3 normalised matches (bin 0, the peak, bin 79) = 83
+(defn match-count [] :i64
+  (let [mx 4610605438108607510
+        n (count-run 0 mx 0)]
+    (+ n
+       (+ (if (close? (normalize-log (test-log-mel 0) mx) 4604909686020972960) 1 0)
+          (+ (if (close? (normalize-log (test-log-mel 26) mx) 4609164073534007558) 1 0)
+             (if (close? (normalize-log (test-log-mel 79) mx) 4603668686551299024) 1 0))))))
