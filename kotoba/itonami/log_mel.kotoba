@@ -7,14 +7,19 @@
 ;;   - ln: halving/doubling into [1/sqrt2, sqrt2), then 2*atanh(z) series
 ;; On top: periodic Hann window, Slaney mel scale and filterbank weights
 ;; (80 mels, 0-8000 Hz, sr 16000, n_fft 400, librosa htk=False norm=slaney),
-;; log10 with the 1e-10 floor, and whisper's normalisation. The DFT power bin
-;; below runs on a built-in synthetic frame (test-sample) because a frame
-;; cannot be passed in until the seed admits vectors or byte reads; it is
-;; the part a later unit replaces. Every f64 value is an i64 bit pattern.
+;; log10 with the 1e-10 floor, and whisper's normalisation. Every f64 value is
+;; an i64 bit pattern.
+;;
+;; INPUT PATH (JUN-867). The seed has no vectors or byte reads, and a native
+;; guest receives data as strings (argv on :cli/args, lines on :io/read). A
+;; frame is therefore one string of exactly 1600 hex characters: 400 samples
+;; of 4 digits each, offset-binary int16 (hex of sample + 32768, so 8000 is
+;; silence), sample n at characters 4n..4n+3, samples scaled by 1/32768. The
+;; host drives the 3000-frame window one such line per frame.
 (ns itonami.log-mel
   (:export [turn-cos turn-sin exp-series ln-pos log10-floor hann
             hz-to-mel mel-to-hz mel-weight normalize-log
-            test-sample test-power-bin test-log-mel match-count]))
+            frame-valid? frame-sample power-bin log-mel-bin match-count]))
 
 (defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
 (defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
@@ -159,132 +164,175 @@
               (f64-to-bits 4.0))
         (f64-to-bits 4.0)))
 
-;; ---- gate-only synthetic frame and direct DFT -------------------------------
-;; two tones and a quadratic chirp (broadband)
-(defn test-sample [n :i64] :i64
-  (fadd (fadd (fmul (f64-to-bits 0.5) (turn-sin n 16))
-              (fmul (f64-to-bits 0.25) (turn-sin (* 3 n) 16)))
-        (fmul (f64-to-bits 0.2) (turn-sin (* n n) 400))))
+;; ---- frame input (hex string) and direct DFT ------------------------------
+(defn- hex-digit [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87)
+        (and (>= c 65) (<= c 70)) (- c 55)
+        :else -1))
 
-(defn- dft-run [k :i64 n :i64 re :i64 im :i64] :i64
+(defn- all-hex? [s :string i :i64 n :i64] :bool
+  (cond (>= i n) true
+        (< (hex-digit (string-code-point-at s i)) 0) false
+        :else (all-hex? s (+ i 1) n)))
+
+;; exactly 1600 hex characters
+(defn frame-valid? [frame :string] :bool
+  (and (= (string-length frame) 1600) (all-hex? frame 0 1600)))
+
+;; sample n of a valid frame, as f64 bits: (hex4 - 32768) / 32768
+(defn frame-sample [frame :string n :i64] :i64
+  (let [o (* 4 n)
+        v (+ (* 4096 (hex-digit (string-code-point-at frame o)))
+          (+ (* 256 (hex-digit (string-code-point-at frame (+ o 1))))
+          (+ (* 16 (hex-digit (string-code-point-at frame (+ o 2))))
+             (hex-digit (string-code-point-at frame (+ o 3))))))]
+    (fdiv (itof (- v 32768)) (f64-to-bits 32768.0))))
+
+(defn- dft-run [frame :string k :i64 n :i64 re :i64 im :i64] :i64
   (if (>= n 400)
     (fadd (fmul re re) (fmul im im))
-    (let [xw (fmul (test-sample n) (hann n))
+    (let [xw (fmul (frame-sample frame n) (hann n))
           r (* k n)]
-      (dft-run k (+ n 1)
+      (dft-run frame k (+ n 1)
                (fadd re (fmul xw (turn-cos r 400)))
                (fadd im (fmul xw (turn-sin r 400)))))))
 
-;; |X_k|^2 of the Hann-windowed test frame
-(defn test-power-bin [k :i64] :i64 (dft-run k 0 (zero) (zero)))
+;; |X_k|^2 of the Hann-windowed frame, k = 0..200; -1.0 for an invalid frame
+(defn power-bin [frame :string k :i64] :i64
+  (if (frame-valid? frame)
+    (dft-run frame k 0 (zero) (zero))
+    (fsub (zero) (one))))
 
-(defn- energy-run [m :i64 k :i64 acc :i64] :i64
+(defn- energy-run [frame :string m :i64 k :i64 acc :i64] :i64
   (if (>= k 201)
     acc
     (let [w (mel-weight m k)]
-      (energy-run m (+ k 1)
-                  (if (flt (zero) w) (fadd acc (fmul w (test-power-bin k))) acc)))))
+      (energy-run frame m (+ k 1)
+                  (if (flt (zero) w) (fadd acc (fmul w (power-bin frame k))) acc)))))
 
-;; log10(max(mel energy, 1e-10)) of mel filter m for the test frame
-(defn test-log-mel [m :i64] :i64 (log10-floor (energy-run m 0 (zero))))
+;; log10(max(mel energy, 1e-10)) of mel filter m (0..79) for one frame;
+;; 0.0 for an invalid frame so a caller cannot mistake it for the floor
+(defn log-mel-bin [frame :string m :i64] :i64
+  (if (frame-valid? frame)
+    (log10-floor (energy-run frame m 0 (zero)))
+    (zero)))
+
+;; ---- gate fixtures ------------------------------------------------------------
+;; two tones and a quadratic chirp, quantised to int16
+(defn- test-frame [] :string
+  "8000b675c57db27da65eb8aed199c7df959d626a55b8695673ba5d193dba40266c469cd6ac14a02aa000be41dcaecd0c896d402624513a2159a2607d55b858aa76939cd6b390b8aeb98dbaddb3909dd68000626a49d63f4d4a635aea54ea46566673b675dd7bae7b8673b27ddcaeac426a635bc249d638a6600069562bcd3df7998dac42b390c81a9693a02add7ba6af79a260ef24515aea696d3a2154ea3a938000c4c7ac14c81a8c46b8aec57daa1493ba31b955b838a6759d3f4d49d64026865eb273c57dae7ba000ae7bc57db273865e402649d63f4d759d38a655b831b993baaa14c57db8ae8c46c81aac14c4c780003a9354ea3a21696d5aea245160ef79a2a6afdd7ba02a9693c81ab390ac42998d3df72bcd6956600038a649d65bc26a63ac42dcaeb27d8673ae7bdd7bb6756673465654ea5aea4a633f4d49d6626a80009dd6b390baddb98db8aeb3909cd6769358aa55b8607d59a23a2124514026896dcd0cdcaebe41a000a02aac149cd66c4640263dba5d1973ba695655b8626a959dc7dfd199b8aea65eb27dc57db67580004a593dba54ba665e5aea49d65bc2959dce86dd7bc71ab3babaddc57dac426c4630ba245142666000607d54ea60ef896dac42ac1497e599a2be41dd7bc4c7769330ba2bcd5aea798d5d192bcd31b98000ce86d1999d118a63b8aedcaeb27366734a5955b850b7467354ba54ea40266a63c7dfd199966aa000c71ab390aa14998d40262bcd6a565693426655b83a9379a2cd0cac14b8aea96d97e5dcaea6af800058aa24516a564c465aea3dba3df793ba9dd6dd7b966ab59d9d11d199ac42865e46563dba50b7600050b73dba4656865eac42d1999d11b59d966add7b9dd693ba3df73dba5aea4c466a56245158aa8000a6afdcae97e5a96db8aeac14cd0c79a23a9355b8426656936a562bcd4026998daa14b390c71aa000966ad199c7df6a63402654ea54ba467350b755b84a596673b273dcaeb8ae8a639d11d199ce86800031b92bcd5d19798d5aea2bcd30ba7693c4c7dd7bbe4199a297e5ac14ac42896d60ef54ea607d60004266245130ba6c46ac42c57dbaddb3bac71add7bce86959d5bc249d65aea665e54ba3dba4a59")
+
+;; digital silence: every sample 0 -> every mel at the 1e-10 floor
+(defn- silence-frame [] :string
+  "8000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000800080008000")
 
 (defn- want [i :i64] :i64
   (cond
-        (= i 0) -4616147752124040001
-        (= i 1) -4616118944541312227
-        (= i 2) -4616034048316500523
-        (= i 3) -4615941668053875984
-        (= i 4) -4615793515897370693
-        (= i 5) -4615618838844493877
-        (= i 6) -4615384323894869792
-        (= i 7) -4615088746818232697
-        (= i 8) -4614722298631866226
-        (= i 9) -4614225403460407966
-        (= i 10) -4613621517210595738
-        (= i 11) -4612716835877753676
-        (= i 12) -4611604588992047625
-        (= i 13) -4610451767720042389
-        (= i 14) -4606853102034812506
-        (= i 15) -4610090482630931984
-        (= i 16) -4611534662874957897
-        (= i 17) -4613099750520849775
-        (= i 18) -4614291291613657376
-        (= i 19) -4615176994399794856
-        (= i 20) -4615891448965722374
-        (= i 21) -4616673570913950806
-        (= i 22) -4617533204397892112
-        (= i 23) -4618174602339634219
-        (= i 24) 4603486228344037610
-        (= i 25) 4608840499599474966
-        (= i 26) 4610605438108607510
-        (= i 27) 4607807457954815521
-        (= i 28) -4617526369449194806
-        (= i 29) -4616194864636735479
-        (= i 30) -4614880065439228624
-        (= i 31) -4612710197468037409
-        (= i 32) -4610366026690185636
-        (= i 33) -4613407514298740478
-        (= i 34) -4615694766393401440
-        (= i 35) -4617240392526900062
-        (= i 36) -4618795159462376289
-        (= i 37) -4618081512115260068
-        (= i 38) -4616408141158846610
-        (= i 39) -4613390504499846826
-        (= i 40) -4612874999395125444
-        (= i 41) -4616141420695935076
-        (= i 42) -4618194520078882942
-        (= i 43) -4617306973376680316
-        (= i 44) -4613915374529505061
-        (= i 45) -4614810060226618351
-        (= i 46) -4617904876935364770
-        (= i 47) -4616318457875178961
-        (= i 48) -4613813966146746408
-        (= i 49) -4617230742382432273
-        (= i 50) -4615975168142750821
-        (= i 51) -4615130823715314999
-        (= i 52) -4617092790090744694
-        (= i 53) -4614825148376650457
-        (= i 54) 4604165578968804796
-        (= i 55) 4603283686914530298
-        (= i 56) -4616040435305782279
-        (= i 57) -4615875061566893667
-        (= i 58) -4615523080900787790
-        (= i 59) -4615787088437960626
-        (= i 60) -4615773618488143835
-        (= i 61) -4615645939687663981
-        (= i 62) -4615604580700029357
-        (= i 63) -4615576629215881446
-        (= i 64) -4615560150634267003
-        (= i 65) -4615528946871828177
-        (= i 66) -4615402919474525022
-        (= i 67) -4615357448406542975
-        (= i 68) -4615445594055060616
-        (= i 69) -4615278478743665580
-        (= i 70) -4615234055162382226
-        (= i 71) -4615114045370339002
-        (= i 72) -4615090968808602898
-        (= i 73) -4615262393700619366
-        (= i 74) -4614844055309918528
-        (= i 75) -4614983564786347406
-        (= i 76) -4614910623096974198
-        (= i 77) -4615433891916629770
-        (= i 78) -4612020624885559599
-        (= i 79) -4613665753184692127
+        (= i 0) -4616147855973837913
+        (= i 1) -4616119089613673432
+        (= i 2) -4616034110071541504
+        (= i 3) -4615941629946555015
+        (= i 4) -4615793472518621128
+        (= i 5) -4615618828260693721
+        (= i 6) -4615384242433196133
+        (= i 7) -4615088486934442655
+        (= i 8) -4614721976160537493
+        (= i 9) -4614225297717287452
+        (= i 10) -4613621616335642703
+        (= i 11) -4612716782582625255
+        (= i 12) -4611604435006422396
+        (= i 13) -4610451571354193537
+        (= i 14) -4606852706092977016
+        (= i 15) -4610090156302375771
+        (= i 16) -4611534304434666488
+        (= i 17) -4613099477003859477
+        (= i 18) -4614291252391562876
+        (= i 19) -4615176850017670482
+        (= i 20) -4615891168300985614
+        (= i 21) -4616673090475328986
+        (= i 22) -4617532983999546634
+        (= i 23) -4618174555139261497
+        (= i 24) 4603486203624825804
+        (= i 25) 4608840483666514510
+        (= i 26) 4610605418141932256
+        (= i 27) 4607807425505761555
+        (= i 28) -4617526429361489537
+        (= i 29) -4616194905856635450
+        (= i 30) -4614880052810549739
+        (= i 31) -4612710043760224448
+        (= i 32) -4610366277404153112
+        (= i 33) -4613407767408537914
+        (= i 34) -4615694839878658970
+        (= i 35) -4617240990901828261
+        (= i 36) -4618795526952257783
+        (= i 37) -4618081433300710412
+        (= i 38) -4616407592474299332
+        (= i 39) -4613390286140098332
+        (= i 40) -4612875025934234645
+        (= i 41) -4616141425403808964
+        (= i 42) -4618194775560998287
+        (= i 43) -4617307767268627343
+        (= i 44) -4613915668932974991
+        (= i 45) -4614809945155670976
+        (= i 46) -4617904842914007382
+        (= i 47) -4616318496768166945
+        (= i 48) -4613814141285508069
+        (= i 49) -4617230909750689342
+        (= i 50) -4615975099766215280
+        (= i 51) -4615130855218380862
+        (= i 52) -4617093077519298872
+        (= i 53) -4614825255813620104
+        (= i 54) 4604165446059915060
+        (= i 55) 4603283551255557979
+        (= i 56) -4616040464449547318
+        (= i 57) -4615875126912217959
+        (= i 58) -4615523319456334057
+        (= i 59) -4615787397472073122
+        (= i 60) -4615773626021735381
+        (= i 61) -4615645996984261711
+        (= i 62) -4615604625587448620
+        (= i 63) -4615576676244296687
+        (= i 64) -4615560146709948279
+        (= i 65) -4615528776641000546
+        (= i 66) -4615403026067614144
+        (= i 67) -4615357527470836832
+        (= i 68) -4615445555482061259
+        (= i 69) -4615278545810141760
+        (= i 70) -4615234084494699589
+        (= i 71) -4615114114657878664
+        (= i 72) -4615090980981261877
+        (= i 73) -4615262501652476769
+        (= i 74) -4614844006618077526
+        (= i 75) -4614983706471642775
+        (= i 76) -4614910706166531148
+        (= i 77) -4615433924240144473
+        (= i 78) -4612020538670894790
+        (= i 79) -4613665877883153679
         :else (zero)))
 
 (defn- close? [a :i64 b :i64] :bool
   (f64-lt (f64-abs (f64-sub (f64-from-bits a) (f64-from-bits b))) 0.000001))
 
-(defn- count-run [i :i64 mx :i64 acc :i64] :i64
+(defn- count-run [frame :string i :i64 acc :i64] :i64
   (if (>= i 80)
     acc
-    (count-run (+ i 1) mx (if (close? (test-log-mel i) (want i)) (+ acc 1) acc))))
+    (count-run frame (+ i 1)
+               (if (close? (log-mel-bin frame i) (want i)) (+ acc 1) acc))))
 
-;; 80 log-mel matches + 3 normalised matches (bin 0, the peak, bin 79) = 83
+;; 80 log-mel matches + 3 normalised (bin 0, peak, bin 79) + 2 silence floors
+;; (bin 0 and 79 at -10) + 4 frame checks (valid, short, non-hex, long) = 89
 (defn match-count [] :i64
-  (let [mx 4610605438108607510
-        n (count-run 0 mx 0)]
+  (let [f (test-frame)
+        mx 4610605418141932256
+        n (count-run f 0 0)]
     (+ n
-       (+ (if (close? (normalize-log (test-log-mel 0) mx) 4604909686020972960) 1 0)
-          (+ (if (close? (normalize-log (test-log-mel 26) mx) 4609164073534007558) 1 0)
-             (if (close? (normalize-log (test-log-mel 79) mx) 4603668686551299024) 1 0))))))
+    (+ (if (close? (normalize-log (log-mel-bin f 0) mx) 4604909737945871916) 1 0)
+    (+ (if (close? (normalize-log (log-mel-bin f 26) mx) 4609164068542338744) 1 0)
+    (+ (if (close? (normalize-log (log-mel-bin f 79) mx) 4603668748900529800) 1 0)
+    (+ (if (close? (log-mel-bin (silence-frame) 0) (fsub (zero) (f64-to-bits 10.0))) 1 0)
+    (+ (if (close? (log-mel-bin (silence-frame) 79) (fsub (zero) (f64-to-bits 10.0))) 1 0)
+    (+ (if (frame-valid? f) 1 0)
+    (+ (if (frame-valid? "8000") 0 1)
+    (+ (if (frame-valid? (string-concat "zz" (string-substring f 2 1600))) 0 1)
+    (if (frame-valid? (string-concat f "00")) 0 1))))))))))))
