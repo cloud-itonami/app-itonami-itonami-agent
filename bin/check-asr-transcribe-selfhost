@@ -13,8 +13,8 @@
 
 set -eu
 
-if [ "$#" -ne 5 ]; then
-  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir> <model.safetensors> <vocab.json> <speech_clip_1s.hex>" >&2
+if [ "$#" -ne 6 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir> <model.safetensors> <vocab.json> <speech_clip_1s.hex> <speech_clip_full.hex>" >&2
   exit 2
 fi
 
@@ -23,9 +23,11 @@ OUT_DIR=$2
 MODEL=$3
 VOCAB=$4
 CLIP=$5
+CLIPFULL=$6
 EXPECTED_CLI_SHA256=ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
 EXPECTED_MODEL_SHA256=79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
 EXPECTED_CLIP_SHA256=d04aa95a6644ce43114548649cc4615e750859490afefc10ca822a2b3c87e311
+EXPECTED_CLIPFULL_SHA256=df99d9c104e47045910adb421e647e736e233606ee83457e25743070bf4b3f92
 EXPECTED_CASES_SHA256=08f236034cf2c62177990c4a4c9fb3d328ebacacdfc3d2db2e2121524f830a83
 EXPECTED_BF16_SHA256=09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b
 EXPECTED_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fcb429e8d5
@@ -36,25 +38,44 @@ EXPECTED_QWENOPS_SHA256=a5a8744046a81edd21d0740395e874c89ed518e24092a5e889c78b2b
 EXPECTED_ST_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
 EXPECTED_WF_SHA256=8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
 EXPECTED_NNVEC_SHA256=ee8fe6f387f2d1fc2ae7ff7b636f1faf4c72a97a4de0ae6f8dcce5fabc1b7847
-EXPECTED_ENC_SHA256=7b256f920ff264b0ec0a38cfef03df439d4af932c3a3c5ee3f9cd20e26f9a2df
+EXPECTED_ENC_SHA256=f52b700c8bc794b902ea802bda848b3ab7209c02ac97bccc5a3bbce03fe36372
 EXPECTED_DEC_SHA256=84568ebda2ef9700b06b4555a7b5e0cbb4f253f59f98106dfb1b3d997387fd43
 EXPECTED_VOC_SHA256=275019cabe34aeb60ab2628eab78daeae0ae15fdecd530e7984e3ecf44f4dcc9
 EXPECTED_ENCCLI_SHA256=925832e63e3479d6b374e349e45b62709cce208bacdf65ae11ac0bb08898d36f
 EXPECTED_DECCLI_SHA256=126aa19294928dbd3684510662d9a81233ec4c42dacd73ee84f1eb08242a68b6
 EXPECTED_DETOK_SHA256=26a6c9c32ab12d6879fcc3f4749540caf89f3cc68799e2024f3c993e46860ae7
 EXPECTED_CALC_SHA256=0e4c2b8cdb6388474f36996c938aaea7578b90490e8eb3c5e8e8218e7cd1cd60
-# prompt: <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|> 13 x <|audio_pad|> <|audio_end|>
-# <|im_end|>\n<|im_start|>assistant\n
-PROMPT=151644,8948,198,151645,198,151644,872,198,151669,151676,151676,151676,151676,151676,151676,151676,151676,151676,151676,151676,151676,151676,151670,151645,198,151644,77091,198
-PROMPT_TOKENS=28
-AUDIO_ROWS=13
-# the first token's logit as the native code computed it: a regression pin, not a CPython reference (the
+# the chat prompt for <rows> audio rows: <|im_start|>system\n<|im_end|>\n<|im_start|>user\n<|audio_start|>
+# <rows> x <|audio_pad|> <|audio_end|><|im_end|>\n<|im_start|>assistant\n (15 + rows tokens)
+make_prompt() {
+  pads=""
+  i=0
+  while [ "$i" -lt "$1" ]; do
+    pads="${pads}151676,"
+    i=$((i + 1))
+  done
+  PROMPT="151644,8948,198,151645,198,151644,872,198,151669,${pads}151670,151645,198,151644,77091,198"
+  PROMPT_TOKENS=$(($1 + 15))
+  AUDIO_ROWS=$1
+}
+# the first token's logit as the native code computes it: a regression pin, not a CPython reference (the
 # decoder with audio is too slow for CPython here); the first token's id alone does not depend on the audio
 FIRST_LOGIT=4629172127120524673
+FIRST_LOGIT_FULL=4629206761466456349
 EXPECTED_IDS=11528,6364,151704,785,3974,13876,38835,13,151645
+EXPECTED_IDS_FULL=11528,6364,151704,785,3974,13876,38835,34208,916,279,15678,5562,13,151645
 EXPECTED_TEXT="language English<asr_text>The quick brown fox.<|im_end|>"
-MAX_NEW=12
-TOTAL=26
+EXPECTED_TEXT_FULL="language English<asr_text>The quick brown fox jumps over the lazy dog.<|im_end|>"
+MAX_NEW=24
+# ASR_GATE_TIER=full (default) runs both clips and the mutations; quick runs the 1 s clip, the vocabulary
+# fixture and the refusals only (about 7 minutes instead of about 25). ASR_GATE_JOBS mutations run at once.
+TIER=${ASR_GATE_TIER:-full}
+JOBS=${ASR_GATE_JOBS:-4}
+case "$TIER" in
+  full) TOTAL=46 ;;
+  quick) TOTAL=26 ;;
+  *) printf '%s\n' "ASR_GATE_TIER must be full or quick" >&2; exit 2 ;;
+esac
 
 REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
 GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
@@ -63,11 +84,11 @@ case "$OUT_DIR" in
   "$GITHUB_ROOT"/workspaces/*) ;;
   *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
 esac
-for p in "$CLI" "$MODEL" "$VOCAB" "$CLIP"; do
+for p in "$CLI" "$MODEL" "$VOCAB" "$CLIP" "$CLIPFULL"; do
   case "$p" in /*) ;; *) printf '%s\n' "paths must be absolute: $p" >&2; exit 2 ;; esac
 done
 if [ ! -x "$CLI" ]; then printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2; exit 2; fi
-for f in "$MODEL" "$VOCAB" "$CLIP"; do
+for f in "$MODEL" "$VOCAB" "$CLIP" "$CLIPFULL"; do
   if [ ! -f "$f" ]; then printf '%s\n' "input file is missing: $f" >&2; exit 2; fi
 done
 if [ -e "$OUT_DIR" ]; then printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2; exit 2; fi
@@ -85,6 +106,7 @@ CASES="$REPO_ROOT/test/native/detok_cases.txt"
 check_sha "$CLI" "$EXPECTED_CLI_SHA256"
 check_sha "$MODEL" "$EXPECTED_MODEL_SHA256"
 check_sha "$CLIP" "$EXPECTED_CLIP_SHA256"
+check_sha "$CLIPFULL" "$EXPECTED_CLIPFULL_SHA256"
 check_sha "$CASES" "$EXPECTED_CASES_SHA256"
 check_sha "$KD/bf16.kotoba" "$EXPECTED_BF16_SHA256"
 check_sha "$KD/ggml_dequant.kotoba" "$EXPECTED_DEQUANT_SHA256"
@@ -204,23 +226,52 @@ stage_checks() {
 EXPECT="mel mel.bin 12800 4652722560813430124 -4621378623620096852 4588874422938185536 -4624304188514869140
 front a.bin 11648 4663037601523769876 4594001283379832386 -4623587141907348635 -4624515666174311186
 stack18 a.bin 11648 4662502638280618538 4601128519974525975 4604432692152399859 4603671617935560219
-tail audio.bin 13312 4621466046952091455 4587157085358046232 4585026837144017126 -4660611815583789724"
+tail audio.bin 13312 4621466046952091455 4587157085358046232 4585026837144017126 -4660611815583789724
+full-front a.bin 29568 4669381312662462744 4594001283379832386 -4623587141907348635 -4628736037199806404
+full-stack18 a.bin 29568 4668640348491627246 4603585774321273252 4605030920574710573 4604731858776662315
+full-tail audio.bin 33792 4629618985020440767 4587013657577475630 4584920730553963969 4584097990240381802"
 
-# run_encoder <dir>: mel, front end, 18 layers, tail; each stage is checked before the next runs.
-# Sets PASSED (out of 16)
+# mel of the long clip: four (bin, frame) points of the valid 128 x 250 values, stored 128 x 300
+MELFULL="0 0 -4621378623620096852
+3 249 -4619482571674060002
+64 125 4597105513342821684
+127 249 -4619482571674060002"
+
+# mel_points_full <dir>: four points of the long clip's valid mel against CPython; sets STAGE_PASSED out of 4
+mel_points_full() {
+  dir=$1
+  STAGE_PASSED=0
+  printf '%s\n' "$MELFULL" | {
+    while read -r m tt want; do
+      prog_status "$dir/audio_enc_cli.macho" sum /d/st/mel.bin 38400 $((m * 300 + tt))
+      near "$OUT" "$want" && echo ok
+    done
+  } > "$dir/mel_points.out"
+  STAGE_PASSED=$(grep -c '^ok$' "$dir/mel_points.out" || true)
+  return 0
+}
+
+# run_encoder <dir> <clip-file> <prefix>: mel, front end, 18 layers, tail; each stage is checked before
+# the next runs. The prefix is "" for the 1 s clip and "full-" for the long one. Sets PASSED (out of 16)
 run_encoder() {
   dir=$1
+  clipfile=$2
+  pre=$3
   PASSED=0
   rm -f "$SCOPE"/d/st/*.bin
   enc="$dir/audio_enc_cli.macho"
-  prog_status "$enc" mel "$(cat "$CLIP")"
+  prog_status "$enc" mel "$(cat "$clipfile")"
   [ "$STATUS" -eq 0 ] || return 0
-  stage_checks "$dir" mel
+  if [ -z "$pre" ]; then
+    stage_checks "$dir" mel
+  else
+    mel_points_full "$dir"
+  fi
   PASSED=$((PASSED + STAGE_PASSED))
   [ "$STAGE_PASSED" -eq 4 ] || return 0
   prog_status "$enc" front /d/model.safetensors
   [ "$STATUS" -eq 0 ] || return 0
-  stage_checks "$dir" front
+  stage_checks "$dir" "${pre}front"
   PASSED=$((PASSED + STAGE_PASSED))
   [ "$STAGE_PASSED" -eq 4 ] || return 0
   l=0
@@ -229,12 +280,12 @@ run_encoder() {
     [ "$STATUS" -eq 0 ] || return 0
     l=$((l + 1))
   done
-  stage_checks "$dir" stack18
+  stage_checks "$dir" "${pre}stack18"
   PASSED=$((PASSED + STAGE_PASSED))
   [ "$STAGE_PASSED" -eq 4 ] || return 0
   prog_status "$enc" tail /d/model.safetensors
   [ "$STATUS" -eq 0 ] || return 0
-  stage_checks "$dir" tail
+  stage_checks "$dir" "${pre}tail"
   PASSED=$((PASSED + STAGE_PASSED))
   return 0
 }
@@ -320,15 +371,18 @@ detok_cases() {
 POS="$OUT_DIR/positive"
 build_variant "$POS" "$KD/audio_enc.kotoba" "$KD/qwen_decoder.kotoba" "$KD/qwen_vocab.kotoba"
 CALC="$POS/qwen_calc_cli.macho"
+POS_PASSED=0
 
-run_encoder "$POS"
+# ---- 1 s clip (one chunk, 13 audio tokens) -------------------------------------------------------------
+run_encoder "$POS" "$CLIP" ""
 if [ "$PASSED" -ne 16 ]; then
-  printf 'asr-transcribe: the encoder passed %s of 16 checks\n' "$PASSED" >&2
+  printf 'asr-transcribe: the encoder passed %s of 16 checks on the 1 s clip\n' "$PASSED" >&2
   exit 1
 fi
 POS_PASSED=$PASSED
 cp "$SCOPE/d/st/audio.bin" "$OUT_DIR/audio.good"
 
+make_prompt 13
 prefill_audio "$POS" || { printf '%s\n' "asr-transcribe: the decoder prefill failed" >&2; exit 1; }
 best_row "$POS" || { printf '%s\n' "asr-transcribe: the first token failed" >&2; exit 1; }
 [ "$BEST" = "11528" ] && POS_PASSED=$((POS_PASSED + 1))
@@ -350,8 +404,33 @@ prog_status "$POS/qwen_detok_cli.macho" /d/vocab.json x
 [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && POS_PASSED=$((POS_PASSED + 1))
 prog_status "$POS/qwen_detok_cli.macho" /d/missing.json 785
 [ "$STATUS" -eq 2 ] && [ -z "$OUT" ] && POS_PASSED=$((POS_PASSED + 1))
+TEXT_ONE=$TEXT
+IDS_ONE=$IDS
+
+IDS=$IDS_ONE
+TEXT=$TEXT_ONE
+if [ "$TIER" = "full" ]; then
+  # ---- 2.5 s sentence (three chunks, the last one 50 frames, 33 audio tokens) ------------------------------
+  run_encoder "$POS" "$CLIPFULL" "full-"
+  if [ "$PASSED" -ne 16 ]; then
+    printf 'asr-transcribe: the encoder passed %s of 16 checks on the long clip\n' "$PASSED" >&2
+    exit 1
+  fi
+  POS_PASSED=$((POS_PASSED + PASSED))
+  make_prompt 33
+  prefill_audio "$POS" || { printf '%s\n' "asr-transcribe: the long decoder prefill failed" >&2; exit 1; }
+  best_row "$POS" || { printf '%s\n' "asr-transcribe: the long first token failed" >&2; exit 1; }
+  [ "$BEST" = "11528" ] && POS_PASSED=$((POS_PASSED + 1))
+  near "$BESTBITS" "$FIRST_LOGIT_FULL" && POS_PASSED=$((POS_PASSED + 1))
+  generate "$POS" || { printf '%s\n' "asr-transcribe: the long generation failed" >&2; exit 1; }
+  [ "$IDS" = "$EXPECTED_IDS_FULL" ] && POS_PASSED=$((POS_PASSED + 1))
+  prog_status "$POS/qwen_detok_cli.macho" /d/vocab.json "$IDS"
+  TEXT=$OUT
+  [ "$TEXT" = "$EXPECTED_TEXT_FULL" ] && POS_PASSED=$((POS_PASSED + 1))
+
+fi
 if [ "$POS_PASSED" -ne "$TOTAL" ]; then
-  printf 'asr-transcribe: %s of %s checks passed (ids %s, text %s)\n' "$POS_PASSED" "$TOTAL" "$IDS" "$TEXT" >&2
+  printf 'asr-transcribe: %s of %s checks passed (ids %s / %s, text %s / %s)\n' "$POS_PASSED" "$TOTAL" "$IDS_ONE" "$IDS" "$TEXT_ONE" "$TEXT" >&2
   exit 1
 fi
 
@@ -361,64 +440,97 @@ fi
 NEG="$OUT_DIR/negative"
 mkdir -p "$NEG"
 NEG_RESULTS=""
-mutate() {
+# run_mutation <kind> <name> <pattern> <replacement>: builds and judges one mutation in its own scope
+# directory (a clone of the model costs no disk), so several can run at once; writes "$NEG/$name.result"
+# ("caught" or a reason). A subshell, so its variables do not leak.
+run_mutation() {
   kind=$1
   name=$2
   pattern=$3
   replacement=$4
-  case "$kind" in
-    enc) base="$KD/audio_enc.kotoba" ;;
-    dec) base="$KD/qwen_decoder.kotoba" ;;
-    voc) base="$KD/qwen_vocab.kotoba" ;;
-  esac
-  sed "s/$pattern/$replacement/" "$base" > "$NEG/$name.kotoba"
-  if cmp -s "$base" "$NEG/$name.kotoba"; then
-    printf 'negative control %s did not change the source\n' "$name" >&2
-    exit 1
-  fi
-  enc="$KD/audio_enc.kotoba"; dec="$KD/qwen_decoder.kotoba"; voc="$KD/qwen_vocab.kotoba"
-  case "$kind" in
-    enc) enc="$NEG/$name.kotoba" ;;
-    dec) dec="$NEG/$name.kotoba" ;;
-    voc) voc="$NEG/$name.kotoba" ;;
-  esac
-  build_variant "$NEG/$name" "$enc" "$dec" "$voc"
-  caught=0
-  case "$kind" in
-    enc)
-      run_encoder "$NEG/$name"
-      [ "$PASSED" -lt 16 ] && caught=1
-      ;;
-    dec)
-      rm -f "$SCOPE"/d/st/*.bin
-      cp "$OUT_DIR/audio.good" "$SCOPE/d/st/audio.bin"
-      if prefill_audio "$NEG/$name" && best_row "$NEG/$name"; then
-        [ "$BEST" != "11528" ] && caught=1
-        near "$BESTBITS" "$FIRST_LOGIT" || caught=1
-      else
-        caught=1
-      fi
-      ;;
-    voc)
-      if ! detok_cases "$NEG/$name"; then caught=1; fi
-      ;;
-  esac
-  if [ "$caught" -ne 1 ]; then
-    printf 'negative control %s still passed the gate\n' "$name" >&2
-    exit 1
-  fi
-  NEG_RESULTS="$NEG_RESULTS $name"
+  (
+    set -eu
+    case "$kind" in
+      enc) base="$KD/audio_enc.kotoba" ;;
+      dec) base="$KD/qwen_decoder.kotoba" ;;
+      voc) base="$KD/qwen_vocab.kotoba" ;;
+    esac
+    sed "s/$pattern/$replacement/" "$base" > "$NEG/$name.kotoba"
+    if cmp -s "$base" "$NEG/$name.kotoba"; then
+      printf '%s\n' "did not change the source" > "$NEG/$name.result"
+      exit 0
+    fi
+    enc="$KD/audio_enc.kotoba"; dec="$KD/qwen_decoder.kotoba"; voc="$KD/qwen_vocab.kotoba"
+    case "$kind" in
+      enc) enc="$NEG/$name.kotoba" ;;
+      dec) dec="$NEG/$name.kotoba" ;;
+      voc) voc="$NEG/$name.kotoba" ;;
+    esac
+    SCOPE="$NEG/$name/scope"
+    mkdir -m 700 -p "$SCOPE/d/st"
+    /bin/cp -c "$MODEL" "$SCOPE/d/model.safetensors"
+    cp "$VOCAB" "$SCOPE/d/vocab.json"
+    build_variant "$NEG/$name" "$enc" "$dec" "$voc"
+    caught=0
+    case "$kind" in
+      enc)
+        run_encoder "$NEG/$name" "$CLIPFULL" "full-"
+        [ "$PASSED" -lt 16 ] && caught=1
+        ;;
+      dec)
+        cp "$OUT_DIR/audio.good" "$SCOPE/d/st/audio.bin"
+        make_prompt 13
+        if prefill_audio "$NEG/$name" && best_row "$NEG/$name"; then
+          [ "$BEST" != "11528" ] && caught=1
+          near "$BESTBITS" "$FIRST_LOGIT" || caught=1
+        else
+          caught=1
+        fi
+        ;;
+      voc)
+        if ! detok_cases "$NEG/$name"; then caught=1; fi
+        ;;
+    esac
+    if [ "$caught" -eq 1 ]; then printf '%s\n' caught > "$NEG/$name.result"; else printf '%s\n' "still passed the gate" > "$NEG/$name.result"; fi
+    rm -f "$SCOPE/d/model.safetensors"
+  ) > "$NEG/$name.log" 2>&1 || printf '%s\n' "the run itself failed (see $name.log)" > "$NEG/$name.result"
 }
+
+PENDING=0
+mutate() {
+  run_mutation "$@" &
+  PENDING=$((PENDING + 1))
+  if [ "$PENDING" -ge "$JOBS" ]; then
+    wait
+    PENDING=0
+  fi
+  NEG_NAMES="$NEG_NAMES $2"
+}
+NEG_NAMES=""
+if [ "$TIER" = "full" ]; then
 mutate voc table-high-bytes '(+ 127 (- n 33))' '(+ 128 (- n 33))'
 mutate voc table-last-byte '(if (<= n 66) (+ 127 (- n 33)) 173)' '(if (<= n 66) (+ 127 (- n 33)) 174)'
 mutate voc quote-parity '(= (mod (backslashes v (- p 1) 0) 2) 0)' '(= (mod (backslashes v (- p 1) 0) 2) 1)'
 mutate voc escape-skip '(emit-key v (+ i 2) end out (+ at (put-byte out at c)) )' '(emit-key v (+ i 1) end out (+ at (put-byte out at c)) )'
-mutate enc mel-reflect '(- 31998 i)' '(- 31999 i)'
+mutate enc mel-reflect '(if (>= i n) (- (\* 2 (- n 1)) i) i)' '(if (>= i n) (- (* 2 n) i) i)'
 mutate enc conv-stride '(+ (quot (- win 1) 2) 1)' '(+ (quot win 2) 1)'
 mutate enc feature-order '(\* (quot i 16) 208)' '(* (quot i 16) 207)'
+mutate enc chunk-token-count '(quot (+ llast 7) 8)' '(quot (+ llast 14) 8)'
+mutate enc position-restart '(pos-at (mod t 13) d)' '(pos-at t d)'
+mutate enc zero-padding '(vector-at mel (+ (\* (quot i 100) tp) (+ (\* c 100) (mod i 100))))' '(vector-at mel (+ (* (quot i 100) tp) (+ (* c 99) (mod i 100))))'
 mutate enc attention-scale '(f64-to-bits 0.125)' '(f64-to-bits 0.25)'
 mutate dec audio-row-offset '(copy-from out aud (\* ai 1024) 0 1024 (\* t 1024))' '(copy-from out aud (* ai 512) 0 1024 (* t 1024))'
 mutate dec audio-pad-id '(= id 151676)' '(= id 151677)'
+wait
+for name in $NEG_NAMES; do
+  result=$(cat "$NEG/$name.result" 2>/dev/null || echo "no result")
+  if [ "$result" != "caught" ]; then
+    printf 'negative control %s: %s\n' "$name" "$result" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name"
+done
+fi
 
 # negative control: a source changed after locking is refused
 printf '\n' >> "$POS/src/qwen_vocab.kotoba"
@@ -445,12 +557,13 @@ rm -f "$SCOPE/d/model.safetensors"
   printf 'model_sha256: %s\n' "$EXPECTED_MODEL_SHA256"
   printf 'clip_sha256: %s\n' "$EXPECTED_CLIP_SHA256"
   printf 'runtime_profile: amu-command-fs35 (directory on fd 3), one process per stage, layer and vocabulary slice\n'
+  printf 'tier: %s (jobs %s)\n' "$TIER" "$JOBS"
   printf 'checks_passed: %s of %s (16 encoder values, first token and its logit, token ids, text, vocabulary fixture, 5 refusals)\n' "$POS_PASSED" "$TOTAL"
   printf 'token_ids: %s\n' "$IDS"
   printf 'text: %s\n' "$TEXT"
   printf 'negative_controls_caught:%s\n' "$NEG_RESULTS"
   printf 'changed_source_refusal: PASS\n'
-  printf 'qualification: 1 s of real speech (16,000 samples, 13 audio tokens) transcribed natively on the real Qwen3-ASR-0.6B weights; the transcript matches the words spoken in the clip ("The quick brown fox", the first second of a longer sentence); encoder values to 1e-9 against CPython float64; not HF feature-extractor padding to 30 s, more than one 100-frame chunk, the original implementation beyond the transcript, a turn or launcher\n'
+  printf 'qualification: 1 s (one chunk, 13 audio tokens) and 2.5 s (three chunks, 33 tokens) of real speech transcribed natively on the real Qwen3-ASR-0.6B weights; the transcript matches the words spoken in the clip ("The quick brown fox", the first second of a longer sentence); encoder values to 1e-9 against CPython float64; not HF feature-extractor padding to 30 s, more than one 100-frame chunk, the original implementation beyond the transcript, a turn or launcher\n'
 } > "$OUT_DIR/build-receipt.txt"
 
 cat "$OUT_DIR/build-receipt.txt"
