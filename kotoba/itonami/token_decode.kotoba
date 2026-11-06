@@ -1,0 +1,116 @@
+;; Token decoding for the native whisper path (JUN-875): the decoder's token ids
+;; back to bytes. whisper's text tokens (ids below 50257) are byte strings of
+;; UTF-8 and one character may be split across tokens; 50257 is end of text
+;; (decoding stops) and every other id from 50257 up is a control token (language,
+;; task, timestamp) that is skipped, up to the multilingual vocabulary size
+;; (51865); anything at or above it is an error. The vocabulary is one string of
+;; "\n<id>=<hex bytes>" entries; ids arrive as a comma-separated decimal string.
+;; The result is the concatenated bytes as a hex string, "!" when an id has no
+;; entry or the id list is malformed. utf8-valid? is a strict UTF-8 check
+;; (no overlongs, surrogates or code points above U+10FFFF) over a hex string.
+;; The seed has no primitive that builds a string from bytes or code points, so
+;; handing text to a caller stays a hex string until Amu adds one.
+;; Built on itonami.ggml-dequant's byte-at.
+(ns itonami.token-decode
+  (:require [itonami.ggml-dequant :as gd])
+  (:export [token-hex decode-ids utf8-valid? match-count]))
+
+(defn- digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
+
+;; hex bytes of token id, or "" when the vocabulary has no such entry
+(defn token-hex [vocab :string id :i64] :string
+  (let [pat (string-concat "\n" (string-concat (string-from-i64 id) "="))
+        pos (string-index-of vocab pat)]
+    (if (< pos 0)
+      ""
+      (let [rest (string-substring vocab (+ pos (string-length pat)) (string-length vocab))
+            end (string-index-of rest "\n")]
+        (if (< end 0) "" (string-substring rest 0 end))))))
+
+;; the number at ids[i..] up to a comma or the end: value, or -1 if empty / not digits
+(defn- number-end [ids :string i :i64] :i64
+  (let [n (string-length ids)]
+    (if (and (< i n) (not (= (string-code-point-at ids i) 44))) (number-end ids (+ i 1)) i)))
+
+(defn- number-value [ids :string i :i64 e :i64 acc :i64] :i64
+  (cond (>= i e) acc
+        (not (digit? (string-code-point-at ids i))) -1
+        :else (number-value ids (+ i 1) e (+ (* acc 10) (- (string-code-point-at ids i) 48)))))
+
+(defn- decode-run [vocab :string ids :string i :i64 acc :string] :string
+  (if (> i (string-length ids))
+    acc
+    (let [e (number-end ids i)
+          id (if (= e i) -1 (number-value ids i e 0))]
+      (cond (< id 0) "!"
+            (>= id 51865) "!"
+            (= id 50257) acc
+            (> id 50257) (decode-run vocab ids (+ e 1) acc)
+            (= (string-length (token-hex vocab id)) 0) "!"
+            :else (decode-run vocab ids (+ e 1) (string-concat acc (token-hex vocab id)))))))
+
+(defn decode-ids [vocab :string ids :string] :string
+  (if (= (string-length ids) 0) "" (decode-run vocab ids 0 "")))
+
+;; continuation byte 80..BF
+(defn- cont? [b :i64] :bool (and (>= b 128) (<= b 191)))
+
+;; number of bytes of the well-formed sequence starting at byte i, or 0 when ill-formed
+(defn- seq-len [s :string i :i64 n :i64] :i64
+  (let [b (gd/byte-at s i)
+        b1 (if (< (+ i 1) n) (gd/byte-at s (+ i 1)) -1)
+        b2 (if (< (+ i 2) n) (gd/byte-at s (+ i 2)) -1)
+        b3 (if (< (+ i 3) n) (gd/byte-at s (+ i 3)) -1)]
+    (cond (< b 0) 0
+          (< b 128) 1
+          (and (>= b 194) (<= b 223)) (if (cont? b1) 2 0)
+          (= b 224) (if (and (>= b1 160) (<= b1 191) (cont? b2)) 3 0)
+          (= b 237) (if (and (>= b1 128) (<= b1 159) (cont? b2)) 3 0)
+          (and (>= b 225) (<= b 239)) (if (and (cont? b1) (cont? b2)) 3 0)
+          (= b 240) (if (and (>= b1 144) (<= b1 191) (cont? b2) (cont? b3)) 4 0)
+          (= b 244) (if (and (>= b1 128) (<= b1 143) (cont? b2) (cont? b3)) 4 0)
+          (and (>= b 241) (<= b 243)) (if (and (cont? b1) (cont? b2) (cont? b3)) 4 0)
+          :else 0)))
+
+(defn- valid-run [s :string i :i64 n :i64] :bool
+  (if (>= i n)
+    true
+    (let [l (seq-len s i n)]
+      (if (= l 0) false (valid-run s (+ i l) n)))))
+
+;; strict UTF-8 over a hex string (an odd or non-hex string is invalid)
+(defn utf8-valid? [hex :string] :bool
+  (let [n (quot (string-length hex) 2)]
+    (and (= (mod (string-length hex) 2) 0)
+         (or (= n 0) (>= (gd/byte-at hex (- n 1)) 0))
+         (valid-run hex 0 n))))
+
+;; ---- gate fixtures --------------------------------------------------------------
+(defn- vocab [] :string
+  "\n100=e381\n101=93e382\n102=93e381ab\n103=e381\n104=a1e381\n105=afe38081\n106=e4b8\n107=96e795\n108=8cf09f99\n109=8220\n110=6f6b\n")
+
+(defn- b2i [x :bool] :i64 (if x 1 0))
+
+;; 21 checks: 7 decode, 6 valid and 7 invalid utf8 strings, 1 partial token
+(defn match-count [] :i64
+  (+ (b2i (string=? (decode-ids (vocab) "50258,50266,50359,50363,100,101,102,103,104,105,106,107,108,109,110,50257,100") "e38193e38293e381abe381a1e381afe38081e4b896e7958cf09f9982206f6b"))
+    (+ (b2i (string=? (decode-ids (vocab) "100,50257,101") (token-hex (vocab) 100)))
+    (+ (b2i (string=? (decode-ids (vocab) "50258,50266,50363") ""))
+    (+ (b2i (string=? (decode-ids (vocab) "100,99999") "!"))
+    (+ (b2i (string=? (decode-ids (vocab) "100,,101") "!"))
+    (+ (b2i (string=? (decode-ids (vocab) "10x") "!"))
+    (+ (b2i (string=? (decode-ids (vocab) "") ""))
+    (+ (b2i (utf8-valid? "e38193e38293"))
+    (+ (b2i (utf8-valid? ""))
+    (+ (b2i (utf8-valid? "41"))
+    (+ (b2i (utf8-valid? "f09f9980"))
+    (+ (b2i (utf8-valid? "ed9fbf"))
+    (+ (b2i (utf8-valid? "f48fbfbf"))
+    (+ (b2i (not (utf8-valid? "e381")))
+    (+ (b2i (not (utf8-valid? "80")))
+    (+ (b2i (not (utf8-valid? "e08080")))
+    (+ (b2i (not (utf8-valid? "eda080")))
+    (+ (b2i (not (utf8-valid? "f5808080")))
+    (+ (b2i (not (utf8-valid? "c0af")))
+    (+ (b2i (not (utf8-valid? "f4908080")))
+    (b2i (not (utf8-valid? (token-hex (vocab) 100)))))))))))))))))))))))))
