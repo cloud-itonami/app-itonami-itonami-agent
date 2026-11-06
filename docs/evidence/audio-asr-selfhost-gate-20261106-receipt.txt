@@ -1,0 +1,16 @@
+format: itonami.audio-asr-selfhost-gate.v1
+amu_cli_sha256: ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
+model_sha256: 79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
+audio_ffn_source_sha256: 9c01ba2790139042cd4674aac8246ddead7039b43297e17a8a4e5009e8bbba17
+front_cli_sha256: 3b9b81ff44bfff6615f885eb3e14de83633b83a63416c5ba20f2f2e1f5035b4e
+step_cli_sha256: 84376ac04492c187fa7a6278fd5a0ecf8fc5ac343d1f5f41a85618111585dc6d
+tail_cli_sha256: ca678bbc9481c86e43f6677590099423da2d7c3a3465ea1a236e67db211c9f26
+gate_source_sha256: b7601ad8c36f0dea9d550738907258a84075b66c61a09323642c7a46d34ab088
+runtime_profile: amu-command-fs35 (directory on fd 3), one process per stage and layer
+clip_sha256: 2bbce992495804159c59b2add9bb776a28484765b483a722416cd8b05ad79175
+mel_cli_sha256: eaccd429fb3fb23cca7b98ed0f7f8d66d673ac727e69cf2767c648e287697d25
+front_program_sha256: 56019ecea1165939dfb87ed08f4d2a89ca97168efb79f04b93902f5e83117942
+checks_passed: 21 of 21 (4 values after the mel, 4 after the front end, 4 after 18 layers, 4 after the tail, 5 refusals)
+negative_control_checks_passed: reflect-pad=2/21 pad-offset=0/21 hop-size=1/21 bin-layout=3/21 bin-count=2/21 max-clamp=2/21 normalisation=0/21 front-ignores-mel=4/21
+changed_source_refusal: PASS
+qualification: real speech clip (3840 samples, 24 mel frames, 3 tokens): log-mel + front end + 18 layers + tail on the real Qwen3-ASR-0.6B weights to 1e-11 against CPython float64; structure from the llama.cpp mtmd qwen3a graph, not the original code; position table in float64; the clip is not padded to 30 s as the HF feature extractor does; no chunking beyond one chunk, language model, text, turn or launcher

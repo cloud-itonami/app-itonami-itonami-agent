@@ -25,9 +25,10 @@ EXPECTED_DEQUANT_SHA256=c3f22e7c3f189346d8e6a6225c0ae41796369e6045d142dfb031e6fc
 EXPECTED_LOGMEL_SHA256=daf0d273329a7b5a05aef4255b985f2e1c031c74f32596e9578add46980b1f5e
 EXPECTED_NNOPS_SHA256=4693d227291a31b8c59378b0ab114715a983dfbfd17308d5b478181793a3604d
 EXPECTED_GELU_SHA256=36b4c98a4df8fd817695a62d1602320f23d93fb38ddf97c1fb124bdcbd7c18a6
+EXPECTED_QWENOPS_SHA256=a5a8744046a81edd21d0740395e874c89ed518e24092a5e889c78b2b2ba51576
 EXPECTED_ST_SHA256=20562030183d7a09fd43303821ecab5ed9065275a1ad68494eb3bb456e9c8f75
 EXPECTED_WF_SHA256=8ec4fb02f9fdaa6a3d89f68f69a95d77ff878c21e4a531922333ce2b1e44a2c6
-EXPECTED_SOURCE_SHA256=4cec3f3eae02e8b7b681cb2b7fac3dbe8f98ca85cb2eac608c4fbf4affe47e91
+EXPECTED_SOURCE_SHA256=9c01ba2790139042cd4674aac8246ddead7039b43297e17a8a4e5009e8bbba17
 EXPECTED_STEP_SHA256=84376ac04492c187fa7a6278fd5a0ecf8fc5ac343d1f5f41a85618111585dc6d
 EXPECTED_GATE_SHA256=dd07a54f42edf03c17eeba390f97de45de87ad06b553d9b4e3af723dd083083e
 CASES=33
@@ -77,6 +78,7 @@ DEQUANT="$KD/ggml_dequant.kotoba"
 LOGMEL="$KD/log_mel.kotoba"
 NNOPS="$KD/nn_ops.kotoba"
 GELU="$KD/gelu_erf.kotoba"
+QWENOPS="$KD/qwen_ops.kotoba"
 ST="$KD/safetensors.kotoba"
 WF="$KD/weights_file.kotoba"
 SOURCE="$KD/audio_ffn.kotoba"
@@ -89,6 +91,7 @@ check_sha "$DEQUANT" "$EXPECTED_DEQUANT_SHA256"
 check_sha "$LOGMEL" "$EXPECTED_LOGMEL_SHA256"
 check_sha "$NNOPS" "$EXPECTED_NNOPS_SHA256"
 check_sha "$GELU" "$EXPECTED_GELU_SHA256"
+check_sha "$QWENOPS" "$EXPECTED_QWENOPS_SHA256"
 check_sha "$ST" "$EXPECTED_ST_SHA256"
 check_sha "$WF" "$EXPECTED_WF_SHA256"
 check_sha "$SOURCE" "$EXPECTED_SOURCE_SHA256"
@@ -110,6 +113,7 @@ run_gate() {
   cp "$LOGMEL" "$s/log_mel.kotoba"
   cp "$NNOPS" "$s/nn_ops.kotoba"
   cp "$GELU" "$s/gelu_erf.kotoba"
+  cp "$QWENOPS" "$s/qwen_ops.kotoba"
   cp "$ST" "$s/safetensors.kotoba"
   cp "$WF" "$s/weights_file.kotoba"
   cp "$src" "$s/audio_ffn.kotoba"
@@ -124,9 +128,10 @@ run_gate() {
     printf 'module itonami.ggml-dequant %s/ggml_dequant.kotoba\n' "$s"
     printf 'module itonami.log-mel %s/log_mel.kotoba\n' "$s"
     printf 'module itonami.nn-ops %s/nn_ops.kotoba\n' "$s"
+    printf 'module itonami.qwen-ops %s/qwen_ops.kotoba\n' "$s"
     printf 'module itonami.safetensors %s/safetensors.kotoba\n' "$s"
     printf 'module itonami.weights-file %s/weights_file.kotoba\n' "$s"
-    for f in audio_ffn audio_ffn_gate bf16 gelu_erf ggml_dequant log_mel nn_ops safetensors weights_file; do
+    for f in audio_ffn audio_ffn_gate bf16 gelu_erf ggml_dequant log_mel nn_ops qwen_ops safetensors weights_file; do
       printf 'file %s %s/%s.kotoba\n' "$(shasum -a 256 "$s/$f.kotoba" | cut -d ' ' -f 1)" "$s" "$f"
     done
   } > "$dir/audio-ffn.ksl"
@@ -167,9 +172,10 @@ build_step() {
     printf 'module itonami.ggml-dequant %s/ggml_dequant.kotoba\n' "$s"
     printf 'module itonami.log-mel %s/log_mel.kotoba\n' "$s"
     printf 'module itonami.nn-ops %s/nn_ops.kotoba\n' "$s"
+    printf 'module itonami.qwen-ops %s/qwen_ops.kotoba\n' "$s"
     printf 'module itonami.safetensors %s/safetensors.kotoba\n' "$s"
     printf 'module itonami.weights-file %s/weights_file.kotoba\n' "$s"
-    for f in audio_ffn audio_layer_step_cli bf16 gelu_erf ggml_dequant log_mel nn_ops safetensors weights_file; do
+    for f in audio_ffn audio_layer_step_cli bf16 gelu_erf ggml_dequant log_mel nn_ops qwen_ops safetensors weights_file; do
       printf 'file %s %s/%s.kotoba\n' "$(shasum -a 256 "$s/$f.kotoba" | cut -d ' ' -f 1)" "$s" "$f"
     done
   } > "$dir/audio-layer-step.ksl"
