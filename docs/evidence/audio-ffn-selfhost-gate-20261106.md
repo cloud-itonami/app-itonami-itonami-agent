@@ -11,7 +11,7 @@ reads the header); activations are internal `vector-f64` arrays. LayerNorm uses 
 torch default; `config.json` names no eps) and the exact GELU (`itonami.gelu-erf`). The input
 token is x[i] = (((3 i + 1) mod 11) - 5) / 4.
 
-Gate: `bin/check-audio-ffn-selfhost <cli> <out-dir> <model.safetensors>`, 11 cases, one process
+Gate: `bin/check-audio-ffn-selfhost <cli> <out-dir> <model.safetensors>`, 22 cases (11 feed-forward, 11 attention; see the last section), one process
 per case: layers 0 and 5, the sum of the 896 outputs and outputs 0, 447, 895, plus an index past
 the end, a layer that does not exist and a missing file returning -1. Expected values come from a
 one-off CPython float64 computation of the same sublayer (struct/json for the weights, `math.erf`
@@ -41,3 +41,23 @@ chunking, the projector into the language model, any layer other than 0 and 5, t
 Qwen3-TTS files, a node. This does not show equality with the original model implementation
 (eps and the order of operations are the standard ones, not read from the model's code). The
 gate needs the 1.88 GB model and is not runnable in CI.
+
+## The self-attention half (JUN-917)
+
+`attn-at path layer idx` and `attn-sum path layer` run three tokens (x_t[i] = (((3 i + 1 + 5 t) mod
+11) - 5) / 4, t = 0..2) through
+
+    out_t = x_t + out_proj(ctx_t),   ctx_t = concat over 14 heads of softmax_u(q_t . k_u / 8) v_u
+
+with q, k, v the biased projections of `self_attn_layer_norm(x)` and the softmax over all three
+tokens (non-causal), using the real `self_attn.{q,k,v,out}_proj` weights and biases and the
+`self_attn_layer_norm` of layers 0 and 5. idx runs over the 2688 outputs (token idx / 896).
+The gate has 22 cases now (11 feed-forward, 11 attention: the sum and outputs 0, 1000, 2687 for
+both layers, an index past the end, a missing layer, a missing file); they agree with a CPython
+float64 computation of the same function to 1e-12 relative. Eight further mutations (scale, head
+count, softmax normaliser, bias offset, residual, value mix, key of token 2, token offset) are
+caught.
+
+Not covered: how the real model chunks or windows the audio, positional embeddings, the conv2d
+front end, the projector, the decoder. The function above is the standard definition, not read
+from the model code, so equality with the original implementation is not claimed.
