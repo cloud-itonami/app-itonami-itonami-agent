@@ -1,0 +1,14 @@
+format: itonami.audio-encoder-selfhost-gate.v1
+amu_cli_sha256: ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
+model_sha256: 79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
+audio_ffn_source_sha256: 9004fc7c7984ffa20f453aaad8d19f27181a771290267f27206336f5556e62d6
+front_cli_sha256: 024c5af8766731f981d15b9d99aa6dd75a8c0ce54ea5965a204f1213ae818197
+step_cli_sha256: 84376ac04492c187fa7a6278fd5a0ecf8fc5ac343d1f5f41a85618111585dc6d
+tail_cli_sha256: ca678bbc9481c86e43f6677590099423da2d7c3a3465ea1a236e67db211c9f26
+gate_source_sha256: f5801b6bb92071ccc4e4de5d0eaf85d4cdc60296dd5229040d8e13938b6a9af2
+runtime_profile: amu-command-fs35 (directory on fd 3), one process per stage and layer
+front_program_sha256: d74d0ed2844e98e44de0044fa3f05335d6181fd642b47427adb9afd0243c6c19
+checks_passed: 18 of 18 (4 values after the front end, 4 after 18 layers, 4 after the tail, 6 refusals)
+negative_control_checks_passed: mel-input=0/18 conv-padding=0/18 conv-kernel-order=0/18 conv-gelu-dropped=0/18 feature-order=0/18 position-table=1/18 position-restart=1/18 front-token-order=2/18 ln-post-dropped=8/18 proj-gelu-dropped=8/18 tail-token-order=11/18
+changed_source_refusal: PASS
+qualification: front end + 18 layers + tail for 24 synthetic mel frames (3 tokens) on the real Qwen3-ASR-0.6B weights to 1e-11 against CPython float64; structure from the llama.cpp mtmd qwen3a graph, not the original code; position table in float64; no real audio, chunking beyond one chunk, language model, turn or launcher
