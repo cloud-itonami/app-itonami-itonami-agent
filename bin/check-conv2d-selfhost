@@ -1,0 +1,153 @@
+#!/bin/sh
+# Compile and execute the conv2d core (3x3, padding 1, stride 1/2, multi-channel with
+# bias) with the pinned Amu multi-module project CLI, against a one-off f64
+# reference. It does not load weights, run a model, or exercise the agent turn or
+# launcher.
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir>" >&2
+  exit 2
+fi
+
+CLI=$1
+OUT_DIR=$2
+EXPECTED_CLI_SHA256=ae94dc99ffe489ef77cb5eb0044bea1d2500a4273d45c55bcf57b887994f390a
+EXPECTED_SOURCE_SHA256=8a84d129a76ff02aa6178abfe62cc49104136514bfe975343830e0bd34e7c97f
+AMU_COMMIT=d673111b66f43a8569e545c772a70e51737e1707
+EXPECTED_RESULT=88
+
+REPO_ROOT=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+GITHUB_ROOT=$(CDPATH= cd -- "$REPO_ROOT/../../.." && pwd)
+
+case "$OUT_DIR" in
+  "$GITHUB_ROOT"/workspaces/*) ;;
+  *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
+esac
+case "$CLI" in
+  /*) ;;
+  *) printf '%s\n' "Amu CLI path must be absolute" >&2; exit 2 ;;
+esac
+if [ ! -x "$CLI" ]; then
+  printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2
+  exit 2
+fi
+if [ -e "$OUT_DIR" ]; then
+  printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2
+  exit 2
+fi
+
+CLI_SHA256=$(shasum -a 256 "$CLI" | cut -d ' ' -f 1)
+if [ "$CLI_SHA256" != "$EXPECTED_CLI_SHA256" ]; then
+  printf '%s\n' "unexpected Amu CLI digest: $CLI_SHA256" >&2
+  exit 2
+fi
+SOURCE="$REPO_ROOT/kotoba/itonami/conv2d.kotoba"
+SOURCE_SHA256=$(shasum -a 256 "$SOURCE" | cut -d ' ' -f 1)
+if [ "$SOURCE_SHA256" != "$EXPECTED_SOURCE_SHA256" ]; then
+  printf '%s\n' "unexpected conv2d source digest: $SOURCE_SHA256" >&2
+  exit 2
+fi
+
+# run_gate <dir> <source-file>: lock + compile
+run_gate() {
+  dir=$1
+  src=$2
+  gate="$dir/src/conv2d_gate.kotoba"
+  mkdir -p "$dir/src"
+  cp "$src" "$dir/src/conv2d.kotoba"
+  cat > "$gate" <<'EOF2'
+(ns itonami.conv2d-gate
+  (:require [itonami.conv2d :as c2])
+  (:export [main]))
+(defn main [] :i64 (c2/match-count))
+EOF2
+  s="$dir/src/conv2d.kotoba"
+  # module lines sorted by name: itonami.conv2d < itonami.conv2d-gate
+  printf 'KSL2\nentry %s\nmodule itonami.conv2d %s\nmodule itonami.conv2d-gate %s\nfile %s %s\nfile %s %s\n' \
+    "$gate" "$s" "$gate" \
+    "$(shasum -a 256 "$s" | cut -d ' ' -f 1)" "$s" \
+    "$(shasum -a 256 "$gate" | cut -d ' ' -f 1)" "$gate" > "$dir/conv2d.ksl"
+  "$CLI" compile "$gate" --source-lock "$dir/conv2d.ksl" -o "$dir/conv2d-tests.macho"
+  codesign --verify --strict "$dir/conv2d-tests.macho"
+}
+
+POS="$OUT_DIR/positive"
+run_gate "$POS" "$SOURCE"
+GATE_PATH="$POS/src/conv2d_gate.kotoba"
+LOCK="$POS/conv2d.ksl"
+PROGRAM="$POS/conv2d-tests.macho"
+DIRECT_RESULT=$("$PROGRAM")
+LOCKED_RESULT=$("$CLI" run "$GATE_PATH" --source-lock "$LOCK")
+ARTIFACT_RESULT=$("$CLI" run "$PROGRAM")
+for result in "$DIRECT_RESULT" "$LOCKED_RESULT" "$ARTIFACT_RESULT"; do
+  if [ "$result" != "$EXPECTED_RESULT" ]; then
+    printf 'conv2d result mismatch: expected %s, got %s\n' "$EXPECTED_RESULT" "$result" >&2
+    exit 1
+  fi
+done
+
+# negative controls: each mutation must change the source and stop the gate
+# from returning the full match count
+NEG="$OUT_DIR/negative"
+mkdir -p "$NEG"
+NEG_RESULTS=""
+mutate() {
+  name=$1
+  pattern=$2
+  replacement=$3
+  sed "s/$pattern/$replacement/" "$SOURCE" > "$NEG/$name.kotoba"
+  if cmp -s "$SOURCE" "$NEG/$name.kotoba"; then
+    printf 'negative control %s did not change the source\n' "$name" >&2
+    exit 1
+  fi
+  run_gate "$NEG/$name" "$NEG/$name.kotoba"
+  result=$("$NEG/$name/conv2d-tests.macho")
+  if [ "$result" = "$EXPECTED_RESULT" ]; then
+    printf 'negative control %s still passed the gate\n' "$name" >&2
+    exit 1
+  fi
+  NEG_RESULTS="$NEG_RESULTS $name=$result"
+}
+mutate tap-offset '(- (+ (\* o stride) k) 1)' '(- (+ (* o stride) k) 0)'
+mutate out-length '(+ (quot (- (+ n 2) 3) stride) 1)' '(quot (- (+ n 2) 3) stride)'
+mutate kernel-x-index '(fw o c ky kx) (fx c py px)' '(fw o c ky kx) (fx c py 0)'
+mutate kernel-order '(fw o c ky kx)' '(fw o c kx ky)'
+mutate channel-sum '(cond (>= c 2) acc' '(cond (>= c 1) acc'
+mutate bias-term '(fadd (tap-run o oy ox stride 0 0 0 (zero)) (fb o))' '(tap-run o oy ox stride 0 0 0 (zero))'
+mutate padding-check '(if (or (< py 0) (< px 0))' '(if (< py 0)'
+
+# negative control: a source changed after locking is refused
+SOURCE_PATH="$POS/src/conv2d.kotoba"
+printf '\n' >> "$SOURCE_PATH"
+if "$CLI" compile "$GATE_PATH" --source-lock "$LOCK" \
+  -o "$OUT_DIR/should-not-exist.macho" > "$OUT_DIR/refusal.stdout" 2> "$OUT_DIR/refusal.stderr"; then
+  printf '%s\n' "changed locked source unexpectedly compiled" >&2
+  exit 1
+fi
+if ! grep -q 'EINPUT a locked project source' "$OUT_DIR/refusal.stderr"; then
+  cat "$OUT_DIR/refusal.stderr" >&2
+  printf '%s\n' "changed source refusal did not identify the locked input" >&2
+  exit 1
+fi
+if [ -e "$OUT_DIR/should-not-exist.macho" ]; then
+  printf '%s\n' "refused compile left an output artifact" >&2
+  exit 1
+fi
+
+{
+  printf 'format: itonami.conv2d-selfhost-gate.v1\n'
+  printf 'amu_pr_commit: %s\n' "$AMU_COMMIT"
+  printf 'amu_cli_sha256: %s\n' "$CLI_SHA256"
+  printf 'conv2d_source_sha256: %s\n' "$SOURCE_SHA256"
+  printf 'program_sha256: %s\n' "$(shasum -a 256 "$PROGRAM" | cut -d ' ' -f 1)"
+  printf 'direct_result: %s\n' "$DIRECT_RESULT"
+  printf 'locked_run_result: %s\n' "$LOCKED_RESULT"
+  printf 'artifact_run_result: %s\n' "$ARTIFACT_RESULT"
+  printf 'negative_control_results:%s\n' "$NEG_RESULTS"
+  printf 'changed_source_refusal: PASS\n'
+  printf 'qualification: bounded conv2d on an analytic 2x2-channel fixture; no real sizes, weights, activation, turn or launcher\n'
+} > "$OUT_DIR/build-receipt.txt"
+
+cat "$OUT_DIR/build-receipt.txt"
