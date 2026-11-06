@@ -32,7 +32,8 @@ Gate: 46 checks (the 1 s clip: 16 encoder values, the first token and its logit,
 vocabulary fixture, 5 refusals; the sentence: 16 encoder values, the first token's logit, ids, text) and 13
 mutations (vocabulary 4, encoder 7: mel reflection, conv stride, feature order, attention scale, the
 token count of the last chunk, the position restart, the zero padding; decoder 2). Two changes made the
-gate faster, from about 40 minutes to about 21: `ASR_GATE_JOBS` (default 4) runs the mutations in
+gate faster, from about 40 minutes to 21 to 27 minutes (21 min 26 s and 26 min 50 s in two runs, the second one
+with other work running on the machine): `ASR_GATE_JOBS` (default 4) runs the mutations in
 parallel, each in its own state directory (a clone of the model costs no disk); and
 `ASR_GATE_TIER=quick` runs only the 1 s clip, the vocabulary fixture and the refusals (26 checks, 4 min 42 s).
 
