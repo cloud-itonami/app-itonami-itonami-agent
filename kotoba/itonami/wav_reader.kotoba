@@ -1,5 +1,5 @@
 ;; A WAV file as the hex the Qwen3-ASR encoder takes (JUN-941): RIFF/WAVE, PCM (format 1), one channel,
-;; 16,000 samples a second, 16 bits, 4,000 to 64,000 samples (0.25 to 4 s). Chunks are walked in order
+;; 16,000 samples a second, 16 bits, 4,000 to 128,000 samples (0.25 to 8 s). Chunks are walked in order
 ;; (a chunk is a 4-byte name, a 4-byte little-endian length and its bytes, padded to an even length), so
 ;; chunks between `fmt ` and `data` (afconvert writes a FLLR filler of 4,044 bytes) are skipped. The
 ;; file is read with a single FS2 E request (up to 262,144 bytes), so a file longer than that is
@@ -72,7 +72,7 @@
                       (let [n (quot (le r (+ data 4) 3 0) 2)]
                         (cond (> (+ data (+ 8 (* n 2))) size) "truncated data chunk"
                               (< n 4000) "shorter than 0.25 s"
-                              (> n 64000) "longer than 4 s"
+                              (> n 128000) "longer than 8 s"
                               :else ""))))))))))) 
 
 ;; hex of the samples (4 digits each), or ""

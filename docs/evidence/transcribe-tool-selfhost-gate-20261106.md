@@ -4,7 +4,7 @@ The native Qwen3-ASR path (JUN-928/935/940) is now one tool.
 
 - `kotoba/itonami/wav_reader.kotoba` and `kotoba/agent_cli/wav_hex_cli.kotoba`: a native WAV reader. It walks
   the RIFF chunks in order (afconvert writes a 4,044-byte `FLLR` filler between `fmt ` and `data`; chunks are
-  padded to an even length) and accepts PCM, mono, 16,000 Hz, 16-bit, 4,000 to 64,000 samples (0.25 to 4 s), at
+  padded to an even length) and accepts PCM, mono, 16,000 Hz, 16-bit, 4,000 to 128,000 samples (0.25 to 8 s), at
   most 262,144 bytes (one FS2 E request). Everything else is refused with exit 2, nothing on stdout and a named
   reason on stderr. The hex of the two real files equals what CPython's `wave` module reads.
 - `bin/build-transcribe-guests <amu-cli> <out-dir>`: builds the five guests (wav, audio encoder, decoder,
@@ -20,15 +20,23 @@ Results on the two real WAV files (`test/native/wav/`, made with `say` and `afco
 jumps over the lazy dog.` (39,946 samples, 33 audio tokens, 13 tokens decoded, 9.5 min) and `今日はとてもいい天気ですね。`
 (38,367 samples, 31 audio tokens, 10 tokens decoded).
 
-Gate: `bin/check-transcribe-tool <amu-cli> <out-dir> <model-dir>`, 26 checks: the guest build; the reader on the
-two real files and on 15 refused files (12 broken in different ways, and three at the limits: 64,001 samples, 3,999
-samples, and a data chunk one byte short), and on the accepted limits (64,000 and 4,000 samples, a data
+Gate: `bin/check-transcribe-tool <amu-cli> <out-dir> <model-dir>`, 29 checks: the guest build; the reader on the
+two real files and on 15 refused files (12 broken in different ways, and three at the limits: 128,001 samples, 3,999
+samples, and a data chunk one byte short), and on the accepted limits (128,000 and 4,000 samples, a data
 chunk that fits exactly); the driver's refusals (no argument, an unset guest directory, an unset model, a missing
-file, a stereo file, a file over 4 s); the launcher's refusals (unset environment 78, no argument 2); the tool on
+file, a stereo file, a file over 8 s); the launcher's refusals (unset environment 78, no argument 2); the tool on
 both WAV files (stdout equals the spoken sentence, stderr names the language and the sizes); the launcher on the
-English WAV. Ten mutations of the reader are caught (header offsets of the RIFF tag, the sample rate, the channel
-count and the bit depth; the chunk padding; the sample bias and byte order; the 4 s and 0.25 s limits; the
-truncation check). 26 min 19 s.
+English WAV, and the 6.9 s WAV. Ten mutations of the reader are caught (header offsets of the RIFF tag, the sample rate, the channel
+count and the bit depth; the chunk padding; the sample bias and byte order; the 8 s and 0.25 s limits; the
+truncation check). 26 min 19 s for the 4 s version (26 checks; the 29-check run adds the 6.9 s file, which takes about 25 min more).
+
+8 s extension (follow-up to JUN-941): the limit is raised from 4 s to 8 s. The reader and mel accept 128,000
+samples; the decoder's caps rose from 60 audio rows / 64 prompt tokens to 110 / 128 (an 8 s clip is about 104 audio
+tokens). `long_6p9s.wav` (110,665 samples, 90 audio tokens) is transcribed end to end by the gate, and a 4.7 s clip
+(75,054 samples, 61 audio tokens) was run by hand (14 min 5 s). The boundary files are 128,000 (accepted by the
+reader) and 128,001 samples (refused); `bad_long.wav` was rebuilt at 131,000 samples (262,044 bytes, under the
+262,144-byte file cap) because the old 80,000-sample file became valid. The decoder, encoder and ASR gates were
+re-pinned for the changed sources.
 
 Mistakes made on the way, kept here:
 - The first runs of the driver printed garbage (`language English<LM THE QUICK BROWN FOX ...`, repeated). The
@@ -47,7 +55,7 @@ Mistakes made on the way, kept here:
   free space had been 35 GB of 927 GB. The ASR file was restored as an APFS clone of a work copy whose sha256
   matched the manifest (79d6cbd4...). The TTS model was not touched and is still missing.
 
-Not claimed: other formats, languages or speakers; audio over 4 s (an 8 s clip needs a larger argument
-budget); streaming; the original model beyond the two transcripts; CI (the model is 1.88 GB). The gate takes
+Not claimed: other formats, languages or speakers; audio over 8 s; a clip of exactly 8 s end to end (the reader was run at 128,000 samples; the longest
+end-to-end run is 6.9 s); streaming; the original model beyond the two transcripts; CI (the model is 1.88 GB). The gate takes
 the Amu CLI pinned in `bin/build-transcribe-guests`. HF feature-extractor padding to 30 s and mrope on audio
 positions remain open (JUN-935).
