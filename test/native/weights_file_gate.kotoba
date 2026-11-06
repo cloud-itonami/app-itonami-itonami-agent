@@ -1,0 +1,64 @@
+;; Gate for itonami.weights-file against the real Qwen3-ASR-0.6B model.safetensors cloned
+;; into the granted directory as /d/model.safetensors. Expected values come from a CPython
+;; read of the same file (struct/json): size, header length, the header entries of three
+;; tensors, and nine BF16 elements (exact f64 bit patterns as signed i64).
+(ns itonami.weights-file-gate
+  (:require [itonami.weights-file :as wf]
+            [itonami.safetensors :as st])
+  (:export [main])
+  (:capabilities #{:io/write}))
+
+(defn- b2i [x :bool] :i64 (if x 1 0))
+
+(defn- say [s :string] :string (typed-cap-call :io/write :string :string s))
+
+(defn- model [] :string "/d/model.safetensors")
+(defn- bias [] :string "thinker.audio_tower.conv2d1.bias")
+(defn- cout [] :string "thinker.audio_tower.conv_out.weight")
+(defn- embed [] :string "thinker.model.embed_tokens.weight")
+
+;; 30 checks (the header text starts with { and the closing } sits before two padding spaces)
+(defn- part-a [h :string] :i64
+  (+ (b2i (= (wf/wf-size (model)) 1876091704))
+    (+ (b2i (= (wf/wf-header-len (model)) 74544))
+    (+ (b2i (= (string-length h) 74544))
+    (+ (b2i (string=? (st/st-dtype h (bias)) "BF16"))
+    (+ (b2i (= (st/st-dim h (bias) 0) 480))
+    (+ (b2i (= (st/st-begin h (bias)) 0))
+    (+ (b2i (= (st/st-end h (bias)) 960))
+    (+ (b2i (= (st/st-dim h (cout) 0) 896))
+    (+ (b2i (= (st/st-dim h (cout) 1) 7680))
+    (+ (b2i (= (st/st-begin h (cout)) 8305920))
+    (+ (b2i (= (st/st-end h (cout)) 22068480))
+    (+ (b2i (= (st/st-dim h (embed) 0) 151936))
+    (+ (b2i (= (st/st-dim h (embed) 1) 1024))
+    (+ (b2i (= (st/st-begin h (embed)) 683917312))
+    (b2i (= (st/st-end h (embed)) 995082240)))))))))))))))))
+
+(defn- part-b [h :string] :i64
+  (+ (b2i (= (wf/wf-bf16 (model) (bias) 0) -4634239200936329216))
+    (+ (b2i (= (wf/wf-bf16 (model) (bias) 1) 4588288410988314624))
+    (+ (b2i (= (wf/wf-bf16 (model) (bias) 479) 4587197695453560832))
+    (+ (b2i (= (wf/wf-bf16 (model) (cout) 0) 4571822124850741248))
+    (+ (b2i (= (wf/wf-bf16 (model) (cout) 3456789) -4640924231633207296))
+    (+ (b2i (= (wf/wf-bf16 (model) (cout) 6881279) -4652605443166699520))
+    (+ (b2i (= (wf/wf-bf16 (model) (embed) 0) -4646835206144131072))
+    (+ (b2i (= (wf/wf-bf16 (model) (embed) 77777777) 4583010755174989824))
+    (+ (b2i (= (wf/wf-bf16 (model) (embed) 155582463) -4654997980468740096))
+    (+ (b2i (= (wf/wf-bf16 (model) (bias) 480) -1))
+    (+ (b2i (= (wf/wf-bf16 (model) "no.such.tensor" 0) -1))
+    (+ (b2i (= (wf/wf-size "/d/missing.bin") -1))
+    (+ (b2i (= (wf/wf-header-len "/d/missing.bin") -1))
+    (b2i (= (wf/wf-bf16 "/d/missing.bin" (bias) 0) -1))))))))))))))))
+
+(defn- count-checks [] :i64
+  (let [h (wf/wf-header-text (model))]
+    (+ (part-a h)
+      (+ (part-b h)
+         (b2i (and (= (string-code-point-at h 0) 123)
+                   (= (string-code-point-at h 74541) 125)))))))
+
+(defn main [] :i64
+  (let [n (count-checks)
+        w (say (string-concat "checks " (string-concat (string-from-i64 n) "\n")))]
+    n))
