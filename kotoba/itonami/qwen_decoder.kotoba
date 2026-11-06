@@ -1,0 +1,451 @@
+;; The Qwen3 decoder of Qwen3-ASR-0.6B on the real weights (JUN-926), the language-model half of
+;; native STT. Config: hidden 1024, 28 layers, 16 query heads and 8 key/value heads of 128
+;; (GQA), SiLU MLP of 3072, RMSNorm eps 1e-6 with QK-norm, RoPE theta 1e6 in the rotate-half
+;; layout, tied embedding and lm_head. The model's mrope (sections 24/20/20, interleaved) is
+;; treated as plain RoPE: with equal positions on all three axes it is the same function.
+;;
+;; State lives in binary f64 files (8 bytes per value, little endian) in the granted directory:
+;; /d/st/h.bin holds the hidden states of the tokens being processed (n x 1024), /d/st/k<l>.bin and
+;; /d/st/v<l>.bin the key/value caches of layer l (positions x 1024). Files are written with FS2
+;; B/C requests (:fs/app-data-bytes) and read with E (:fs/app-data). A layer reads each weight row
+;; once and applies it to all tokens, because the native runtime never reclaims memory and keeps
+;; about eight bytes for every byte read: one process per layer, one per vocabulary slice.
+(ns itonami.qwen-decoder
+  (:require [itonami.bf16 :as bf]
+            [itonami.log-mel :as lm]
+            [itonami.nn-ops :as nn]
+            [itonami.qwen-ops :as qo]
+            [itonami.safetensors :as st]
+            [itonami.weights-file :as wf])
+  (:export [dec-embed dec-layer dec-head])
+  (:capabilities [:fs/app-data :fs/app-data-bytes]))
+
+(defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
+(defn- fsub [a :i64 b :i64] :i64 (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+(defn- fmul [a :i64 b :i64] :i64 (f64-to-bits (f64-mul (f64-from-bits a) (f64-from-bits b))))
+(defn- fdiv [a :i64 b :i64] :i64 (f64-to-bits (f64-div (f64-from-bits a) (f64-from-bits b))))
+(defn- flt [a :i64 b :i64] :bool (f64-lt (f64-from-bits a) (f64-from-bits b)))
+(defn- itof [i :i64] :i64 (f64-to-bits (i64-to-f64-rounded i)))
+(defn- zero [] :i64 (f64-to-bits 0.0))
+(defn- neg [a :i64] :i64 (f64-to-bits (f64-neg (f64-from-bits a))))
+(defn- eps [] :i64 (f64-to-bits 0.000001))
+
+(defn- frame [op :string path :string tail :string] :string
+  (string-concat "\u0000FS2\u0000"
+    (string-concat op (string-concat path (string-concat "\u0000" tail)))))
+
+(defn- bf16-fast [v :i64] :i64
+  (let [e (mod (quot v 128) 256)]
+    (if (= e 0)
+      (bf/bf16-to-f64 v)
+      (let [pos (+ (i64-shift-left (+ e 896) 52) (i64-shift-left (mod v 128) 45))]
+        (if (>= v 32768)
+          (f64-to-bits (f64-neg (f64-from-bits pos)))
+          pos)))))
+
+;; ---- BF16 tensors ----------------------------------------------------------------------------
+(defn- push-bf16 [r :bytes i :i64 n :i64 v :vector-i64] :vector-i64
+  (if (>= i n)
+    v
+    (push-bf16 r (+ i 1) n
+      (vector-assoc! v i
+        (bf16-fast (+ (bytes-at r (+ 5 (* 2 i))) (* 256 (bytes-at r (+ 6 (* 2 i))))))))))
+
+;; count BF16 elements at absolute file offset off (empty when short)
+(defn- read-vec [path :string off :i64 count :i64] :vector-i64
+  (let [r (typed-cap-call :fs/app-data :string :bytes
+            (frame "E" path (string-concat (string-from-i64 off)
+                              (string-concat ":" (string-from-i64 (* count 2))))))]
+    (if (= (bytes-count r) (+ 5 (* count 2)))
+      (push-bf16 r 0 count (vector-alloc count))
+      (vector-alloc 0))))
+
+;; absolute data offset of a BF16 tensor, or -1
+(defn- tensor-off [h :string n :i64 name :string] :i64
+  (if (string=? (st/st-dtype h name) "BF16")
+    (let [b (st/st-begin h name)]
+      (if (< b 0) -1 (+ (+ 8 n) b)))
+    -1))
+
+(defn- lname [layer :i64 tail :string] :string
+  (string-concat "thinker.model.layers."
+    (string-concat (string-from-i64 layer) (string-concat "." tail))))
+
+;; ---- f64 state files -------------------------------------------------------------------------
+(defn- le-value [r :bytes at :i64 k :i64 acc :i64] :i64
+  (if (< k 0)
+    acc
+    (le-value r at (- k 1) (bit-or (i64-shift-left acc 8) (bytes-at r (+ at k))))))
+
+(defn- unpack-f64 [r :bytes i :i64 n :i64 base :i64 out :vector-i64] :vector-i64
+  (if (>= i n)
+    out
+    (unpack-f64 r (+ i 1) n base (vector-assoc! out (+ base i) (le-value r (+ 5 (* 8 i)) 7 0)))))
+
+;; values [first, first + count) of an f64 file, in requests of at most 32768 values
+(defn- read-f64-run [path :string first :i64 count :i64 done :i64 out :vector-i64] :vector-i64
+  (if (>= done count)
+    out
+    (let [n (if (< (- count done) 32768) (- count done) 32768)
+          r (typed-cap-call :fs/app-data :string :bytes
+              (frame "E" path (string-concat (string-from-i64 (* 8 (+ first done)))
+                                (string-concat ":" (string-from-i64 (* 8 n))))))]
+      (if (= (bytes-count r) (+ 5 (* 8 n)))
+        (read-f64-run path first count (+ done n) (unpack-f64 r 0 n done out))
+        (vector-alloc 0)))))
+
+(defn- read-f64 [path :string first :i64 count :i64] :vector-i64
+  (read-f64-run path first count 0 (vector-alloc count)))
+
+(defn- put-hdr [out :vector-i64 hb :bytes i :i64 n :i64] :vector-i64
+  (if (>= i n)
+    out
+    (put-hdr (vector-assoc! out i (bytes-at hb i)) hb (+ i 1) n)))
+
+(defn- put-val [out :vector-i64 x :i64 k :i64 at :i64] :vector-i64
+  (if (>= k 8)
+    out
+    (put-val (vector-assoc! out (+ at k) (bit-and (u64-shift-right x (* 8 k)) 255)) x (+ k 1) at)))
+
+(defn- put-vals [out :vector-i64 v :vector-i64 i :i64 to :i64 at :i64] :vector-i64
+  (if (>= i to)
+    out
+    (put-vals (put-val out (vector-at v i) 0 at) v (+ i 1) to (+ at 8))))
+
+;; one request: header + the values [from, to) of v
+(defn- write-piece [path :string op :string v :vector-i64 from :i64 to :i64] :i64
+  (let [hb (string-to-utf8 (frame op path ""))
+        nh (bytes-count hb)
+        req (put-vals (put-hdr (vector-alloc (+ nh (* 8 (- to from)))) hb 0 nh) v from to nh)
+        z (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 req))]
+    0))
+
+(defn- write-run [path :string v :vector-i64 from :i64 n :i64] :i64
+  (if (>= from n)
+    0
+    (let [to (if (< (- n from) 32768) n (+ from 32768))
+          z (write-piece path (if (= from 0) "B" "C") v from to)]
+      (write-run path v to n))))
+
+;; replace the file with the n values of v; true when it reads back at the expected size
+(defn- write-f64 [path :string v :vector-i64] :bool
+  (let [z (if (= (vector-count v) 0) 0 (write-run path v 0 (vector-count v)))]
+    (= (wf/wf-size path) (* 8 (vector-count v)))))
+
+;; ---- vector helpers ----------------------------------------------------------------------------
+(defn- copy-into [dst :vector-i64 src :vector-i64 i :i64 n :i64 at :i64] :vector-i64
+  (if (>= i n)
+    dst
+    (copy-into (vector-assoc! dst (+ at i) (vector-at src i)) src (+ i 1) n at)))
+
+;; RMSNorm of the d values of x starting at b, scaled by w, written to out at ob
+(defn- sumsq [x :vector-i64 i :i64 b :i64 d :i64 acc :i64] :i64
+  (if (>= i d)
+    acc
+    (sumsq x (+ i 1) b d (fadd acc (fmul (vector-at x (+ b i)) (vector-at x (+ b i)))))))
+
+(defn- rms-fill [x :vector-i64 b :i64 d :i64 w :vector-i64 inv :i64 i :i64 out :vector-i64 ob :i64] :vector-i64
+  (if (>= i d)
+    out
+    (rms-fill x b d w inv (+ i 1)
+      (vector-assoc! out (+ ob i) (fmul (fmul (vector-at x (+ b i)) inv) (vector-at w i)))
+      ob)))
+
+(defn- rms-seg [x :vector-i64 b :i64 d :i64 w :vector-i64 out :vector-i64 ob :i64] :vector-i64
+  (rms-fill x b d w (qo/rms-inv (sumsq x 0 b d (zero)) d (eps)) 0 out ob))
+
+;; n rows of d values
+(defn- rms-rows [x :vector-i64 n :i64 d :i64 w :vector-i64 t :i64 out :vector-i64] :vector-i64
+  (if (>= t n)
+    out
+    (rms-rows x n d w (+ t 1) (rms-seg x (* t d) d w out (* t d)))))
+
+;; ---- y = W x for n token vectors, each weight row read once ----------------------------------
+(defn- decode-row [blk :bytes base :i64 i :i64 cols :i64 rowv :vector-i64] :vector-i64
+  (if (>= i cols)
+    rowv
+    (decode-row blk base (+ i 1) cols
+      (vector-assoc! rowv i
+        (bf16-fast (+ (bytes-at blk (+ base (* 2 i))) (* 256 (bytes-at blk (+ (+ base 1) (* 2 i))))))))))
+
+(defn- row-dot [rowv :vector-i64 x :vector-i64 xb :i64 i :i64 cols :i64 acc :i64] :i64
+  (if (>= i cols)
+    acc
+    (row-dot rowv x xb (+ i 1) cols (fadd acc (fmul (vector-at rowv i) (vector-at x (+ xb i)))))))
+
+(defn- lm-tokens [rowv :vector-i64 x :vector-i64 cols :i64 rows :i64 r :i64 n :i64 t :i64 out :vector-i64] :vector-i64
+  (if (>= t n)
+    out
+    (lm-tokens rowv x cols rows r n (+ t 1)
+      (vector-assoc! out (+ (* t rows) r) (row-dot rowv x (* t cols) 0 cols (zero))))))
+
+(defn- lm-block [blk :bytes k :i64 cnt :i64 r0 :i64 cols :i64 rows :i64 x :vector-i64 n :i64 rowv :vector-i64 out :vector-i64] :vector-i64
+  (if (>= k cnt)
+    out
+    (let [rv (decode-row blk (+ 5 (* k (* cols 2))) 0 cols rowv)]
+      (lm-block blk (+ k 1) cnt r0 cols rows x n rv
+        (lm-tokens rv x cols rows (+ r0 k) n 0 out)))))
+
+;; out[t * rows + r] = W[r] . x[t * cols ..]; an empty vector on a short read
+(defn- linear-multi [path :string woff :i64 rows :i64 cols :i64 x :vector-i64 n :i64 r :i64 rowv :vector-i64 out :vector-i64] :vector-i64
+  (if (>= r rows)
+    out
+    (let [per (quot 262144 (* cols 2))
+          cnt (if (< (- rows r) per) (- rows r) per)
+          blk (typed-cap-call :fs/app-data :string :bytes
+                (frame "E" path (string-concat (string-from-i64 (+ woff (* r (* cols 2))))
+                                  (string-concat ":" (string-from-i64 (* cnt (* cols 2)))))))]
+      (if (= (bytes-count blk) (+ 5 (* cnt (* cols 2))))
+        (linear-multi path woff rows cols x n (+ r cnt) rowv
+          (lm-block blk 0 cnt r cols rows x n rowv out))
+        (vector-alloc 0)))))
+
+(defn- project [path :string woff :i64 rows :i64 cols :i64 x :vector-i64 n :i64] :vector-i64
+  (linear-multi path woff rows cols x n 0 (vector-alloc cols) (vector-alloc (* n rows))))
+
+;; ---- RoPE and attention ------------------------------------------------------------------------
+;; table for position p: cos at [t*128 + i], sin at [t*128 + 64 + i]
+(defn- rope-tab [pos0 :i64 n :i64 t :i64 i :i64 tab :vector-i64] :vector-i64
+  (if (>= t n)
+    tab
+    (if (>= i 64)
+      (rope-tab pos0 n (+ t 1) 0 tab)
+      (let [inv (nn/exp-wide (neg (fmul (fdiv (itof (* 2 i)) (f64-to-bits 128.0))
+                                        (lm/ln-pos (f64-to-bits 1000000.0)))))
+            a (fmul (itof (+ pos0 t)) inv)]
+        (rope-tab pos0 n t (+ i 1)
+          (vector-assoc! (vector-assoc! tab (+ (* t 128) i) (qo/cos-real a)) (+ (+ (* t 128) 64) i) (qo/sin-real a)))))))
+
+;; rotate-half RoPE of the head of 128 values at hb, in place
+(defn- rope-head [x :vector-i64 hb :i64 tab :vector-i64 tb :i64 i :i64] :vector-i64
+  (if (>= i 64)
+    x
+    (let [x0 (vector-at x (+ hb i))
+          x1 (vector-at x (+ (+ hb i) 64))
+          c (vector-at tab (+ tb i))
+          s (vector-at tab (+ (+ tb 64) i))]
+      (rope-head (vector-assoc! (vector-assoc! x (+ hb i) (fsub (fmul x0 c) (fmul x1 s)))
+                                (+ (+ hb i) 64) (fadd (fmul x1 c) (fmul x0 s)))
+                 hb tab tb (+ i 1)))))
+
+;; QK-norm then RoPE of every head of every token; x is n x (heads * 128)
+(defn- norm-rope [x :vector-i64 n :i64 heads :i64 w :vector-i64 tab :vector-i64 t :i64 h :i64 out :vector-i64] :vector-i64
+  (if (>= t n)
+    out
+    (if (>= h heads)
+      (norm-rope x n heads w tab (+ t 1) 0 out)
+      (let [hb (+ (* t (* heads 128)) (* h 128))
+            o1 (rms-seg x hb 128 w out hb)]
+        (norm-rope x n heads w tab t (+ h 1) (rope-head o1 hb tab (* t 128) 0))))))
+
+(defn- dot128 [q :vector-i64 qb :i64 k :vector-i64 kb :i64 i :i64 acc :i64] :i64
+  (if (>= i 128)
+    acc
+    (dot128 q qb k kb (+ i 1) (fadd acc (fmul (vector-at q (+ qb i)) (vector-at k (+ kb i)))))))
+
+(defn- scores [q :vector-i64 qb :i64 kall :vector-i64 kvb :i64 u :i64 len :i64 sc :vector-i64] :vector-i64
+  (if (>= u len)
+    sc
+    (scores q qb kall kvb (+ u 1) len
+      (vector-assoc! sc u (fdiv (dot128 q qb kall (+ (* u 1024) kvb) 0 (zero))
+                                (f64-to-bits (f64-sqrt 128.0)))))))
+
+(defn- vmax [v :vector-i64 i :i64 len :i64 acc :i64] :i64
+  (if (>= i len) acc (vmax v (+ i 1) len (if (flt acc (vector-at v i)) (vector-at v i) acc))))
+
+(defn- exps [sc :vector-i64 i :i64 len :i64 m :i64 z :i64] :i64
+  (if (>= i len)
+    z
+    (let [e (nn/exp-wide (fsub (vector-at sc i) m))]
+      (exps (vector-assoc! sc i e) (+ i 1) len m (fadd z e)))))
+
+;; sum over u < len of p_u * V[u][kvb + d]
+(defn- mix [sc :vector-i64 z :i64 vall :vector-i64 kvb :i64 d :i64 u :i64 len :i64 acc :i64] :i64
+  (if (>= u len)
+    acc
+    (mix sc z vall kvb d (+ u 1) len
+      (fadd acc (fmul (fdiv (vector-at sc u) z) (vector-at vall (+ (* u 1024) (+ kvb d))))))))
+
+(defn- ctx-fill [sc :vector-i64 z :i64 vall :vector-i64 kvb :i64 len :i64 ob :i64 d :i64 out :vector-i64] :vector-i64
+  (if (>= d 128)
+    out
+    (ctx-fill sc z vall kvb len ob (+ d 1)
+      (vector-assoc! out (+ ob d) (mix sc z vall kvb d 0 len (zero))))))
+
+;; context of token t (position pos0 + t), all 16 query heads; kall / vall hold pos0 + n positions
+(defn- attend [q :vector-i64 kall :vector-i64 vall :vector-i64 pos0 :i64 n :i64 t :i64 h :i64 out :vector-i64] :vector-i64
+  (if (>= t n)
+    out
+    (if (>= h 16)
+      (attend q kall vall pos0 n (+ t 1) 0 out)
+      (let [len (+ (+ pos0 t) 1)
+            qb (+ (* t 2048) (* h 128))
+            kvb (* (quot h 2) 128)
+            sc (scores q qb kall kvb 0 len (vector-alloc len))
+            m (vmax sc 0 len (vector-at sc 0))
+            z (exps sc 0 len m (zero))]
+        (attend q kall vall pos0 n t (+ h 1)
+          (ctx-fill sc z vall kvb len qb 0 out))))))
+
+;; ---- one layer -------------------------------------------------------------------------------
+(defn- add-vecs [a :vector-i64 b :vector-i64 i :i64 out :vector-i64] :vector-i64
+  (if (>= i (vector-count a))
+    out
+    (add-vecs a b (+ i 1) (vector-assoc! out i (fadd (vector-at a i) (vector-at b i))))))
+
+(defn- silu-mul [g :vector-i64 u :vector-i64 i :i64 out :vector-i64] :vector-i64
+  (if (>= i (vector-count g))
+    out
+    (silu-mul g u (+ i 1) (vector-assoc! out i (fmul (qo/silu (vector-at g i)) (vector-at u i))))))
+
+(defn- kpath [layer :i64] :string
+  (string-concat "/d/st/k" (string-concat (string-from-i64 layer) ".bin")))
+(defn- vpath [layer :i64] :string
+  (string-concat "/d/st/v" (string-concat (string-from-i64 layer) ".bin")))
+
+;; the cache of pos0 positions followed by the n new ones; empty when the cache is unreadable
+(defn- with-cache [path :string cpath :string pos0 :i64 fresh :vector-i64 n :i64] :vector-i64
+  (let [total (* (+ pos0 n) 1024)
+        out (vector-alloc total)]
+    (if (= pos0 0)
+      (copy-into out fresh 0 (* n 1024) 0)
+      (let [old (read-f64 cpath 0 (* pos0 1024))]
+        (if (= (vector-count old) (* pos0 1024))
+          (copy-into (copy-into out old 0 (* pos0 1024) 0) fresh 0 (* n 1024) (* pos0 1024))
+          (vector-alloc 0))))))
+
+;; status 0 = layer applied to /d/st/h.bin (n tokens at positions pos0 ..) and the caches
+;; extended; 1 = a file or tensor unreadable; 2 = bad arguments
+(defn dec-layer [path :string layer :i64 pos0 :i64 n :i64] :i64
+  (if (or (< layer 0) (> layer 27) (< pos0 0) (< n 1) (> n 64))
+    2
+    (let [hdr (wf/wf-header-text path)
+          hl (wf/wf-header-len path)
+          win (tensor-off hdr hl (lname layer "input_layernorm.weight"))
+          wpo (tensor-off hdr hl (lname layer "post_attention_layernorm.weight"))
+          qn (tensor-off hdr hl (lname layer "self_attn.q_norm.weight"))
+          kn (tensor-off hdr hl (lname layer "self_attn.k_norm.weight"))
+          wq (tensor-off hdr hl (lname layer "self_attn.q_proj.weight"))
+          wk (tensor-off hdr hl (lname layer "self_attn.k_proj.weight"))
+          wv (tensor-off hdr hl (lname layer "self_attn.v_proj.weight"))
+          wo (tensor-off hdr hl (lname layer "self_attn.o_proj.weight"))
+          wg (tensor-off hdr hl (lname layer "mlp.gate_proj.weight"))
+          wu (tensor-off hdr hl (lname layer "mlp.up_proj.weight"))
+          wd (tensor-off hdr hl (lname layer "mlp.down_proj.weight"))]
+      (if (or (< win 0) (< wpo 0) (< qn 0) (< kn 0) (< wq 0) (< wk 0) (< wv 0) (< wo 0) (< wg 0) (< wu 0) (< wd 0))
+        1
+        (let [x (read-f64 "/d/st/h.bin" 0 (* n 1024))]
+          (if (not (= (vector-count x) (* n 1024)))
+            1
+            (let [a (rms-rows x n 1024 (read-vec path win 1024) 0 (vector-alloc (* n 1024)))
+                  q0 (project path wq 2048 1024 a n)
+                  k0 (project path wk 1024 1024 a n)
+                  v0 (project path wv 1024 1024 a n)
+                  tab (rope-tab pos0 n 0 0 (vector-alloc (* n 128)))
+                  q (norm-rope q0 n 16 (read-vec path qn 128) tab 0 0 (vector-alloc (* n 2048)))
+                  k (norm-rope k0 n 8 (read-vec path kn 128) tab 0 0 (vector-alloc (* n 1024)))
+                  kall (with-cache path (kpath layer) pos0 k n)
+                  vall (with-cache path (vpath layer) pos0 v0 n)]
+              (if (or (= (vector-count kall) 0) (= (vector-count vall) 0))
+                1
+                (let [ctx (attend q kall vall pos0 n 0 0 (vector-alloc (* n 2048)))
+                      o (project path wo 1024 2048 ctx n)
+                      x1 (add-vecs x o 0 (vector-alloc (* n 1024)))
+                      b (rms-rows x1 n 1024 (read-vec path wpo 1024) 0 (vector-alloc (* n 1024)))
+                      g (project path wg 3072 1024 b n)
+                      u (project path wu 3072 1024 b n)
+                      act (silu-mul g u 0 (vector-alloc (* n 3072)))
+                      d (project path wd 1024 3072 act n)
+                      out (add-vecs x1 d 0 (vector-alloc (* n 1024)))]
+                  (if (and (write-f64 (kpath layer) kall) (write-f64 (vpath layer) vall) (write-f64 "/d/st/h.bin" out))
+                    0
+                    1))))))))))
+
+;; ---- embedding lookup and the output head --------------------------------------------------------
+(defn- ids-count [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s)) acc (ids-count s (+ i 1) (if (= (string-code-point-at s i) 44) (+ acc 1) acc))))
+
+(defn- id-end [s :string i :i64] :i64
+  (if (and (< i (string-length s)) (>= (string-code-point-at s i) 48) (<= (string-code-point-at s i) 57))
+    (id-end s (+ i 1))
+    i))
+
+(defn- id-val [s :string i :i64 acc :i64] :i64
+  (if (and (< i (string-length s)) (>= (string-code-point-at s i) 48) (<= (string-code-point-at s i) 57))
+    (id-val s (+ i 1) (+ (* acc 10) (- (string-code-point-at s i) 48)))
+    acc))
+
+(defn- embed-run [path :string eoff :i64 s :string i :i64 t :i64 n :i64 out :vector-i64] :vector-i64
+  (if (>= t n)
+    out
+    (let [e (id-end s i)
+          id (id-val s i 0)
+          row (if (= e i) (vector-alloc 0) (read-vec path (+ eoff (* id 2048)) 1024))]
+      (if (or (= e i) (not (= (vector-count row) 1024)) (>= id 151936))
+        (vector-alloc 0)
+        (let [o (copy-into out row 0 1024 (* t 1024))]
+          (embed-run path eoff s (+ e 1) (+ t 1) n o))))))
+
+;; status 0 = /d/st/h.bin holds the embeddings of the comma-separated token ids; 1 = unreadable;
+;; 2 = bad arguments
+(defn dec-embed [path :string ids :string] :i64
+  (let [n (+ (ids-count ids 0 0) 1)]
+    (if (or (= (string-length ids) 0) (> n 64))
+      2
+      (let [hdr (wf/wf-header-text path)
+            hl (wf/wf-header-len path)
+            eoff (tensor-off hdr hl "thinker.model.embed_tokens.weight")]
+        (if (< eoff 0)
+          1
+          (let [h (embed-run path eoff ids 0 0 n (vector-alloc (* n 1024)))]
+            (if (and (= (vector-count h) (* n 1024)) (write-f64 "/d/st/h.bin" h)) 0 1)))))))
+
+;; ---- final norm and lm_head over a slice of the vocabulary ---------------------------------------
+;; st3 = [best logit bits, best row (-1 = none yet), sum of the logits], updated in place
+(defn- head-fold [blk :bytes k :i64 cnt :i64 r0 :i64 hl :vector-i64 rowv :vector-i64 st3 :vector-i64] :vector-i64
+  (if (>= k cnt)
+    st3
+    (let [rv (decode-row blk (+ 5 (* k 2048)) 0 1024 rowv)
+          v (row-dot rv hl 0 0 1024 (zero))
+          better (or (< (vector-at st3 1) 0) (flt (vector-at st3 0) v))]
+      (head-fold blk (+ k 1) cnt r0 hl rv
+        (vector-assoc! (vector-assoc! (vector-assoc! st3 0 (if better v (vector-at st3 0)))
+                                      1 (if better (+ r0 k) (vector-at st3 1)))
+                       2 (fadd (vector-at st3 2) v))))))
+
+;; false when a read comes back short
+(defn- head-run [path :string hoff :i64 r :i64 end :i64 hl :vector-i64 rowv :vector-i64 st3 :vector-i64] :bool
+  (if (>= r end)
+    true
+    (let [cnt (if (< (- end r) 128) (- end r) 128)
+          blk (typed-cap-call :fs/app-data :string :bytes
+                (frame "E" path (string-concat (string-from-i64 (+ hoff (* r 2048)))
+                                  (string-concat ":" (string-from-i64 (* cnt 2048))))))]
+      (if (= (bytes-count blk) (+ 5 (* cnt 2048)))
+        (let [s3 (head-fold blk 0 cnt r hl rowv st3)]
+          (head-run path hoff (+ r cnt) end hl rowv s3))
+        false))))
+
+;; "<best row> <best logit bits> <sum of the slice's logits>" for rows [start, end) of lm_head applied
+;; to the final-normed last token of /d/st/h.bin; "" when something is unreadable
+(defn dec-head [path :string start :i64 end :i64] :string
+  (let [hdr (wf/wf-header-text path)
+        hl (wf/wf-header-len path)
+        hoff (tensor-off hdr hl "thinker.lm_head.weight")
+        noff (tensor-off hdr hl "thinker.model.norm.weight")
+        size (wf/wf-size "/d/st/h.bin")]
+    (if (or (< hoff 0) (< noff 0) (< start 0) (> end 151936) (>= start end) (< size 8192) (not (= (mod size 8192) 0)))
+      ""
+      (let [n (quot size 8192)
+            x (read-f64 "/d/st/h.bin" (* (- n 1) 1024) 1024)
+            w (read-vec path noff 1024)
+            st3 (vector-assoc! (vector-assoc! (vector-alloc 3) 0 (zero)) 1 -1)]
+        (if (or (not (= (vector-count x) 1024)) (not (= (vector-count w) 1024)))
+          ""
+          (let [hn (rms-seg x 0 1024 w (vector-alloc 1024) 0)
+                ok (head-run path hoff start end hn (vector-alloc 1024) st3)]
+            (if ok
+              (string-concat (string-from-i64 (vector-at st3 1))
+                (string-concat " " (string-concat (string-from-i64 (vector-at st3 0))
+                                     (string-concat " " (string-from-i64 (vector-at st3 2))))))
+              "")))))))

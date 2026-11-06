@@ -1,0 +1,55 @@
+(ns agent-cli.qwen-decoder-cli
+  "One-shot native guest for the Qwen3 decoder of Qwen3-ASR-0.6B (JUN-926). The model and the
+  state directory (/d/st, holding h.bin and the k<l>.bin / v<l>.bin caches) come from the granted
+  directory on fd 3 (amu-command-fs35). Subcommands, argv 0 first:
+    embed <model> <comma-separated token ids>  writes the embeddings to /d/st/h.bin, prints ok
+    layer <model> <layer> <pos0> <n>           applies decoder layer <layer> to the n tokens in
+                                               /d/st/h.bin at positions pos0.., prints ok
+    head <model> <start> <end>                 prints '<best row> <best logit bits> <logit sum>'
+                                               for lm_head rows [start, end) of the last token
+  A bad command, argument or unreadable file prints one named line on stderr, nothing on stdout,
+  exit 2."
+  (:require [itonami.qwen-decoder :as qd])
+  (:export [main])
+  (:capabilities #{:cli/args :io/write :io/write-error :fs/app-data :fs/app-data-bytes}))
+
+(defn- wire-arg [i :i64] :string
+  (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- wire-say [s :string] :string
+  (typed-cap-call :io/write :string :string s))
+
+(defn- wire-die [s :string] :string
+  (typed-cap-call :io/write-error :string :string s))
+
+(defn- digits-val [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s))
+    acc
+    (let [c (string-code-point-at s i)]
+      (if (and (>= c 48) (<= c 57)) (digits-val s (+ i 1) (+ (* acc 10) (- c 48))) -1))))
+
+(defn- num-arg [i :i64] :i64
+  (let [a (wire-arg i)]
+    (if (or (= (string-length a) 0) (> (string-length a) 9)) -1 (digits-val a 0 0))))
+
+(defn- fail [msg :string] :i64
+  (let [_ (wire-die (string-concat "qwen-decoder: " (string-concat msg "\n")))] 2))
+
+(defn main [] :i64
+  (let [cmd (wire-arg 0)
+        path (wire-arg 1)]
+    (cond (= (string-length path) 0) (fail "argv 1 must be the model path")
+          (string=? cmd "embed")
+          (if (= (qd/dec-embed path (wire-arg 2)) 0)
+            (let [_ (wire-say "ok\n")] 0)
+            (fail "embed failed (ids or model unreadable)"))
+          (string=? cmd "layer")
+          (if (= (qd/dec-layer path (num-arg 2) (num-arg 3) (num-arg 4)) 0)
+            (let [_ (wire-say "ok\n")] 0)
+            (fail "layer failed (arguments or state unreadable)"))
+          (string=? cmd "head")
+          (let [out (qd/dec-head path (num-arg 2) (num-arg 3))]
+            (if (= (string-length out) 0)
+              (fail "head failed (arguments or state unreadable)")
+              (let [_ (wire-say (string-concat out "\n"))] 0)))
+          :else (fail "argv 0 must be embed, layer or head"))))

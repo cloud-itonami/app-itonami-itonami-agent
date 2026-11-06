@@ -1,0 +1,59 @@
+(ns agent-cli.qwen-calc-cli
+  "Two helpers for the decoder gate (JUN-926), operating on f64 bit patterns written as decimal
+  signed integers (the form the decoder CLI prints). argv 0 is the command:
+    near <a> <b> <tol-exponent>  exit 1 when |a - b| < 10^-tol * max(1, |b|), exit 0 when not
+    greater <a> <b>              exit 1 when a > b as doubles, exit 0 when not
+    fsum <a> <b> ...             prints the sequential sum of the values as bits
+  Anything else prints one named line on stderr, nothing on stdout, exit 2."
+  (:export [main])
+  (:capabilities #{:cli/args :io/write :io/write-error}))
+
+(defn- wire-arg [i :i64] :string
+  (typed-cap-call :cli/args :string :string (string-from-i64 i)))
+
+(defn- wire-say [s :string] :string
+  (typed-cap-call :io/write :string :string s))
+
+(defn- wire-die [s :string] :string
+  (typed-cap-call :io/write-error :string :string s))
+
+(defn- digits [s :string i :i64 acc :i64] :i64
+  (if (>= i (string-length s))
+    acc
+    (let [c (string-code-point-at s i)]
+      (if (and (>= c 48) (<= c 57)) (digits s (+ i 1) (+ (* acc 10) (- c 48))) -9223372036854775807))))
+
+;; a signed decimal integer; -9223372036854775807 marks a malformed one
+(defn- parse [s :string] :i64
+  (cond (= (string-length s) 0) -9223372036854775807
+        (= (string-code-point-at s 0) 45) (- 0 (digits s 1 0))
+        :else (digits s 0 0)))
+
+(defn- fabs [a :i64] :i64
+  (if (f64-lt (f64-from-bits a) 0.0) (f64-to-bits (f64-neg (f64-from-bits a))) a))
+
+(defn- pow10neg [k :i64 acc :i64] :i64
+  (if (<= k 0) acc (pow10neg (- k 1) (f64-to-bits (f64-div (f64-from-bits acc) 10.0)))))
+
+(defn- fsum-run [i :i64 acc :i64] :i64
+  (let [a (wire-arg i)]
+    (if (= (string-length a) 0)
+      acc
+      (fsum-run (+ i 1) (f64-to-bits (f64-add (f64-from-bits acc) (f64-from-bits (parse a))))))))
+
+(defn main [] :i64
+  (let [cmd (wire-arg 0)]
+    (cond (string=? cmd "greater")
+          (if (f64-lt (f64-from-bits (parse (wire-arg 2))) (f64-from-bits (parse (wire-arg 1)))) 1 0)
+          (string=? cmd "near")
+          (let [a (parse (wire-arg 1))
+                b (parse (wire-arg 2))
+                k (parse (wire-arg 3))
+                d (fabs (f64-to-bits (f64-sub (f64-from-bits a) (f64-from-bits b))))
+                m (fabs b)
+                scale (if (f64-lt 1.0 (f64-from-bits m)) m (f64-to-bits 1.0))
+                tol (f64-to-bits (f64-mul (f64-from-bits (pow10neg k (f64-to-bits 1.0))) (f64-from-bits scale)))]
+            (if (f64-lt (f64-from-bits d) (f64-from-bits tol)) 1 0))
+          (string=? cmd "fsum")
+          (let [_ (wire-say (string-concat (string-from-i64 (fsum-run 1 (f64-to-bits 0.0))) "\n"))] 0)
+          :else (let [_ (wire-die "qwen-calc: argv 0 must be near, greater or fsum\n")] 2))))

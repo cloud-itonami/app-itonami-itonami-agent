@@ -1,0 +1,11 @@
+format: itonami.qwen-decoder-selfhost-gate.v1
+amu_cli_sha256: ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
+model_sha256: 79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
+qwen_decoder_source_sha256: b6930680d5a095e547bd5356e3460ee5b6e34ee3ecaa9265a760e6e728f9b0a6
+decoder_cli_sha256: 1bc4da57141d43c53605f2288c8bffa76634cc63ee209592d5c7467cfca2e45e
+calc_cli_sha256: 0e4c2b8cdb6388474f36996c938aaea7578b90490e8eb3c5e8e8218e7cd1cd60
+runtime_profile: amu-command-fs35 (directory on fd 3), one process per layer and vocabulary slice
+checks_passed: 14 of 14 (3 for the system prompt, 3 for "The capital of France is", 3 for one cached token, 5 refusals)
+negative_control_checks_passed: rope-theta=1/14 rope-pair=0/14 gqa-mapping=0/14 score-scale=0/14 causal-length=0/14 qk-norm-weights=0/14 mlp-gate=0/14 rms-eps=0/14 attn-residual=0/14 cache-offset=6/14 head-norm-dropped=0/14 position-offset=6/14
+changed_source_refusal: PASS
+qualification: prefill of 5 and 6 tokens and one cached decode step through the 28 layers, the final norm and the 151,936-row lm_head on the real Qwen3-ASR-0.6B weights to 1e-9 against CPython float64; mrope treated as plain RoPE; no audio injection, tokenizer, generation loop, turn or launcher
