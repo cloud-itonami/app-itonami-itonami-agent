@@ -18,7 +18,7 @@
 ;; host drives the 3000-frame window one such line per frame.
 (ns itonami.log-mel
   (:export [turn-cos turn-sin exp-series ln-pos log10-floor hann
-            hz-to-mel mel-to-hz mel-weight normalize-log
+            hz-to-mel mel-to-hz mel-weight mel-weight-n log-mel-bin-n normalize-log
             frame-valid? frame-sample power-bin log-mel-bin match-count]))
 
 (defn- fadd [a :i64 b :i64] :i64 (f64-to-bits (f64-add (f64-from-bits a) (f64-from-bits b))))
@@ -143,8 +143,8 @@
           (exp-series (fmul (logstep) (fsub m (f64-to-bits 15.0)))))))
 
 ;; edge i of the 82 mel-spaced points between 0 and 8000 Hz
-(defn- mel-point [i :i64] :i64
-  (mel-to-hz (fdiv (fmul (itof i) (hz-to-mel (f64-to-bits 8000.0))) (f64-to-bits 81.0))))
+(defn- mel-point [i :i64 nm :i64] :i64
+  (mel-to-hz (fdiv (fmul (itof i) (hz-to-mel (f64-to-bits 8000.0))) (itof (+ nm 1)))))
 
 ;; weight of FFT bin k in the triangle with edges p0 < p1 < p2 (Hz), then slaney
 ;; area norm
@@ -155,9 +155,13 @@
         tri (f64-to-bits (f64-max 0.0 (f64-min (f64-from-bits lower) (f64-from-bits upper))))]
     (fdiv (fmul tri (f64-to-bits 2.0)) (fsub p2 p0))))
 
-;; weight of FFT bin k in mel filter m (0..79)
-(defn mel-weight [m :i64 k :i64] :i64
-  (weight-at (mel-point m) (mel-point (+ m 1)) (mel-point (+ m 2)) k))
+;; weight of FFT bin k in mel filter m of an nm-filter bank (80 for whisper small,
+;; 128 for whisper large-v3 / Qwen3-ASR)
+(defn mel-weight-n [nm :i64 m :i64 k :i64] :i64
+  (weight-at (mel-point m nm) (mel-point (+ m 1) nm) (mel-point (+ m 2) nm) k))
+
+;; the 80-filter bank
+(defn mel-weight [m :i64 k :i64] :i64 (mel-weight-n 80 m k))
 
 ;; whisper: clamp to (max over the whole window) - 8, then (x + 4) / 4
 (defn normalize-log [x :i64 window-max :i64] :i64
@@ -229,10 +233,13 @@
 
 ;; log10(max(mel energy, 1e-10)) of mel filter m (0..79) for one frame;
 ;; 0.0 for an invalid frame so a caller cannot mistake it for the floor
-(defn log-mel-bin [frame :string m :i64] :i64
+(defn log-mel-bin-n [frame :string nm :i64 m :i64] :i64
   (if (frame-valid? frame)
-    (log10-floor (energy-run frame (mel-point m) (mel-point (+ m 1)) (mel-point (+ m 2)) 0 (zero)))
+    (log10-floor (energy-run frame (mel-point m nm) (mel-point (+ m 1) nm) (mel-point (+ m 2) nm) 0 (zero)))
     (zero)))
+
+;; the 80-filter bank
+(defn log-mel-bin [frame :string m :i64] :i64 (log-mel-bin-n frame 80 m))
 
 ;; ---- gate fixtures ------------------------------------------------------------
 ;; two tones and a quadratic chirp, quantised to int16
@@ -338,7 +345,7 @@
 
 ;; 80 log-mel matches + 3 normalised (bin 0, peak, bin 79) + 2 silence floors
 ;; (bin 0 and 79 at -10) + 4 frame checks (valid, short, non-hex, long) = 89
-(defn match-count [] :i64
+(defn- match-count-80 [] :i64
   (let [f (test-frame)
         mx 4610605418141932256
         n (count-run f 0 0)]
@@ -352,3 +359,162 @@
     (+ (if (frame-valid? "8000") 0 1)
     (+ (if (frame-valid? (string-concat "zz" (string-substring f 2 1600))) 0 1)
     (if (frame-valid? (string-concat f "00")) 0 1))))))))))))
+
+;; ---- 128-filter bank (Qwen3-ASR, whisper large-v3) ----------------------------------
+;; expected log10 values for the same test frame from the stdlib f64 reference run
+;; with 128 filters
+(defn- want128 [i :i64] :i64
+  (cond
+        (= i 0) -4614783099527997711
+        (= i 1) -4616891710049165584
+        (= i 2) -4616107527709430780
+        (= i 3) -4615486845659462255
+        (= i 4) -4617414364835750738
+        (= i 5) -4614598880185417657
+        (= i 6) -4617096089840725652
+        (= i 7) -4615217144238471290
+        (= i 8) -4615635811075185646
+        (= i 9) -4616000467530705636
+        (= i 10) -4614149029159331049
+        (= i 11) -4616290152793239530
+        (= i 12) -4613692444206267877
+        (= i 13) -4615214555990393160
+        (= i 14) -4614449539795897278
+        (= i 15) -4613623502036788427
+        (= i 16) -4614617574062890076
+        (= i 17) -4611869603079676043
+        (= i 18) -4613496452126908995
+        (= i 19) -4611428418309898260
+        (= i 20) -4611537845295568153
+        (= i 21) -4610676160379736167
+        (= i 22) -4609545161393278445
+        (= i 23) -4607073697100850571
+        (= i 24) -4609605652831159741
+        (= i 25) -4610254015686466501
+        (= i 26) -4611733080407043573
+        (= i 27) -4611191557133413945
+        (= i 28) -4614244150189302442
+        (= i 29) -4612926846939391864
+        (= i 30) -4615168360882572299
+        (= i 31) -4615148915442940955
+        (= i 32) -4615169091902550337
+        (= i 33) -4617350947166157689
+        (= i 34) -4614956720953665445
+        (= i 35) -4618970557279094777
+        (= i 36) -4616221813405196068
+        (= i 37) -4618380533595228255
+        (= i 38) -4618916989406973183
+        (= i 39) -4616413115902585303
+        (= i 40) 4609017542785421343
+        (= i 41) 4609131677532103972
+        (= i 42) 4611231610495176973
+        (= i 43) 4608042246544278253
+        (= i 44) 4607064200840534942
+        (= i 45) -4619161595722998243
+        (= i 46) -4615993621843635909
+        (= i 47) -4615840731896703456
+        (= i 48) -4615855455375830805
+        (= i 49) -4613668482222746119
+        (= i 50) -4612441960269653911
+        (= i 51) -4610735131861974804
+        (= i 52) -4610244487946478095
+        (= i 53) -4613087675201769939
+        (= i 54) -4614724940519032323
+        (= i 55) -4615728238295026744
+        (= i 56) -4616786848444639755
+        (= i 57) -4618303268806218389
+        (= i 58) -4618864628448636284
+        (= i 59) -4618697066033813178
+        (= i 60) -4617730654038453509
+        (= i 61) -4616504201092562683
+        (= i 62) -4614924270850418026
+        (= i 63) -4612171435336284454
+        (= i 64) -4611182502213554400
+        (= i 65) -4614422552835822165
+        (= i 66) -4616070939242239100
+        (= i 67) -4618382888333781414
+        (= i 68) -4618491488385552535
+        (= i 69) -4617568738108673764
+        (= i 70) -4615181226419964316
+        (= i 71) -4612075314608428431
+        (= i 72) -4613636037658238822
+        (= i 73) -4616582711299235826
+        (= i 74) -4618093144495305895
+        (= i 75) -4617650913055146311
+        (= i 76) -4615119054132043650
+        (= i 77) -4611583792700306216
+        (= i 78) -4616041934723415966
+        (= i 79) -4617848182042361035
+        (= i 80) -4616812413108879392
+        (= i 81) -4613188804063210519
+        (= i 82) -4615448789512539446
+        (= i 83) -4617713390587895517
+        (= i 84) -4615975091952806321
+        (= i 85) -4613767811336361907
+        (= i 86) -4627113884954495426
+        (= i 87) 4606286817850276260
+        (= i 88) 4604165729839973367
+        (= i 89) -4617041849383257502
+        (= i 90) -4615856239485606408
+        (= i 91) -4614731731924260333
+        (= i 92) -4617251540953419371
+        (= i 93) -4613856277601632818
+        (= i 94) -4616989160140774234
+        (= i 95) -4614716321398099618
+        (= i 96) -4616227245339253308
+        (= i 97) -4615040071400604029
+        (= i 98) -4616100593115285438
+        (= i 99) -4615243831304002776
+        (= i 100) -4615727231589861192
+        (= i 101) -4615705459017345255
+        (= i 102) -4615403083144472597
+        (= i 103) -4615320455940473753
+        (= i 104) -4615885489053065892
+        (= i 105) -4615296921691387911
+        (= i 106) -4615340817250691301
+        (= i 107) -4615545706078543076
+        (= i 108) -4615109412540112956
+        (= i 109) -4615642530437283737
+        (= i 110) -4614996881661188596
+        (= i 111) -4615518466857730091
+        (= i 112) -4615004761234946864
+        (= i 113) -4615409055576286413
+        (= i 114) -4614782141182398894
+        (= i 115) -4615602887097699373
+        (= i 116) -4614403610911780822
+        (= i 117) -4615668393287622658
+        (= i 118) -4614033937192907443
+        (= i 119) -4615478004534106731
+        (= i 120) -4615200257499391146
+        (= i 121) -4613249429510754623
+        (= i 122) -4615538201899676083
+        (= i 123) -4615812055257583542
+        (= i 124) -4613956077759971097
+        (= i 125) -4611048133472135228
+        (= i 126) -4612935675397718640
+        (= i 127) -4614344751691227646
+        :else (zero)))
+
+(defn- count128 [frame :string i :i64 acc :i64] :i64
+  (if (>= i 128)
+    acc
+    (count128 frame (+ i 1)
+              (if (close? (log-mel-bin-n frame 128 i) (want128 i)) (+ acc 1) acc))))
+
+;; llama.cpp fill_mel_filterbank_matrix(128, 400, 16000) weights, billionths
+(defn- nano [v :i64] :i64
+  (f64-to-i64-truncating (f64-add (f64-mul (f64-from-bits v) 1000000000.0) 0.5)))
+(defn- w-ok? [m :i64 k :i64 ref :i64] :bool
+  (let [d (- (nano (mel-weight-n 128 m k)) ref)]
+    (and (<= d 1) (>= d -1))))
+
+;; 89 (80 filters) + 128 log-mel values + 4 filterbank weights + 1 refusal of an
+;; invalid frame by the 128 path = 222
+(defn match-count [] :i64
+  (+ (match-count-80)
+  (+ (count128 (test-frame) 0 0)
+  (+ (if (w-ok? 3 2 18018579) 1 0)
+  (+ (if (w-ok? 40 24 40376365) 1 0)
+  (+ (if (w-ok? 77 59 11133937) 1 0)
+  (+ (if (w-ok? 127 195 5041602) 1 0)
+     (if (close? (log-mel-bin-n "8000" 128 0) (zero)) 1 0))))))))

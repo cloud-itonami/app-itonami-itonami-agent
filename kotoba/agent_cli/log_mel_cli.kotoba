@@ -1,10 +1,11 @@
 (ns agent-cli.log-mel-cli
-  "One-shot native guest for the log-mel front end (JUN-869). argv 0 is one
-  frame: 1600 hex characters (400 x 4-digit offset-binary int16, see
-  itonami.log-mel). Prints the 80 log10 mel energies of that frame on one line
+  "One-shot native guest for the log-mel front end (JUN-869, JUN-878). argv 0 is
+  one frame: 1600 hex characters (400 x 4-digit offset-binary int16, see
+  itonami.log-mel); optional argv 1 is the filter count, 80 (default) or 128.
+  Prints the log10 mel energies of that frame on one line
   as space-separated integers in millionths (round half away from zero), exit
-  0. A missing or malformed frame prints one named line on stderr, nothing on
-  stdout, exit 2. The window max-8 clamp and the (x+4)/4 normalisation are
+  0. A missing or malformed frame, or a filter count other than 80 or 128, prints
+  one named line on stderr, nothing on stdout, exit 2. The window max-8 clamp and the (x+4)/4 normalisation are
   across-frame steps and stay with the caller. Capabilities are exactly argv,
   stdout and stderr: the amu-command profile has no :io/read, so the frame
   comes in on argv."
@@ -27,16 +28,28 @@
     (f64-to-i64-truncating
       (if (f64-lt x 0.0) (f64-sub x 0.5) (f64-add x 0.5)))))
 
-(defn- mel-run [frame :string m :i64 acc :string] :string
-  (if (>= m 80)
+(defn- mel-run [frame :string nm :i64 m :i64 acc :string] :string
+  (if (>= m nm)
     acc
-    (mel-run frame (+ m 1)
+    (mel-run frame nm (+ m 1)
              (string-concat
                (if (= m 0) acc (string-concat acc " "))
-               (string-from-i64 (micro (lm/log-mel-bin frame m)))))))
+               (string-from-i64 (micro (lm/log-mel-bin-n frame nm m)))))))
+
+;; filter count from argv 1: 80 when absent, 80 or 128 when given, else 0
+(defn- filter-count [] :i64
+  (let [a (wire-arg 1)]
+    (cond (string=? a "") 80
+          (string=? a "80") 80
+          (string=? a "128") 128
+          :else 0)))
 
 (defn main [] :i64
-  (let [frame (wire-arg 0)]
-    (if (lm/frame-valid? frame)
-      (let [_ (wire-say (string-concat (mel-run frame 0 "") "\n"))] 0)
-      (let [_ (wire-die "log-mel: argv 0 must be 1600 hex characters (400 x int16 offset-binary)\n")] 2))))
+  (let [frame (wire-arg 0)
+        nm (filter-count)]
+    (cond (not (lm/frame-valid? frame))
+          (let [_ (wire-die "log-mel: argv 0 must be 1600 hex characters (400 x int16 offset-binary)\n")] 2)
+          (= nm 0)
+          (let [_ (wire-die "log-mel: argv 1 must be 80 or 128 (filter count)\n")] 2)
+          :else
+          (let [_ (wire-say (string-concat (mel-run frame nm 0 "") "\n"))] 0))))
