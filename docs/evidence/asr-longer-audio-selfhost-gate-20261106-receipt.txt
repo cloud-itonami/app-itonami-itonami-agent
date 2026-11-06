@@ -4,9 +4,9 @@ model_sha256: 79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
 clip_sha256: d04aa95a6644ce43114548649cc4615e750859490afefc10ca822a2b3c87e311
 runtime_profile: amu-command-fs35 (directory on fd 3), one process per stage, layer and vocabulary slice
 tier: full (jobs 4)
-checks_passed: 46 of 46 (16 encoder values, first token and its logit, token ids, text, vocabulary fixture, 5 refusals)
-token_ids: 11528,6364,151704,785,3974,13876,38835,34208,916,279,15678,5562,13,151645
-text: language English<asr_text>The quick brown fox jumps over the lazy dog.<|im_end|>
+checks_passed: 53 of 53 (16 encoder values, first token and its logit, token ids, text, vocabulary fixture, 5 refusals)
+token_ids: 11528,10769,151704,133165,129235,126224,35727,94121,128797,1773,151645
+text: language Japanese<asr_text>今日はとてもいい天気ですね。<|im_end|>
 negative_controls_caught: table-high-bytes table-last-byte quote-parity escape-skip mel-reflect conv-stride feature-order chunk-token-count position-restart zero-padding attention-scale audio-row-offset audio-pad-id
 changed_source_refusal: PASS
 qualification: 1 s (one chunk, 13 audio tokens) and 2.5 s (three chunks, 33 tokens) of real speech transcribed natively on the real Qwen3-ASR-0.6B weights; the transcript matches the words spoken in the clip ("The quick brown fox", the first second of a longer sentence); encoder values to 1e-9 against CPython float64; not HF feature-extractor padding to 30 s, more than one 100-frame chunk, the original implementation beyond the transcript, a turn or launcher

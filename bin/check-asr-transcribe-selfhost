@@ -13,8 +13,8 @@
 
 set -eu
 
-if [ "$#" -ne 6 ]; then
-  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir> <model.safetensors> <vocab.json> <speech_clip_1s.hex> <speech_clip_full.hex>" >&2
+if [ "$#" -ne 7 ]; then
+  printf '%s\n' "usage: $0 <amu-cli.macho> <absolute-workspace-output-dir> <model.safetensors> <vocab.json> <speech_clip_1s.hex> <speech_clip_full.hex> <speech_clip_ja.hex>" >&2
   exit 2
 fi
 
@@ -24,9 +24,11 @@ MODEL=$3
 VOCAB=$4
 CLIP=$5
 CLIPFULL=$6
+CLIPJA=$7
 EXPECTED_CLI_SHA256=ee9a94e406f90dd1c899121708bed01b44818f2c3bc0b9780f266b0408c61ff0
 EXPECTED_MODEL_SHA256=79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea
 EXPECTED_CLIP_SHA256=d04aa95a6644ce43114548649cc4615e750859490afefc10ca822a2b3c87e311
+EXPECTED_CLIPJA_SHA256=988aff15bc544b9dfedb155099c580c158e111ef2eb9f3a63273adb84b60c556
 EXPECTED_CLIPFULL_SHA256=df99d9c104e47045910adb421e647e736e233606ee83457e25743070bf4b3f92
 EXPECTED_CASES_SHA256=08f236034cf2c62177990c4a4c9fb3d328ebacacdfc3d2db2e2121524f830a83
 EXPECTED_BF16_SHA256=09de868917eb1ba9764794cdd5e3c890e462ec22709d9ede4cf1e1554a33549b
@@ -65,6 +67,9 @@ FIRST_LOGIT_FULL=4629206761466456349
 EXPECTED_IDS=11528,6364,151704,785,3974,13876,38835,13,151645
 EXPECTED_IDS_FULL=11528,6364,151704,785,3974,13876,38835,34208,916,279,15678,5562,13,151645
 EXPECTED_TEXT="language English<asr_text>The quick brown fox.<|im_end|>"
+FIRST_LOGIT_JA=4629029658047535395
+EXPECTED_IDS_JA=11528,10769,151704,133165,129235,126224,35727,94121,128797,1773,151645
+EXPECTED_TEXT_JA="language Japanese<asr_text>今日はとてもいい天気ですね。<|im_end|>"
 EXPECTED_TEXT_FULL="language English<asr_text>The quick brown fox jumps over the lazy dog.<|im_end|>"
 MAX_NEW=24
 # ASR_GATE_TIER=full (default) runs both clips and the mutations; quick runs the 1 s clip, the vocabulary
@@ -72,7 +77,7 @@ MAX_NEW=24
 TIER=${ASR_GATE_TIER:-full}
 JOBS=${ASR_GATE_JOBS:-4}
 case "$TIER" in
-  full) TOTAL=46 ;;
+  full) TOTAL=53 ;;
   quick) TOTAL=26 ;;
   *) printf '%s\n' "ASR_GATE_TIER must be full or quick" >&2; exit 2 ;;
 esac
@@ -84,11 +89,11 @@ case "$OUT_DIR" in
   "$GITHUB_ROOT"/workspaces/*) ;;
   *) printf '%s\n' "refusing output outside $GITHUB_ROOT/workspaces" >&2; exit 2 ;;
 esac
-for p in "$CLI" "$MODEL" "$VOCAB" "$CLIP" "$CLIPFULL"; do
+for p in "$CLI" "$MODEL" "$VOCAB" "$CLIP" "$CLIPFULL" "$CLIPJA"; do
   case "$p" in /*) ;; *) printf '%s\n' "paths must be absolute: $p" >&2; exit 2 ;; esac
 done
 if [ ! -x "$CLI" ]; then printf '%s\n' "Amu CLI is missing or not executable: $CLI" >&2; exit 2; fi
-for f in "$MODEL" "$VOCAB" "$CLIP" "$CLIPFULL"; do
+for f in "$MODEL" "$VOCAB" "$CLIP" "$CLIPFULL" "$CLIPJA"; do
   if [ ! -f "$f" ]; then printf '%s\n' "input file is missing: $f" >&2; exit 2; fi
 done
 if [ -e "$OUT_DIR" ]; then printf '%s\n' "refusing to overwrite existing output: $OUT_DIR" >&2; exit 2; fi
@@ -107,6 +112,7 @@ check_sha "$CLI" "$EXPECTED_CLI_SHA256"
 check_sha "$MODEL" "$EXPECTED_MODEL_SHA256"
 check_sha "$CLIP" "$EXPECTED_CLIP_SHA256"
 check_sha "$CLIPFULL" "$EXPECTED_CLIPFULL_SHA256"
+check_sha "$CLIPJA" "$EXPECTED_CLIPJA_SHA256"
 check_sha "$CASES" "$EXPECTED_CASES_SHA256"
 check_sha "$KD/bf16.kotoba" "$EXPECTED_BF16_SHA256"
 check_sha "$KD/ggml_dequant.kotoba" "$EXPECTED_DEQUANT_SHA256"
@@ -428,6 +434,31 @@ if [ "$TIER" = "full" ]; then
   TEXT=$OUT
   [ "$TEXT" = "$EXPECTED_TEXT_FULL" ] && POS_PASSED=$((POS_PASSED + 1))
 
+  # ---- a Japanese sentence (2.4 s, 240 frames, the last chunk 40 frames, 31 audio tokens). The encoder is
+  # not compared with CPython here (the English clips cover that); the transcript is compared with the
+  # sentence that was spoken, which also exercises multi-byte text in the vocabulary reader.
+  rm -f "$SCOPE"/d/st/*.bin
+  prog_status "$POS/audio_enc_cli.macho" mel "$(cat "$CLIPJA")"
+  [ "$STATUS" -eq 0 ] && POS_PASSED=$((POS_PASSED + 1))
+  prog_status "$POS/audio_enc_cli.macho" front /d/model.safetensors
+  [ "$STATUS" -eq 0 ] && [ "$(wc -c < "$SCOPE/d/st/a.bin" | tr -d ' ')" = "$((31 * 7168))" ] && POS_PASSED=$((POS_PASSED + 1))
+  l=0
+  while [ "$l" -lt 18 ]; do
+    prog_status "$POS/audio_enc_cli.macho" layer /d/model.safetensors "$l"
+    l=$((l + 1))
+  done
+  prog_status "$POS/audio_enc_cli.macho" tail /d/model.safetensors
+  [ "$STATUS" -eq 0 ] && [ "$(wc -c < "$SCOPE/d/st/audio.bin" | tr -d ' ')" = "$((31 * 8192))" ] && POS_PASSED=$((POS_PASSED + 1))
+  make_prompt 31
+  prefill_audio "$POS" || { printf '%s\n' "asr-transcribe: the Japanese decoder prefill failed" >&2; exit 1; }
+  best_row "$POS" || { printf '%s\n' "asr-transcribe: the Japanese first token failed" >&2; exit 1; }
+  [ "$BEST" = "11528" ] && POS_PASSED=$((POS_PASSED + 1))
+  near "$BESTBITS" "$FIRST_LOGIT_JA" && POS_PASSED=$((POS_PASSED + 1))
+  generate "$POS" || { printf '%s\n' "asr-transcribe: the Japanese generation failed" >&2; exit 1; }
+  [ "$IDS" = "$EXPECTED_IDS_JA" ] && POS_PASSED=$((POS_PASSED + 1))
+  prog_status "$POS/qwen_detok_cli.macho" /d/vocab.json "$IDS"
+  TEXT=$OUT
+  [ "$TEXT" = "$EXPECTED_TEXT_JA" ] && POS_PASSED=$((POS_PASSED + 1))
 fi
 if [ "$POS_PASSED" -ne "$TOTAL" ]; then
   printf 'asr-transcribe: %s of %s checks passed (ids %s / %s, text %s / %s)\n' "$POS_PASSED" "$TOTAL" "$IDS_ONE" "$IDS" "$TEXT_ONE" "$TEXT" >&2
