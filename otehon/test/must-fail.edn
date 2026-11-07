@@ -1,0 +1,19 @@
+;; Harness self-test: every case here is wrong on purpose. A runner must
+;; report each one as FAIL and exit non-zero; if it passes any of them the
+;; harness cannot tell a broken core from a working one.
+{:fixtures "fixtures"
+ :cases
+ [;; wrong expectation on a clean profile
+  {:id :must-fail/clean-profile-has-errors :op :check :profile "itonami-ok"
+   :expect {:errors 1}}
+  ;; an unlisted capability claimed autonomous
+  {:id :must-fail/unlisted-autonomous :op :decide :profile "itonami-ok" :capability :spend
+   :expect {:decision :autonomous}}
+  ;; a negative control whose edit changes nothing: the automatic control
+  ;; (unedited input must not satisfy :expect) has to catch it
+  {:id :must-fail/no-op-edit :negative true :op :decide :profile "itonami-ok" :capability :git_push
+   :edit [["SOUL.md" "Propose only." "Propose only."]]
+   :expect {:decision :blocked}}
+  ;; a Hermes profile planned as an itonami run
+  {:id :must-fail/hermes-dry-run-ok :op :dry-run :profile "hermes-ok" :job "daily"
+   :expect {:status :ok}}]}

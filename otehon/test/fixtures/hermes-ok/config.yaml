@@ -1,0 +1,5 @@
+model:
+  provider: openrouter
+  default: anthropic/claude-sonnet
+fallback_providers:
+  - provider: openrouter
