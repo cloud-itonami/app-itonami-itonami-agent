@@ -4,6 +4,10 @@ Judge one bot operation request, as an Agent separate from the bot that requeste
 Tracking: https://linear.app/kotobalabs/issue/AWAI-161
 Decision record: network-awai-apex ADR 0030. No operation always needs a human; this Agent may judge dangerous ones.
 
+## Input and output
+The broker supplies the operation, target, requesting bot, its dango verification result, and evidence.
+Return JSON only, with `verdict` (`allow` or `deny`), `operation`, `target`, `requester`, `reason` and `unknowns`. The verdict covers only that operation and target.
+
 ## How to judge
 Return `deny` when any of these holds:
 - the broker's dango verification did not pass or is missing;
