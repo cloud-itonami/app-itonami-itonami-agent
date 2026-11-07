@@ -12,7 +12,7 @@
  :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host}
  :ids {:repo "kotoba-lang/itonami-agent" :yakuwari/id "awai-op-approver"}
  :authority {:default-decision :blocked :source :yakuwari :ref "yakuwari.edn"}
- :bundle {:cid "bafkreihifnvc3id2h4zpuleos3c5uzbrpgch4akochmtlsihc7vfxahtfu" :files 7 :skills [] :dirs ["tasks" "policy"]}
+ :bundle {:cid "bafkreifi44bgxdygevcuwbbsptnk7ebd6lsa6jacpitjerpmpljl5cgjyi" :files 6 :skills [] :dirs ["policy"]}
  :capabilities [{:capability :review_source :decision :autonomous :note "Only the request and evidence the broker supplies; no credentials or network access"}
   {:capability :judge_operation :decision :autonomous :note "Returns one allow or deny verdict for one operation; a verdict is not authority and cannot widen delegated scope; deny when the requester is this profile"}
   {:capability :record_local_receipt :decision :autonomous :note "Own verdict evidence only"}
