@@ -1,0 +1,34 @@
+{:itonami/schema "cloud.itonami.profile.v2"
+ :profile/id "awai-op-approver"
+ :profile/description "Judge one bot operation request as an Agent separate from the requester"
+ :profile/hermes-compatible true
+ :agent/kind :approver
+ :org/world :awai :org/path [:etzhayyim :awai :cloud-itonami]
+ :org/github "cloud-itonami" :org/unit :awai-control :awai/business :awai-network
+ :invocation :on-demand
+ :runtime {:engine :itonami-agent :scheduler :itonami}
+ :placement {:mode :local :order [:local] :inference-rail :murakumo}
+ :inference {:rails [:murakumo] :authorities ["api.murakumo.cloud"] :deny-hosts ["openrouter.ai"]}
+ :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host}
+ :ids {:repo "kotoba-lang/itonami-agent" :yakuwari/id "awai-op-approver"}
+ :authority {:default-decision :blocked :source :yakuwari :ref "yakuwari.edn"}
+ :bundle {:cid "bafkreihifnvc3id2h4zpuleos3c5uzbrpgch4akochmtlsihc7vfxahtfu" :files 7 :skills [] :dirs ["tasks" "policy"]}
+ :capabilities [{:capability :review_source :decision :autonomous :note "Only the request and evidence the broker supplies; no credentials or network access"}
+  {:capability :judge_operation :decision :autonomous :note "Returns one allow or deny verdict for one operation; a verdict is not authority and cannot widen delegated scope; deny when the requester is this profile"}
+  {:capability :record_local_receipt :decision :autonomous :note "Own verdict evidence only"}
+  {:capability :read_source :decision :blocked}
+  {:capability :draft_artifact :decision :blocked}
+  {:capability :delegate_task :decision :blocked}
+  {:capability :external_messaging :decision :blocked}
+  {:capability :publish :decision :blocked}
+  {:capability :spend :decision :blocked}
+  {:capability :transfer_funds :decision :blocked}
+  {:capability :storage_upload :decision :blocked}
+  {:capability :delete_data :decision :blocked}
+  {:capability :manage_services :decision :blocked}
+  {:capability :git_push :decision :blocked}
+  {:capability :git_merge :decision :blocked}
+  {:capability :use_signing_identity :decision :blocked}
+  {:capability :export_private_keys :decision :blocked}
+  {:capability :enable_cron :decision :blocked}]
+ :cron? false}

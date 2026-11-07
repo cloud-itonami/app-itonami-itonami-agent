@@ -1,0 +1,2 @@
+name: awai-op-approver
+description: Judge one bot operation request as an Agent separate from the requester
