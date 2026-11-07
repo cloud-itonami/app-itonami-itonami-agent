@@ -1,0 +1,54 @@
+#!/bin/sh
+# Run the shared cases on every runner given (default: basilisp bb nbb) and
+# compare their canonical output. Otehon / oracle path only: not a Native
+# gate, build, packaging or runtime fallback (ADR 0026 D18).
+#
+#   bin/run-shared-cases [runner...]           PROFILE_DIRS="dir ..." adds live checks
+set -u
+here=$(cd "$(dirname "$0")/.." && pwd)
+run="$here/bin/itonami-otehon"
+runners=${*:-basilisp bb nbb}
+out=$(mktemp -d)
+status=0
+fixtures="$here/test/fixtures"
+for r in $runners; do
+  if "$run" "$r" test "$here/test/cases.edn" > "$out/$r.cases" 2> "$out/$r.err"; then
+    echo "PASS  $r cases: $(tail -n 1 "$out/$r.cases")"
+  else
+    echo "FAIL  $r cases"; grep -v ' ok$' "$out/$r.cases"; tail -n 5 "$out/$r.err"; status=1
+  fi
+  if "$run" "$r" test "$here/test/must-fail.edn" > "$out/$r.mustfail" 2>> "$out/$r.err"; then
+    echo "FAIL  $r must-fail cases passed: the harness cannot fail"; status=1
+  else
+    n=$(grep -c ' FAIL$' "$out/$r.mustfail")
+    total=$(grep -c '^:must-fail/' "$out/$r.mustfail")
+    if [ "$n" = "$total" ] && [ "$n" -gt 0 ]; then
+      echo "PASS  $r must-fail: $n/$total reported FAIL"
+    else
+      echo "FAIL  $r must-fail: only $n/$total reported FAIL"; status=1
+    fi
+  fi
+  {
+    for d in "$fixtures/itonami-ok" "$fixtures/hermes-ok" ${PROFILE_DIRS:-}; do
+      echo "check $(basename "$d")"; "$run" "$r" check "$d"; echo "exit $?"
+    done
+    echo "dry-run itonami-ok digest-tick"
+    "$run" "$r" dry-run "$fixtures/itonami-ok" digest-tick --capability read_source --capability write_workspace; echo "exit $?"
+    echo "dry-run itonami-ok digest-tick (publish_external)"
+    "$run" "$r" dry-run "$fixtures/itonami-ok" digest-tick --capability publish_external; echo "exit $?"
+    echo "dry-run hermes-ok daily"
+    "$run" "$r" dry-run "$fixtures/hermes-ok" daily; echo "exit $?"
+    grep -v '^:' "$out/$r.cases" | sed 's/, :runner "[^"]*"//'
+  } > "$out/$r.canon" 2>> "$out/$r.err"
+done
+first=""
+for r in $runners; do
+  if [ -z "$first" ]; then first=$r; continue; fi
+  if cmp -s "$out/$first.canon" "$out/$r.canon"; then
+    echo "PASS  $r output identical to $first"
+  else
+    echo "FAIL  $r output differs from $first"; diff "$out/$first.canon" "$out/$r.canon" | head -20; status=1
+  fi
+done
+[ -n "${KEEP_OUTPUT:-}" ] && echo "output: $out" || rm -rf "$out"
+exit $status

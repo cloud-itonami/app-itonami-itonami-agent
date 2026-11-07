@@ -1,0 +1,20 @@
+# itonami profile: inference rides itonami.edn :inference (murakumo only).
+model:
+  provider: murakumo
+  base_url: https://api.murakumo.cloud/v1
+  default: mishima
+  max_tokens: 8192
+providers:
+  murakumo:
+    base_url: https://api.murakumo.cloud/v1
+    api_mode: chat_completions
+    models:
+      mishima:
+        context_length: 131072
+agent:
+  max_turns: 40
+  run_budget_seconds: 900
+  reasoning_effort: low
+notes: >
+  folded text
+  on two lines

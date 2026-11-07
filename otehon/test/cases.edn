@@ -1,0 +1,138 @@
+;; Shared cases for the Otehon .cljc core. Every runner (Basilisp, Babashka,
+;; nbb) reads this file and must pass every case.
+;;
+;; A case: {:id :op :profile :edit :expect}. :op is :check, :dry-run,
+;; :decide, :additive or :yaml. :edit changes fixture text in memory only:
+;; [file from to] replaces the first `from`, [file :delete], [file :set text].
+;; :expect is a subset of the result; :messages-include lists substrings of
+;; error messages; :reason-in is a set of accepted :reason values.
+;;
+;; :negative true marks a negative control: broken input that must be
+;; rejected. Its control is automatic: the same case on the unedited fixture
+;; must NOT satisfy :expect, so the edit (not the fixture) causes the
+;; rejection.
+{:fixtures "fixtures"
+ :cases
+ [;; ------------------------------------------------------------ positive
+  {:id :check/itonami-ok :op :check :profile "itonami-ok"
+   :expect {:errors 0 :runtime "itonami"}}
+  {:id :check/hermes-ok :op :check :profile "hermes-ok"
+   :expect {:errors 0 :runtime "hermes"}}
+  {:id :additive/itonami-edn-is-additive :op :additive :profile "itonami-ok"
+   :expect {:hermes-files-same true :runtime-full "itonami" :runtime-bare "hermes"}}
+  {:id :dry-run/ok-by-name :op :dry-run :profile "itonami-ok" :job "digest-tick"
+   :capabilities [:read_source :write_workspace]
+   :expect {:status :ok :side-effects :none
+            :toolsets ["terminal" "file"]
+            :reasoning-effort "none"
+            :inference {:provider "murakumo" :model "mishima" :host "api.murakumo.cloud"
+                        :pinned? false :verdict "rail/ok"}
+            :job {:id "a1b2c3d4e5f6" :script "collect.py" :schedule "17 */6 * * *"}}}
+  {:id :dry-run/ok-by-id :op :dry-run :profile "itonami-ok" :job "a1b2c3d4e5f6"
+   :expect {:status :ok :job {:name "digest-tick"}}}
+  {:id :dry-run/held-approval :op :dry-run :profile "itonami-ok" :job "digest-tick"
+   :capabilities [:read_source :publish_external]
+   :expect {:status :held :reason "authority/needs-owner"}}
+  {:id :dry-run/held-voice :op :dry-run :profile "itonami-ok" :job "digest-tick"
+   :capabilities [:post_voice]
+   :expect {:status :held}}
+  {:id :decide/autonomous :op :decide :profile "itonami-ok" :capability :read_source
+   :expect {:decision :autonomous :source :yakuwari}}
+  {:id :decide/approval :op :decide :profile "itonami-ok" :capability :publish_external
+   :expect {:decision :approval-required}}
+  {:id :decide/legacy-propose :op :decide :profile "itonami-ok" :capability :draft_reply
+   :expect {:decision :approval-required :source :yakuwari}}
+  {:id :decide/listed-blocked :op :decide :profile "itonami-ok" :capability :git_push
+   :expect {:decision :blocked :source :yakuwari}}
+  {:id :decide/unlisted-fails-closed :op :decide :profile "itonami-ok" :capability :spend
+   :expect {:decision :blocked :source :unlisted}}
+  {:id :decide/itonami-edn-grants-nothing :op :decide :profile "itonami-ok" :capability :spend
+   :edit [["itonami.edn" ":capabilities [" ":capabilities [{:capability :spend :decision :autonomous} "]]
+   :expect {:decision :blocked :source :unlisted}}
+  {:id :decide/no-yakuwari-only-asks :op :decide :profile "itonami-ok" :capability :read_source
+   :edit [["yakuwari.edn" :delete]
+          ["itonami.edn" ":default-decision :approval-required" ":default-decision :autonomous"]]
+   :expect {:decision :approval-required :source :default}}
+  {:id :yaml/folded-and-flow :op :yaml
+   :text "a: >\n  one\n  two\nb: [x, y]\nc:\n  - k: 1\n    v: \"q\\\"t\"\nd: ~\n"
+   :expect {:value {"a" "one two\n" "b" ["x" "y"] "c" [{"k" 1 "v" "q\"t"}] "d" nil}}}
+  {:id :yaml/quoted-multiline :op :yaml
+   :text "p: 'it''s\n  long'\nq: \"a\\nb\"\n"
+   :expect {:value {"p" "it's long" "q" "a\nb"}}}
+
+  ;; ------------------------------------------------------------ negative controls
+  {:id :neg/deny-hosts-without-openrouter :negative true :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":deny-hosts [\"openrouter.ai\"]" ":deny-hosts []"]]
+   :expect {:messages-include ["must name openrouter.ai"]}}
+  {:id :neg/itonami-config-on-openrouter :negative true :op :check :profile "itonami-ok"
+   :edit [["config.yaml" "  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1"
+           "  provider: openrouter\n  base_url: https://openrouter.ai/api/v1"]]
+   :expect {:messages-include ["rail/itonami-off-murakumo" "rail/denied-host openrouter.ai"]}}
+  {:id :neg/itonami-rail-kotoba :negative true :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":inference {:rails [:murakumo]" ":inference {:rails [:kotoba]"]
+          ["itonami.edn" ":inference-rail :murakumo" ":inference-rail :kotoba"]]
+   :expect {:messages-include ["rail/itonami-off-murakumo"]}}
+  {:id :neg/host-not-authorised :negative true :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":authorities [\"api.murakumo.cloud\"]" ":authorities [\"example.org\"]"]]
+   :expect {:messages-include ["rail/host-not-authorised"]}}
+  {:id :neg/schema-unknown :negative true :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" "cloud.itonami.profile.v2\"" "cloud.itonami.profile.v9\""]]
+   :expect {:messages-include ["[:itonami/schema] not one of"]}}
+  {:id :neg/hermes-compatible-false :negative true :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":profile/hermes-compatible true" ":profile/hermes-compatible false"]]
+   :expect {:messages-include ["must be true: Hermes ignores itonami.edn"]}}
+  {:id :neg/profile-id-mismatch :negative true :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":profile/id \"itonami-ok\"" ":profile/id \"someone-else\""]]
+   :expect {:messages-include ["directory is itonami-ok"]}}
+  {:id :neg/yakuwari-duplicate :negative true :op :check :profile "itonami-ok"
+   :edit [["yakuwari.edn" "[{:capability :read_source :decision :autonomous}"
+           "[{:capability :read_source :decision :autonomous} {:capability :read_source :decision :blocked}"]]
+   :expect {:messages-include [":read_source is listed 2 times"]}}
+  {:id :neg/itonami-edn-unreadable :negative true :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":cron? true}" ":cron? true"]]
+   :expect {:messages-include ["unreadable"]}}
+  {:id :neg/yaml-anchor-refused :negative true :op :check :profile "itonami-ok"
+   :edit [["config.yaml" "default: mishima" "default: &m mishima"]]
+   :expect {:messages-include ["anchors/aliases/tags not supported"]}}
+  {:id :neg/jobs-json-unreadable :negative true :op :check :profile "itonami-ok"
+   :edit [["cron/jobs.json" "{\"jobs\": [" "{\"jobs\": [,"]]
+   :expect {:messages-include ["cron/jobs.json [] unreadable"]}}
+  {:id :neg/hermes-on-murakumo :negative true :op :check :profile "hermes-ok"
+   :edit [["config.yaml" "  provider: openrouter\n  default" "  provider: murakumo\n  default"]]
+   :expect {:messages-include ["rail/hermes-on-murakumo"]}}
+  {:id :neg/hermes-cron-pin-mishima :negative true :op :check :profile "hermes-ok"
+   :edit [["cron/jobs.json" "\"name\": \"daily\"" "\"name\": \"daily\", \"model\": \"mishima\""]]
+   :expect {:messages-include ["rail/hermes-on-murakumo"]}}
+  {:id :neg/dry-run-without-itonami-edn :negative true :op :dry-run :profile "itonami-ok" :job "digest-tick"
+   :edit [["itonami.edn" :delete]]
+   :expect {:status :refused :reason "rail/itonami-without-manifest"}}
+  {:id :neg/dry-run-invalid-profile :negative true :op :dry-run :profile "itonami-ok" :job "digest-tick"
+   :edit [["itonami.edn" ":deny-hosts [\"openrouter.ai\"]" ":deny-hosts []"]]
+   :expect {:status :refused :reason "profile/invalid"}}
+  {:id :neg/dry-run-job-pinned-to-openrouter :negative true :op :dry-run :profile "itonami-ok" :job "digest-tick"
+   :edit [["cron/jobs.json" "\"provider\": null, \"model\": null, \"base_url\": null"
+           "\"provider\": \"openrouter\", \"model\": \"x/y\", \"base_url\": \"https://openrouter.ai/api/v1\""]]
+   :expect {:status :refused :reason-in #{"profile/invalid" "rail/denied-host"}}}
+  {:id :neg/dry-run-job-disabled :negative true :op :dry-run :profile "itonami-ok" :job "digest-tick"
+   :edit [["cron/jobs.json" "\"enabled\": true, \"state\": \"scheduled\"" "\"enabled\": false, \"state\": \"scheduled\""]]
+   :expect {:status :refused :reason "job/inactive"}}
+  {:id :neg/dry-run-job-paused :negative true :op :dry-run :profile "itonami-ok" :job "weekly-review"
+   :expect {:status :refused :reason "job/inactive"}}
+  {:id :neg/dry-run-job-missing :negative true :op :dry-run :profile "itonami-ok" :job "digest-tick"
+   :edit [["cron/jobs.json" "\"name\": \"digest-tick\"" "\"name\": \"renamed\""]]
+   :expect {:status :refused :reason "job/not-found"}}
+  {:id :neg/dry-run-cron-disabled :negative true :op :dry-run :profile "itonami-ok" :job "digest-tick"
+   :edit [["itonami.edn" ":cron? true" ":cron? false"]]
+   :expect {:status :refused :reason "profile/cron-disabled"}}
+  {:id :neg/dry-run-capability-blocked :negative true :op :dry-run :profile "itonami-ok" :job "digest-tick"
+   :capabilities [:read_source]
+   :edit [["yakuwari.edn" "{:capability :read_source :decision :autonomous}" "{:capability :read_source :decision :blocked}"]]
+   :expect {:status :refused :reason "authority/blocked"}}
+  {:id :neg/decide-unknown-word :negative true :op :decide :profile "itonami-ok" :capability :read_source
+   :edit [["yakuwari.edn" "{:capability :read_source :decision :autonomous}" "{:capability :read_source :decision :sometimes}"]]
+   :expect {:decision :blocked}}
+  {:id :neg/decide-unlisted-after-removal :negative true :op :decide :profile "itonami-ok" :capability :write_workspace
+   :edit [["yakuwari.edn" "{:capability :write_workspace :decision :autonomous}" ""]]
+   :expect {:decision :blocked :source :unlisted}}
+  {:id :neg/yaml-tag-refused :negative true :op :yaml :text "a: !tag x\n"
+   :expect {:refused :anchor}}]}

@@ -1,0 +1,24 @@
+;; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:
+;; Hermes ignores this file; removing it returns the profile to plain Hermes.
+{:itonami/schema "cloud.itonami.profile.v2"
+ :profile/id "itonami-ok"
+ :profile/description "Otehon fixture: digest worker"
+ :profile/hermes-compatible true
+ :agent/kind :worker
+ :runtime {:engine :itonami-agent :scheduler :itonami}
+ :placement {:mode :local :order [:local] :inference-rail :murakumo}
+ :inference {:rails [:murakumo] :authorities ["api.murakumo.cloud"] :deny-hosts ["openrouter.ai"]}
+ :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host}
+ :bundle {:cid "bafkreigffdu5573by7t5l2l7m3edo5tcqdfen4jco6pg7xsrce2rdofpxy" :files 6}
+ :ids {:repo "kotoba-lang/itonami-agent" :yakuwari/id "itonami-ok"}
+ :authority {:default-decision :approval-required :source :yakuwari :ref "yakuwari.edn"}
+ :capabilities [{:capability :read_source :decision :autonomous}
+                {:capability :write_workspace :decision :autonomous}
+                {:capability :publish_external :decision :approval-required}
+                {:capability :draft_reply :decision :propose}
+                {:capability :post_voice :decision :voice-required}
+                {:capability :git_push :decision :blocked}]
+ :org/world :awai
+ :org/path [:etzhayyim :awai :cloud-itonami]
+ :invocation :resident
+ :cron? true}

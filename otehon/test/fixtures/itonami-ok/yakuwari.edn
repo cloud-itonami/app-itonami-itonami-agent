@@ -1,0 +1,9 @@
+;; Unlisted capabilities are denied. itonami.edn copies this list and grants nothing.
+{:yakuwari/id :itonami-ok
+ :yakuwari/capabilities
+ [{:capability :read_source :decision :autonomous}
+  {:capability :write_workspace :decision :autonomous}
+  {:capability :publish_external :decision :approval-required}
+  {:capability :draft_reply :decision :propose}
+  {:capability :post_voice :decision :voice-required}
+  {:capability :git_push :decision :blocked}]}

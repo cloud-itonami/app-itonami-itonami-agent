@@ -1,0 +1,11 @@
+{"jobs": [
+  {"id": "a1b2c3d4e5f6", "name": "digest-tick", "enabled": true, "state": "scheduled",
+   "schedule": {"kind": "cron", "expr": "17 */6 * * *", "display": "17 */6 * * *"},
+   "script": "collect.py", "prompt": "digest tick. Read the Script Output and write the digest.",
+   "enabled_toolsets": ["terminal", "file", "clarify", "cronjob"],
+   "provider": null, "model": null, "base_url": null, "reasoning_effort": "none",
+   "deliver": "local", "skills": []},
+  {"id": "0f9e8d7c6b5a", "name": "weekly-review", "enabled": true, "state": "paused",
+   "schedule": {"kind": "cron", "expr": "0 9 * * 1", "display": "0 9 * * 1"},
+   "prompt": "weekly review", "deliver": "local"}
+]}

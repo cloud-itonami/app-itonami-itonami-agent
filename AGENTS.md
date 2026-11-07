@@ -13,6 +13,13 @@
 - Hermes compatibility is the contract: change a file format only together with
   the Hermes code that reads it. Qualify native behavior with Amu selfhost
   checks and negative controls; legacy `run-tests.cljk` is not a native gate.
+- **Otehon (`otehon/`)**: the `.cljc` version of the itonami agent core
+  (owner 2026-11-07; ADR 0026 D18; JUN-1008). It runs on Basilisp, Babashka
+  and nbb, which the workspace Awai Otehon rule allows on the Otehon path.
+  It is separate from the Native route above: no native gate, build,
+  packaging or runtime path reads it, and neither side falls back to the
+  other. Its CI job is oracle-only and not a required check. Use `#?(:lpy …)`
+  for Basilisp and never `#?@`. See `otehon/README.md`.
 
 ## Two CLIs — 分離の正本（hermes agent CLI / itonami agent CLI）
 

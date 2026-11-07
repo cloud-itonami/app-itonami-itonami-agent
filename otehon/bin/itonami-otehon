@@ -1,0 +1,12 @@
+#!/bin/sh
+# itonami-otehon <runner> <command> ...   runner: basilisp | bb | nbb
+# Otehon / oracle path only (ADR 0026 D18). Not a Native gate, build or fallback.
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd)
+runner=${1:?runner: basilisp | bb | nbb}; shift
+case "$runner" in
+  basilisp) exec basilisp run -p "$here/src" -n itonami.otehon.cli "$@" ;;
+  bb)       exec bb -cp "$here/src" -m itonami.otehon.cli "$@" ;;
+  nbb)      exec nbb -cp "$here/src" -m itonami.otehon.cli "$@" ;;
+  *) echo "unknown runner: $runner" >&2; exit 64 ;;
+esac

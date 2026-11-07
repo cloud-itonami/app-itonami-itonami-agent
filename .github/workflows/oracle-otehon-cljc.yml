@@ -1,0 +1,58 @@
+name: oracle otehon cljc
+
+# ORACLE ONLY (workspace AGENTS.md, owner 2026-11-07; ADR 0026 D18).
+# Runs the Otehon .cljc core (otehon/) on Basilisp, Babashka and nbb against
+# the shared cases. It is not a Native gate, build, packaging or runtime
+# path, nothing native depends on it, and it is not a required check.
+
+on:
+  pull_request:
+    paths:
+      - "otehon/**"
+      - ".github/workflows/oracle-otehon-cljc.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  oracle-otehon-cljc:
+    name: oracle-otehon-cljc (basilisp, babashka, nbb)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fetch the requested source without a runtime action
+        env:
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/$REPOSITORY.git"
+          if [ -n "$PR_NUMBER" ]; then
+            SOURCE_REF="refs/pull/$PR_NUMBER/head"
+          else
+            SOURCE_REF="$GITHUB_SHA"
+          fi
+          git -C "$GITHUB_WORKSPACE" -c protocol.version=2 fetch --depth=1 origin "$SOURCE_REF"
+          git -C "$GITHUB_WORKSPACE" checkout --detach FETCH_HEAD
+
+      - name: Install the oracle runners (pinned)
+        run: |
+          set -eu
+          mkdir -p "$HOME/.local/bin"
+          BB=1.12.218
+          BB_SHA256=7bd028cc794732ffde3da31ce4379840893c8e54f1046f92a8dfc4f4b3cddaf8
+          curl -fsSLo /tmp/bb.tgz "https://github.com/babashka/babashka/releases/download/v$BB/babashka-$BB-linux-amd64-static.tar.gz"
+          echo "$BB_SHA256  /tmp/bb.tgz" | sha256sum -c -
+          tar -xzf /tmp/bb.tgz -C "$HOME/.local/bin" bb
+          npm install --global --no-fund --no-audit nbb@1.4.208
+          pipx install basilisp==0.5.1
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Shared cases on every runner (oracle)
+        run: |
+          set -eu
+          bb --version; nbb --version; basilisp version; python3 --version; node --version
+          otehon/bin/run-shared-cases basilisp bb nbb

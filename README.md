@@ -13,6 +13,13 @@ first live turns are tracked in [AWAI-131](https://linear.app/kotobalabs/issue/A
 The compatibility descriptions below document the legacy surface and do not
 establish selfhost qualification.
 
+## Otehon (.cljc)
+
+`otehon/` holds the Otehon version of the core in `.cljc` (Basilisp,
+Babashka, nbb): read a profile, check itonami.edn and yakuwari.edn, dry-run
+one cron job. It is outside the Native route and its gates. See
+[otehon/README.md](otehon/README.md) and [JUN-1008](https://linear.app/kotobalabs/issue/JUN-1008).
+
 ## Legacy CLI examples (unqualified)
 
 ```
