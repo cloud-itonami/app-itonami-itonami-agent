@@ -13,6 +13,7 @@
     cas-get    <store> <sha> <out>
     cas-verify <store>
     cas-gc     <store> [--apply]
+    cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>]
     peer-push  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-pull  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>]
@@ -140,6 +141,7 @@
                                   :record (:record c) :deliver (:deliver c)})
     :cas-sha {:sha (cas/sha256-hex (:bytes c []))}
     :cas-gc-plan (cas/gc-plan (:manifest c {}) (:inventory c {}))
+    :manifest-rebuild (cas/manifest-rebuild (:local c {}) (:objects c []) (:remotes c []))
     :cas-manifest (let [files (:files c {})
                         tamper (:tamper c {})
                         absent (set (:absent c []))
@@ -227,7 +229,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -415,6 +417,75 @@
           (do (cas-write-manifest! dst (peer-merge-manifest dstm srcm (map :sha jobs)))
               {:status :ok :direction direction :plan plan :applied (count applied)}))))))
 
+(defn- admitted-peers
+  "Gate every listed peer dir, in order. Returns {:admitted [{:peer
+  :manifest}] :skipped [{:peer :reason}]}. Skipped peers are reported
+  and never read."
+  [opts today]
+  (let [raw (when (:registry opts) (read-edn-file (:registry opts)))
+        registry (when raw (into {} (map (fn [[n e]] [n (if (map? e) (kw-keys e) e)]) raw)))
+        gated (mapv (fn [pd] {:dir pd :gate (peer-gate registry (:as opts) pd today)})
+                    (:peers opts))
+        ok? #(get-in % [:gate :ok])]
+    {:admitted (mapv (fn [{:keys [dir]}] {:peer dir :manifest (cas-read-manifest dir)})
+                     (filter ok? gated))
+     :skipped (mapv (fn [{:keys [dir gate]}] {:peer dir :reason (:reason gate)})
+                    (remove ok? gated))}))
+
+(defn- read-edn-safe
+  "read-edn-file that survives corruption: nil when missing, ::corrupt
+  when the file is there but unparsable, data otherwise."
+  [path]
+  (if-not (hio/file? path)
+    nil
+    (try (hio/parse-edn (hio/slurp-utf8 path))
+         (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ ::corrupt))))
+
+(defn- cas-rehash-inventory
+  "Re-hash every stored object from its bytes: [{:sha :size}] sorted by
+  sha. The path-derived digest is never trusted here; a tampered file
+  reports under its true digest (or drops out when unreadable)."
+  [store]
+  (->> (cas-inventory store)
+       keys
+       (keep (fn [psha]
+               (when-let [s (hio/read-latin1 (str store "/objects/" (cas/object-rel psha)))]
+                 (let [bs (hio/bytes-of s)]
+                   {:sha (cas/sha256-hex bs) :size (count bs)}))))
+       distinct
+       vec
+       (sort-by :sha)))
+
+(defn- cas-reconcile
+  "Rebuild damaged manifest entries from content + peers. Adopts rels
+  the local manifest lacks (first peer wins, content re-hashed); never
+  overwrites a local entry. Conflicts refuse the whole reconcile and
+  nothing is written. Reports :local-damaged when the manifest file
+  was present but unparsable."
+  [store opts today]
+  (let [{:keys [admitted skipped]} (admitted-peers opts today)]
+    (if (empty? admitted)
+      {:status :refused :reason "cas/reconcile-no-peer" :skipped skipped}
+      (let [raw-local (read-edn-safe (cas-manifest-path store))
+            local (if (map? raw-local)
+                    (into {} (map (fn [[rel e]] [rel (if (map? e) (kw-keys e) e)]) raw-local))
+                    {})
+            damaged (and (some? raw-local) (not (map? raw-local)))
+            plan (cas/manifest-rebuild local (cas-rehash-inventory store) admitted)]
+        (cond (seq (:conflicts plan))
+              {:status :refused :reason "cas/reconcile-conflict"
+               :conflicts (:conflicts plan) :skipped skipped :local-damaged damaged}
+              (empty? (:adopted plan))
+              {:status :ok :adopted 0 :entries [] :unmatched (:unmatched plan)
+               :skipped skipped :local-damaged damaged}
+              :else
+              (do (cas-write-manifest!
+                   store (merge local (into {} (map (fn [{:keys [rel sha size]}]
+                                                      [rel {:sha sha :size size}])
+                                                    (:adopted plan)))))
+                  {:status :ok :adopted (count (:adopted plan)) :entries (:adopted plan)
+                   :unmatched (:unmatched plan) :skipped skipped :local-damaged damaged}))))))
+
 (defn- repair-one
   "Copy one bad object from the first candidate peer whose manifest
   lists its rel (try-order), re-hashed on receipt. Returns the
@@ -438,21 +509,14 @@
   refused with the remaining bad rels. The manifest is untouched: bad
   rels already point at the right digests."
   [store opts today]
-  (let [raw (when (:registry opts) (read-edn-file (:registry opts)))
-        registry (when raw (into {} (map (fn [[n e]] [n (if (map? e) (kw-keys e) e)]) raw)))
-        gated (mapv (fn [pd] {:dir pd :gate (peer-gate registry (:as opts) pd today)})
-                    (:peers opts))
-        admitted (filterv #(get-in % [:gate :ok]) gated)
-        skipped (mapv (fn [{:keys [dir gate]}] {:peer dir :reason (:reason gate)})
-                      (remove #(get-in % [:gate :ok]) gated))]
+  (let [{:keys [admitted skipped]} (admitted-peers opts today)]
     (if (empty? admitted)
       {:status :refused :reason "peer/repair-no-peer" :skipped skipped}
       (let [lm (cas-read-manifest store)
             read-local (fn [rel] (when-let [e (get lm rel)]
                                    (when-let [s (hio/read-latin1 (cas-object-path store (:sha e)))]
                                      (hio/bytes-of s))))
-            rms (mapv (fn [{:keys [dir]}] {:peer dir :manifest (cas-read-manifest dir)})
-                      admitted)
+            rms admitted
             plan (peer/repair-plan (cas/verify-manifest lm read-local) rms)
             healed (mapv #(repair-one rms store %) (:repair plan))
             failed (filterv (complement :ok) healed)]
@@ -558,6 +622,11 @@
                  (let [r (cas-gc a (boolean (some #{"--apply"} (cons b more))))]
                    (println (canon r))
                    (if (= :ok (:status r)) 0 1)))
+      "cas-reconcile" (if-not (and a b)
+                        (usage)
+                        (let [r (cas-reconcile a (peer-args (cons b more)) (subs (:iso (hio/now-parts)) 0 10))]
+                          (println (canon r))
+                          (if (= :ok (:status r)) 0 1)))
       "peer-push" (if-not (and a b)
                     (usage)
                     (let [r (peer-sync a b :send (peer-args more) (subs (:iso (hio/now-parts)) 0 10))]

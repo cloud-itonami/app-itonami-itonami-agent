@@ -141,6 +141,45 @@
   [manifest]
   (set (map (comp :sha val) manifest)))
 
+(defn manifest-rebuild
+  "Recover manifest entries from content + peers. `local` is the current
+  manifest (possibly {} when damaged); `objects` [{:sha :size}] is the
+  caller re-hashed inventory, so a tampered file cannot lie about its
+  digest; `remotes` [{:peer :manifest}] in try-order. For every locally
+  held sha a peer lists: adopt the rel when local lacks it (first peer
+  wins), stay silent when local agrees, or flag a conflict when local —
+  or an earlier adoption — maps the rel to a different sha. Shas no
+  peer lists land in :unmatched. Deterministic."
+  [local objects remotes]
+  (let [by-sha (into {} (map (fn [{:keys [sha size]}] [sha size]) objects))
+        cands (fn [sha]
+                (vec (mapcat (fn [{:keys [peer manifest]}]
+                               (map (fn [rel] [peer rel])
+                                    (sort (keep (fn [[rel e]]
+                                                  (when (= sha (:sha e)) rel))
+                                                manifest))))
+                             remotes)))]
+    (dissoc
+     (second
+      (reduce (fn [[rels acc] sha]
+               (let [cs (remove (fn [[_ rel]] (contains? (:conflicted acc) rel)) (cands sha))]
+                 (if (empty? cs)
+                   [rels (update acc :unmatched conj sha)]
+                   (let [[peer rel] (first cs)
+                         have (or (get rels rel) (:sha (get local rel)))]
+                     (cond (nil? have)
+                           [(assoc rels rel sha)
+                            (update acc :adopted conj {:rel rel :sha sha
+                                                      :size (get by-sha sha) :from peer})]
+                           (= have sha) [rels acc]
+                           :else [rels (-> acc
+                                           (update :conflicts conj {:rel rel :local have
+                                                                   :peer sha :from peer})
+                                           (update :conflicted conj rel))])))))
+             [{} {:adopted [] :conflicts [] :unmatched [] :conflicted #{}}]
+             (sort (keys by-sha))))
+     :conflicted)))
+
 (defn gc-plan
   "Which stored objects no manifest references. `inventory` {sha size}
   is the physical objects/ content (the caller lists it); the manifest

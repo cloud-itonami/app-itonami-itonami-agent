@@ -59,7 +59,7 @@ the owner, 64 usage.
 | `src/itonami/otehon/turn.cljc` | one-turn `-z` gate (pure) | `main.cljk` `oneshot` gating, `loop.cljk` toolset rule |
 | `src/itonami/otehon/run.cljc` | real-run plan: prompt, output doc, record (pure) | `src/itonami/agent/cron.cljk` `build-prompt`, `output-doc`, `record-run-state!` |
 | `src/itonami/otehon/text.cljc` | portable string ops, JVM whitespace pinned | `kotoba.lang.text` (the `.cljk` reference nbb cannot load) |
-| `src/itonami/otehon/cas.cljc` | pure SHA-256, object sharding, manifests, gc plans | AWAI-232 (slices 1, 6) |
+| `src/itonami/otehon/cas.cljc` | pure SHA-256, object sharding, manifests, gc + rebuild plans | AWAI-232 (slices 1, 6, 8) |
 | `src/itonami/otehon/peer.cljc` | permissioned node registry, sync plans, multi-peer repair plans | AWAI-232 (slices 2, 4, 7) |
 | `src/itonami/otehon/market.cljc` | capacity attestations, ask/bid match, escrow, HMAC sigs | AWAI-232 (slices 3, 5) |
 
@@ -160,9 +160,9 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
    `cas-put/get/verify` (content-addressed store, pure SHA-256),
    `peer-push/pull` (permissioned node sync with registry gate),
    `market-match` (capacity asks/bids, attestation expiry).
-   Bytes travel latin-1; hashing stays pure. What stays open: manifest
-   repair, asymmetric signatures,
-   fleet metadata, time-based retention (the awai fs gap list).
+   Bytes travel latin-1; hashing stays pure. What stays open: asymmetric
+   signatures, fleet metadata,
+   time-based retention (the awai fs gap list).
 
 Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
 `docs/evidence/otehon-cljc-20261108.md`,
@@ -176,4 +176,7 @@ attestation sigs verified against python hashlib, `market-sign` +
 `docs/evidence/otehon-gc.md` (116 shared cases; `cas-gc` drops only
 unreferenced objects, dry-run by default; time-based retention open),
 `docs/evidence/otehon-multi-peer.md` (119 shared cases; `peer-repair`
-across `<peerdir>...` with per-peer gates and copy fallback).
+across `<peerdir>...` with per-peer gates and copy fallback),
+`docs/evidence/otehon-manifest-reconcile.md` (124 shared cases;
+`cas-reconcile` rebuilds damaged manifests from content + peers,
+conflicts refuse without writing).

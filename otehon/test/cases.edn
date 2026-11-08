@@ -370,6 +370,37 @@
   {:id :cas-gc-empty :op :cas-gc-plan
    :manifest {} :inventory {}
    :expect {:drop [] :keep 0 :bytes 0}}
+  {:id :manifest-rebuild-basic :op :manifest-rebuild
+   :local {}
+   :objects [{:sha "aa" :size 10} {:sha "bb" :size 20}]
+   :remotes [{:peer "p1" :manifest {"r1" {:sha "aa" :size 10}}}
+             {:peer "p2" :manifest {"r2" {:sha "bb" :size 20}}}]
+   :expect {:adopted [{:rel "r1" :sha "aa" :size 10 :from "p1"}
+                       {:rel "r2" :sha "bb" :size 20 :from "p2"}]
+            :conflicts [] :unmatched []}}
+  {:id :manifest-rebuild-consistent :op :manifest-rebuild
+   :local {"r1" {:sha "aa" :size 10}}
+   :objects [{:sha "aa" :size 10}]
+   :remotes [{:peer "p1" :manifest {"r1" {:sha "aa" :size 10}}}]
+   :expect {:adopted [] :conflicts [] :unmatched []}}
+  {:id :manifest-rebuild-conflict :op :manifest-rebuild
+   :local {"r1" {:sha "aa" :size 10}}
+   :objects [{:sha "aa" :size 10} {:sha "bb" :size 20}]
+   :remotes [{:peer "p1" :manifest {"r1" {:sha "bb" :size 20}}}]
+   :expect {:adopted [] :conflicts [{:rel "r1" :local "aa" :peer "bb" :from "p1"}] :unmatched ["aa"]}}
+  {:id :manifest-rebuild-peer-disagree :op :manifest-rebuild
+   :local {}
+   :objects [{:sha "s1" :size 1} {:sha "s2" :size 2}]
+   :remotes [{:peer "p1" :manifest {"r" {:sha "s1" :size 1}}}
+             {:peer "p2" :manifest {"r" {:sha "s2" :size 2}}}]
+   :expect {:adopted [{:rel "r" :sha "s1" :size 1 :from "p1"}]
+            :conflicts [{:rel "r" :local "s1" :peer "s2" :from "p2"}]
+            :unmatched []}}
+  {:id :manifest-rebuild-unmatched :op :manifest-rebuild
+   :local {}
+   :objects [{:sha "zz" :size 9}]
+   :remotes [{:peer "p1" :manifest {"r1" {:sha "aa" :size 10}}}]
+   :expect {:adopted [] :conflicts [] :unmatched ["zz"]}}
 
   ;; ------------------------------------------------------------ peer
   {:id :peer-plan-fetch :op :peer-plan
