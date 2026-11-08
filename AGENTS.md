@@ -48,3 +48,24 @@ CLI route は selfhost 資格未取得であり、移行完了まで起動手順
   `:inference` の rails のみ（`:deny-hosts` に openrouter）。
 - フォーマット互換（両 CLI が読むファイル）を変えるときは README の互換表と
   この表を同時に更新する。
+
+## awai fs storage — local agent 共通退避先（2026-11-08〜）
+
+ローカル開発の容量枯渇に使う共通 storage。local agent（itonami-agent 含む）は
+退避先としてここを記録し、個別の B2 prefix や restic repo を増やさない:
+
+- warm 層: JuiceFS volume `awai-warm`（B2 S3 互換 `261023-github`、
+  SQLite meta `~/.juicefs/awai-warm/`、writeback OFF）。検証済み
+ （PUT→SHA→fresh-cache cold read）。macFUSE は未解決のため native mount なし
+- cold / retire 層: restic repo
+  `rclone:b2-261023-github:261023-github/awai-restic-20261108`、
+  password は `~/.juicefs/awai-warm/restic-password`（mode 600、同 host 内。
+  off-host escrow は未解決）。restic 0.19.1 は
+  `workspaces/codex/jun-964-juicefs/restic-bin/restic` を使う。
+  backend は rclone（S3 init は制限キーで不可だった）
+- 退避フロー: quiescence 確認（mtime＋稼働 proc＋git/stash）→ backup
+ （tag `awai-migrate-YYYYMMDD`）→ spot SHA（dump vs source、GB 級は timeout 500）
+  → `restic check` → 削除。検証失敗時は削除しない
+- 禁止: live service 配下（LaunchAgent 管理の sshd 等）の削除、他 agent の WIP の
+  無断削除、稼働中 restore 先への接触。欠けた mount を空 dir で代替しない
+- 設計: `docs/awai-fs-design.md`。追跡: JUN-964（Linear）
