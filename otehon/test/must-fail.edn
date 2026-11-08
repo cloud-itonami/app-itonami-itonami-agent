@@ -72,4 +72,29 @@
   {:id :must-fail/incidents-wrong-line :op :incidents
    :request {:profile "p1" :setup-sql ["CREATE TABLE cron_incidents (id TEXT PRIMARY KEY, job_id TEXT, state TEXT, failure_type TEXT, first_seen_at TEXT, last_seen_at TEXT)"
                                        "INSERT INTO cron_incidents (id, job_id, state, failure_type, first_seen_at, last_seen_at) VALUES ('s1', 'j1', 'detected', 'timeout', '2026-11-08T00:00:01+09:00', '2026-11-08T00:00:01+09:00')"]}
+   :expect {:exit 0 :lines ["WRONG"]}}
+  ;; a wrong refresh-bundle line (proves the refresh line is asserted)
+  {:id :must-fail/profile-refresh-bundle-wrong-line :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/ph/itonami.edn" "{:profile/id \"ph\"}\n"}
+   :request {:sub "refresh-bundle" :name "ph"}
+   :expect {:exit 0 :lines ["WRONG"]}}
+  ;; a wrong release line (proves release lines are asserted)
+  {:id :must-fail/profile-release-wrong-line :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "release" :name "ph"}
+   :expect {:exit 0 :lines ["WRONG"]}}
+  ;; a wrong import line (proves copy lines are asserted)
+  {:id :must-fail/profile-import-wrong-line :op :profile
+   :seed {"hermes/profiles/p1/SOUL.md" "soul\n"
+          "hermes/profiles/p1/profile.yaml" "name: p1\n"
+          "hermes/profiles/p1/config.yaml" "model:\n  default: mishima\n"
+          "hermes/profiles/p1/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "import" :from "hermes" :to "store" :name "p1"}
    :expect {:exit 0 :lines ["WRONG"]}}]}]

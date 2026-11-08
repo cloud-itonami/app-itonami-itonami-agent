@@ -244,6 +244,14 @@
      :cljs (try (boolean (.isSymbolicLink (.lstatSync fs path)))
                 (catch :default _ false))))
 
+(defn copy-file!
+  "Byte copy `from` to `to` (latin-1 is a byte<->char bijection on every
+  runner); parents are created. Returns `to`."
+  [from to]
+  (mkdirs! (dirname to))
+  (write-latin1! to (read-latin1 from))
+  to)
+
 (defn remove-dir!
   "Remove one EMPTY directory. False when it is missing or not empty."
   [path]

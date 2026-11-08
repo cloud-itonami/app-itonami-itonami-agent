@@ -1211,6 +1211,95 @@
                                " last=" (get r "last_seen_at")))
                         rows)})))))
 
+(defn- set-parked!
+  "Park (or unpark) a profile home for Hermes' gateway: the marker file
+  `gateway.parked` is what `hermes -p X gateway stop` writes. The stamp
+  text is never read back, only the file's presence. Verbatim from
+  main.cljk."
+  [home parked? now-iso]
+  (let [f (str home "/gateway.parked")]
+    (if parked?
+      (hio/write-text! f (str "parked by itonami-agent profile adopt at " now-iso "\n"))
+      (hio/delete-file! f))))
+
+(defn- refresh-bundle-lines
+  "The `profile refresh-bundle` line: recompute one manifest's bundle
+  CID and write it back. A profile without a manifest refuses with the
+  itonamify hint (the legacy loader's throw on a missing home reads the
+  same way: lite loading never throws, so the guard lives here)."
+  [store name]
+  (let [home (str store "/profiles/" name)
+        prof (load-home store name)
+        m (:manifest prof)]
+    (if (nil? m)
+      {:exit 2 :lines [(str "profile " name " is not itonamified; run profile itonamify first")]}
+      (let [m' (bundle/refresh-bundle-cid home)]
+        {:exit 0 :lines [(str "refreshed " name " bundle " (get-in m' [:bundle :cid]))]}))))
+
+(defn- release-lines
+  "The `profile release` lines: hand scheduler ownership back to Hermes
+  (manifest scheduler flip when a manifest exists, marker lifted
+  always). Verbatim from main.cljk; a missing home is skipped (the
+  legacy loader throws there), and a missing name is a usage refusal
+  (the legacy blank-name keep line is an accident of load-profile(nil)
+  reading the store root, which has no otehon meaning)."
+  [store targets dry-run? now-iso]
+  (if (some nil? targets)
+    {:exit 2 :lines ["usage: itonami-agent profile release <p>|--all [--dry-run]"]}
+    (let [changed (atom 0)
+          lines (mapv (fn [n]
+                        (let [home (str store "/profiles/" n)]
+                          (if-not (hio/dir? home)
+                            (str "skip    " n "  no such profile")
+                            (let [prof (load-home store n)
+                                  owned? (or (= :itonami (get-in prof [:manifest :runtime :scheduler]))
+                                             (hio/file? (str home "/gateway.parked")))]
+                              (cond
+                                (not owned?) (str "keep    " n "  already Hermes-scheduled")
+                                dry-run? (do (swap! changed inc) (str "would   release " n))
+                                :else (do
+                                        (when (:manifest prof)
+                                          (bundle/write-manifest! home (assoc-in (:manifest prof) [:runtime :scheduler] :hermes)))
+                                        (set-parked! home false now-iso)
+                                        (swap! changed inc)
+                                        (str "released " n ": Hermes ticks cron again")))))))
+                      targets)]
+      {:exit 0 :lines (conj lines (str @changed " profile(s) " (if dry-run? "would be " "") "released"))})))
+
+(defn- transfer-usage [sub]
+  (str "usage: itonami-agent profile " sub " <p>|--all [--"
+       (if (= sub "export") "to" "from") " DIR] [--force] [--dry-run]"))
+
+(defn- transfer-lines
+  "The `profile import`/`export` lines: copy profile definitions between
+  two store roots and, on export, park the Hermes side when the copied
+  profile is Kotoba-scheduled. Verbatim from main.cljk; the roots come
+  from the request (the legacy host-root defaults have no meaning for a
+  scratch store, so missing roots refuse with the usage text)."
+  [sub from-root to-root targets dry-run? force? now-iso]
+  (if (or (nil? from-root) (nil? to-root))
+    {:exit 2 :lines [(transfer-usage sub)]}
+    (let [out? (= sub "export")
+          copied (atom [])
+          lines (mapv (fn [t]
+                        (try
+                          (let [from (str from-root "/profiles/" t)
+                                to (str to-root "/profiles/" t)]
+                            (if dry-run?
+                              (str "would  " sub " " t "  " from " -> " to)
+                              (let [r (bundle/copy-profile! from to force?)
+                                    scheduled (get-in (bundle/read-manifest from) [:runtime :scheduler])]
+                                (when (and out? (= :itonami scheduled))
+                                  (set-parked! to true now-iso))
+                                (swap! copied conj (:copied r))
+                                (str "copied  " t "  " (count (:copied r)) " file(s)  " from " -> " to))))
+                          (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                            (str "skip    " t "  " (ex-message e)))))
+                      targets)]
+      {:exit 0
+       :lines (conj lines (str (count @copied) " profile(s) " (if dry-run? "would be " "") "copied"))
+       :copied (vec (apply concat @copied))})))
+
 (defn- ops-profile [c scratch]
   (let [dir (scratch-case-dir scratch c)]
     (hio/mkdirs! dir)
@@ -1229,11 +1318,44 @@
               "rail" (rail-lines dir targets
                                  (when (:to req) (keyword (str (:to req))))
                                  (boolean (:dry-run req)))
+              "refresh-bundle" (refresh-bundle-lines dir (:name req))
+              "release" (release-lines dir (if (:all req) (listing-names dir) [(:name req)])
+                                        (boolean (:dry-run req)) "2026-11-08T00:00:00+09:00")
+              ("import" "export")
+              (let [t (cond (:all req) (when (:from req)
+                                         (let [ts (listing-names (str dir "/" (:from req)))]
+                                           (when (seq ts) ts)))
+                            (:name req) [(:name req)])]
+                (if (nil? t)
+                  {:exit 2 :lines [(transfer-usage sub)]}
+                  (transfer-lines sub
+                                   (when (:from req) (str dir "/" (:from req)))
+                                   (when (:to req) (str dir "/" (:to req)))
+                                   t
+                                   (boolean (:dry-run req)) (boolean (:force req))
+                                   "2026-11-08T00:00:00+09:00")))
               {:exit 2 :lines [(str "unknown profile command: " (:sub req))]})
-          manifest-file (when (contains? #{"refresh" "itonamify" "rail"} sub)
-                          (let [p (str dir "/profiles/" (or (:name req) "default") "/itonami.edn")]
-                            (when (hio/file? p) (hio/slurp-utf8 p))))]
-      (assoc (cond-> r manifest-file (assoc :manifest-file manifest-file))
+          in-place? (and (not (:all req)) (:name req)
+                         (contains? #{"refresh" "itonamify" "rail" "refresh-bundle" "release"} sub))
+          copied-here? (and (contains? #{"import" "export"} sub)
+                            (not (:all req)) (:to req) (:name req))
+          manifest-file
+          (cond in-place?
+                (let [p (str dir "/profiles/" (:name req) "/itonami.edn")]
+                  (when (hio/file? p) (hio/slurp-utf8 p)))
+                copied-here?
+                (let [p (str dir "/" (:to req) "/profiles/" (:name req) "/itonami.edn")]
+                  (when (hio/file? p) (hio/slurp-utf8 p)))
+                :else nil)
+          parked?
+          (cond (and (= sub "release") in-place?)
+                (hio/file? (str dir "/profiles/" (:name req) "/gateway.parked"))
+                copied-here?
+                (hio/file? (str dir "/" (:to req) "/profiles/" (:name req) "/gateway.parked"))
+                :else nil)]
+      (assoc (cond-> r
+               manifest-file (assoc :manifest-file manifest-file)
+               (some? parked?) (assoc :parked? parked?))
              :messages (:lines r)))))
 
 (defn- ops-runs [c scratch]
@@ -1316,7 +1438,7 @@
           :else (recur (next as) (update m :pos conj (first as))))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] [--model M] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] [--model M] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -1831,6 +1953,30 @@
                       (run (rail-lines root targets
                                        (when-let [t (opt-val "--to")] (keyword (str t)))
                                        (flag? "--dry-run")))
+                      (= sub "refresh-bundle")
+                      (if-not b (usage) (run (refresh-bundle-lines root b)))
+                      (= sub "release")
+                      (run (release-lines root (if (flag? "--all") (listing-names root) [b])
+                                           (flag? "--dry-run") (:iso (host-now))))
+                      (or (= sub "import") (= sub "export"))
+                      (let [hermes-home (or (hio/env "ITONAMI_HERMES_ROOT")
+                                            (str (hio/env "HOME") "/.hermes"))
+                            from (exec/expand-home (or (opt-val "--from")
+                                                       (when (= sub "import") hermes-home)
+                                                       root)
+                                                   (hio/env "HOME"))
+                            to (exec/expand-home (or (opt-val "--to")
+                                                     (when (= sub "export") hermes-home)
+                                                     root)
+                                                 (hio/env "HOME"))
+                            t (if (flag? "--all")
+                                (let [ts (listing-names from)] (when (seq ts) ts))
+                                (when b [b]))]
+                        (if (nil? t)
+                          (do (println (transfer-usage sub)) 2)
+                          (run (transfer-lines sub from to t
+                                                (flag? "--dry-run") (flag? "--force")
+                                                (:iso (host-now))))))
                       :else (do (println (str "unknown profile command: " sub)) 2)))
       "runs" (if-not a
                (usage)
