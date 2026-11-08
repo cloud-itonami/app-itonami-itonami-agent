@@ -12,7 +12,7 @@
     cas-put    <store> <file>...
     cas-get    <store> <sha> <out>
     cas-verify <store>
-    cas-gc     <store> [--apply]
+    cas-gc     <store> [--apply] [--retain-days N]
     cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>]
     peer-push  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-pull  <store> <peerdir> [--as <node> --registry <reg.edn>]
@@ -142,6 +142,9 @@
     :cas-sha {:sha (cas/sha256-hex (:bytes c []))}
     :cas-gc-plan (cas/gc-plan (:manifest c {}) (:inventory c {}))
     :manifest-rebuild (cas/manifest-rebuild (:local c {}) (:objects c []) (:remotes c []))
+    :retention-plan (cas/retention-plan (:manifest c {}) (:inventory c {})
+                                      (:tombs c {}) (:today c "") (:days c 0))
+    :cas-parse-int {:value (cas/parse-int (:text c ""))}
     :cas-manifest (let [files (:files c {})
                         tamper (:tamper c {})
                         absent (set (:absent c []))
@@ -229,7 +232,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -349,20 +352,55 @@
                                (hio/read-dir-names d))))
                      (hio/read-dir-names top)))))
 
+(defn- cas-tombs-path [store] (str store "/tombstones.edn"))
+
+(defn- cas-read-tombs
+  "tombstones.edn {sha {:deleted-at :size}}, {} when absent. Hand-written
+  files get the same kw-keys normalization as manifests."
+  [store]
+  (let [m (or (read-edn-file (cas-tombs-path store)) {})]
+    (into {} (map (fn [[sha e]] [sha (if (map? e) (kw-keys e) e)]) m))))
+
 (defn- cas-gc
   "Drop objects no manifest references. Dry-run by default (prints the
   plan, deletes nothing); --apply deletes and reports :deleted. The
-  manifest is never rewritten; a failed delete refuses the whole gc."
-  [store apply?]
-  (let [plan (cas/gc-plan (cas-read-manifest store) (cas-inventory store))]
-    (if-not apply?
-      (assoc plan :status :ok :applied false)
-      (let [paths (mapv #(str store "/objects/" (cas/object-rel %)) (:drop plan))
-            ok? (mapv hio/delete-file! paths)
-            failed (mapv first (filter (complement second) (map vector (:drop plan) ok?)))]
-        (if (seq failed)
-          {:status :refused :reason "cas/gc-failed" :failed failed}
-          (assoc plan :status :ok :applied true :deleted (count (:drop plan))))))))
+  manifest is never rewritten; a failed delete refuses the whole gc.
+  With --retain-days N, unreferenced objects rest in tombstones.edn
+  for N days first: grace-expired ones are deleted, re-referenced ones
+  revived, stale tomb entries cleared. The tombstone file is the audit
+  trail of every deferred and completed drop."
+  [store {:keys [apply? retain-days]} today]
+  (let [m (cas-read-manifest store)
+        inv (cas-inventory store)]
+    (if (nil? retain-days)
+      (let [plan (cas/gc-plan m inv)]
+        (if-not apply?
+          (assoc plan :status :ok :applied false)
+          (let [paths (mapv #(str store "/objects/" (cas/object-rel %)) (:drop plan))
+                ok? (mapv hio/delete-file! paths)
+                failed (mapv first (filter (complement second) (map vector (:drop plan) ok?)))]
+            (if (seq failed)
+              {:status :refused :reason "cas/gc-failed" :failed failed}
+              (assoc plan :status :ok :applied true :deleted (count (:drop plan)))))))
+      (let [tombs (cas-read-tombs store)
+            plan (cas/retention-plan m inv tombs today retain-days)]
+        (if-not apply?
+          (assoc plan :status :ok :applied false :tombs (count tombs))
+          (let [paths (mapv #(str store "/objects/" (cas/object-rel %)) (:drop plan))
+                ok? (mapv hio/delete-file! paths)
+                failed (mapv first (filter (complement second) (map vector (:drop plan) ok?)))]
+            (if (seq failed)
+              {:status :refused :reason "cas/gc-failed" :failed failed}
+              (let [stale (vec (sort (remove (set (keys inv)) (keys tombs))))
+                    kept (apply dissoc tombs (concat (:drop plan) (:revived plan) stale))
+                    marked (zipmap (:mark plan)
+                                   (map (fn [s] {:deleted-at today :size (get inv s)})
+                                        (:mark plan)))
+                    next-tombs (merge kept marked)]
+                (hio/mkdirs! store)
+                (hio/write-latin1! (cas-tombs-path store) (canon next-tombs))
+                (assoc plan :status :ok :applied true :deleted (count (:drop plan))
+                       :stale stale :tombs (count next-tombs))))))))))
 
 (defn- peer-apply-one [src dst sha size]
   (let [s (hio/read-latin1 (cas-object-path src sha))]
@@ -619,9 +657,16 @@
                        (if (= :ok (:status r)) 0 1)))
       "cas-gc" (if-not a
                  (usage)
-                 (let [r (cas-gc a (boolean (some #{"--apply"} (cons b more))))]
-                   (println (canon r))
-                   (if (= :ok (:status r)) 0 1)))
+                 (let [tail (cons b more)
+                       days-str (market-flag tail "--retain-days")
+                       days (when days-str (cas/parse-int days-str))]
+                   (if (and days-str (or (nil? days) (neg? days)))
+                     (do (println (canon {:status :refused :reason "cas/bad-retain-days"})) 1)
+                     (let [r (cas-gc a {:apply? (boolean (some #{"--apply"} tail))
+                                        :retain-days days}
+                                     (subs (:iso (hio/now-parts)) 0 10))]
+                       (println (canon r))
+                       (if (= :ok (:status r)) 0 1)))))
       "cas-reconcile" (if-not (and a b)
                         (usage)
                         (let [r (cas-reconcile a (peer-args (cons b more)) (subs (:iso (hio/now-parts)) 0 10))]
