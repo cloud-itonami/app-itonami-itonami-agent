@@ -14,6 +14,7 @@
     cas-verify <store>
     peer-push  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-pull  <store> <peerdir> [--as <node> --registry <reg.edn>]
+    peer-repair <store> <peerdir> [--as <node> --registry <reg.edn>]
     market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD]
     test       <cases.edn>
 
@@ -142,6 +143,9 @@
                         m (reduce (fn [mm [rel bs]] (cas/manifest-add mm rel bs)) {} files)]
                     (cas/verify-manifest m (fn [rel] (if (contains? absent rel) nil (get (merge files tamper) rel)))))
     :peer-plan (peer/sync-plan (:local c {}) (:remote c {}))
+    :peer-repair-plan (peer/repair-plan {:mismatch (:mismatch c [])
+                                         :missing (:missing c [])}
+                                        (:remote c {}))
     :market-match (market/match-orders (:asks c []) (:bids c []))
     :market-attest {:valid (market/valid-attestation? (:att c) (:today c ""))}
     :decide (let [p (load-dir dir read-text)]
@@ -217,7 +221,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir> [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -375,6 +379,39 @@
           (do (cas-write-manifest! dst (peer-merge-manifest dstm srcm (map :sha jobs)))
               {:status :ok :direction direction :plan plan :applied (count applied)}))))))
 
+(defn- peer-repair
+  "Heal tampered or missing local objects from a peer. Same gate as
+  peer-sync; then verify the local store, copy every repairable object
+  the peer manifest covers (re-hashed on receipt via peer-apply-one),
+  and verify again. :ok only when the final verify is clean; otherwise
+  refused with the remaining bad rels. The manifest is untouched: bad
+  rels already point at the right digests."
+  [store peerdir opts today]
+  (let [raw (when (:registry opts) (read-edn-file (:registry opts)))
+        registry (when raw (into {} (map (fn [[n e]] [n (if (map? e) (kw-keys e) e)]) raw)))
+        gate (peer-gate registry (:as opts) peerdir today)]
+    (if-not (:ok gate)
+      {:status :refused :gate (dissoc gate :ok)}
+      (let [lm (cas-read-manifest store)
+            read-local (fn [rel] (when-let [e (get lm rel)]
+                                   (when-let [s (hio/read-latin1 (cas-object-path store (:sha e)))]
+                                     (hio/bytes-of s))))
+            rm (cas-read-manifest peerdir)
+            plan (peer/repair-plan (cas/verify-manifest lm read-local) rm)
+            applied (mapv (fn [{:keys [sha size]}] (peer-apply-one peerdir store sha size))
+                          (:repair plan))
+            failed (filterv (complement :ok) applied)]
+        (if (seq failed)
+          {:status :refused :reason "peer/repair-copy-failed"
+           :plan plan :failed (mapv :sha failed)}
+          (let [vr (cas/verify-manifest lm read-local)
+                left (vec (sort (distinct (concat (:mismatch vr []) (:missing vr [])))))]
+            (if (seq left)
+              {:status :refused :reason "peer/repair-incomplete"
+               :unrepairable (:unrepairable plan) :remaining left}
+              {:status :ok :repaired (count applied)
+               :unrepairable (:unrepairable plan)})))))))
+
 (defn- market-today [more]
   (loop [as (seq more) today nil]
     (cond (nil? as) today
@@ -458,6 +495,11 @@
                     (let [r (peer-sync a b :fetch (peer-args more) (subs (:iso (hio/now-parts)) 0 10))]
                       (println (canon r))
                       (if (= :ok (:status r)) 0 1)))
+      "peer-repair" (if-not (and a b)
+                      (usage)
+                      (let [r (peer-repair a b (peer-args more) (subs (:iso (hio/now-parts)) 0 10))]
+                        (println (canon r))
+                        (if (= :ok (:status r)) 0 1)))
       "market-match" (if-not (and a b)
                        (usage)
                        (let [asks (mapv (fn [x] (if (map? x) (kw-keys x) x)) (or (read-edn-file a) []))

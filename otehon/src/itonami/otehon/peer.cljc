@@ -51,3 +51,19 @@
   "Describe an applied copy for the journal: digest, direction, bytes."
   [sha direction size verified?]
   {:sha sha :direction direction :size size :verified (boolean verified?)})
+
+(defn repair-plan
+  "Which bad rels a peer manifest can heal. `bad` is a verify-manifest
+  result; `remote` the peer's manifest {rel {:sha :size}}. Returns
+  sorted :repair [{:rel :sha :size}] (copy these objects from the peer
+  and re-hash on receipt) and sorted :unrepairable [rel] (the peer
+  lacks them, so the caller must refuse or escalate). Deterministic:
+  rels are deduplicated and every list is sorted."
+  [bad remote]
+  (let [rels (sort (distinct (concat (:mismatch bad []) (:missing bad []))))]
+    (reduce (fn [acc rel]
+              (if-let [{:keys [sha size]} (get remote rel)]
+                (update acc :repair conj {:rel rel :sha sha :size size})
+                (update acc :unrepairable conj rel)))
+            {:repair [] :unrepairable []}
+            rels)))
