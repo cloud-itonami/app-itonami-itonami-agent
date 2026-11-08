@@ -771,4 +771,126 @@
    :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"}
    :args ["-m" "k2"]
    :expect {:lines ["no fallback hops in the effective chain"
-                    "(pinned run — fallback is disabled)"]}}]}]
+                    "(pinned run — fallback is disabled)"]}}
+
+  ;; ------------------------------------------------------------ run (JUN-1036 S2a)
+  ;; :seed writes a scratch profile (scripts run for real — echo/printf/
+  ;; shell builtins only, no network). :request carries the job and a
+  ;; pinned :now. :needles assert doc substrings; :output-doc pins the
+  ;; full document on the core cases.
+  {:id :run/no-agent-ok :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-no-agent-ok\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"note\": \"keep me\", \"jobs\": [{\"id\": \"nightly\", \"name\": \"nightly\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"no_agent\": true, \"script\": \"hello.sh\", \"prompt\": \"say hi\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/hello.sh" "#!/bin/sh\necho hi\n"}
+   :request {:job "nightly"}
+   :expect {:exit 0 :status "ok" :lines ["ran nightly: ok"]
+            :output-doc "# Cron Job: nightly\n\n**Job ID:** nightly\n**Run Time:** 2026-11-08 00:00:00\n**Schedule:** every 60m\n**Engine:** itonami-agent\n\n## Prompt\n\n[IMPORTANT: You are running as a scheduled cron job. DELIVERY: The configured lane is 'local'. Return your report as the final response; do NOT use send_message or try to deliver the output yourself. The scheduler stores local-lane output in the cron output record and sends non-local lanes through its configured delivery adapter. A missing adapter is recorded as delivery_failed. SILENT: If there is genuinely nothing new to report, respond with exactly \"[SILENT]\" (nothing else) to suppress delivery. [SILENT] is a literal ASCII control token — never translate or rephrase it, whatever language the rest of your answer uses. Never combine [SILENT] with content — either report your findings normally, or say [SILENT] and nothing more. FAILURE: If a delegated child fails and this cron run must be recorded as failed, put [CRON_FAILURE] on the first line by itself, then explain the child failure on following lines. RECURSION: This is a run of an EXISTING scheduled job — execute the task now. NEVER create or update a cron job because of recurring or future-schedule language in the task prompt below; treat phrasing like \"each Monday\" or \"every day at 9\" as context for this run, not as a request to schedule another job.]\n\n## Script Output\nThe following data was collected by a pre-run script. Use it as context for your analysis.\n\n```\nhi\n```\n\nsay hi\n\n## Response\n\nhi\n"
+            :job-after {"id" "nightly" "name" "nightly" "enabled" true "state" "scheduled" "no_agent" true "script" "hello.sh" "prompt" "say hi" "schedule" {"kind" "interval" "minutes" 60 "display" "every 60m"} "last_run_at" "2026-11-08T00:00:00.000000+09:00" "last_status" "ok" "last_error" nil "last_delivery_error" nil "failure_streak" 0 "repeat" {"completed" 1}}
+            :jobs-doc {"note" "keep me" "updated_at" "2026-11-08T00:00:00.000000+09:00"}}}
+  {:id :run/no-agent-blank :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-no-agent-blank\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"nightly\", \"name\": \"nightly\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"no_agent\": true, \"script\": \"empty.sh\", \"prompt\": \"say hi\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/empty.sh" "#!/bin/sh\n:\n"}
+   :request {:job "nightly"}
+   :expect {:exit 0 :status "silent" :lines ["ran nightly: silent"]
+            :needles ["script produced no output"]
+            :doc-has {"script produced no output" true}
+            :job-after {"last_status" "ok" "last_error" nil "failure_streak" 0 "repeat" {"completed" 1}}}}
+  {:id :run/script-not-found :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-script-not-found\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"nightly\", \"name\": \"nightly\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"no_agent\": true, \"script\": \"missing.sh\", \"prompt\": \"say hi\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "nightly"}
+   :expect {:exit 1 :status "error" :lines ["ran nightly: error"]
+            :needles ["[CRON_FAILURE] script not found in profile scripts/: missing.sh"]
+            :doc-has {"[CRON_FAILURE] script not found in profile scripts/: missing.sh" true}
+            :job-after {"last_status" "error" "last_error" "script not found in profile scripts/: missing.sh" "failure_streak" 1}}}
+  {:id :run/script-unsafe :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-script-unsafe\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"nightly\", \"name\": \"nightly\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"no_agent\": true, \"script\": \"../evil.sh\", \"prompt\": \"say hi\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "nightly"}
+   :expect {:exit 1 :status "error" :lines ["ran nightly: error"]
+            :needles ["unsafe script path; expected a regular file below scripts/"]
+            :doc-has {"unsafe script path; expected a regular file below scripts/" true}
+            :job-after {"last_status" "error" "last_error" "unsafe script path; expected a regular file below scripts/: ../evil.sh" "failure_streak" 1}}}
+  {:id :run/script-error :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-script-error\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"nightly\", \"name\": \"nightly\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"no_agent\": true, \"script\": \"fail.sh\", \"prompt\": \"say hi\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/fail.sh" "#!/bin/sh\necho out\necho err >&2\nexit 3\n"}
+   :request {:job "nightly"}
+   :expect {:exit 1 :status "error" :lines ["ran nightly: error"]
+            :output-doc "# Cron Job: nightly (FAILED)\n\n**Job ID:** nightly\n**Run Time:** 2026-11-08 00:00:00\n**Schedule:** every 60m\n**Engine:** itonami-agent\n\n## Prompt\n\n[IMPORTANT: You are running as a scheduled cron job. DELIVERY: The configured lane is 'local'. Return your report as the final response; do NOT use send_message or try to deliver the output yourself. The scheduler stores local-lane output in the cron output record and sends non-local lanes through its configured delivery adapter. A missing adapter is recorded as delivery_failed. SILENT: If there is genuinely nothing new to report, respond with exactly \"[SILENT]\" (nothing else) to suppress delivery. [SILENT] is a literal ASCII control token — never translate or rephrase it, whatever language the rest of your answer uses. Never combine [SILENT] with content — either report your findings normally, or say [SILENT] and nothing more. FAILURE: If a delegated child fails and this cron run must be recorded as failed, put [CRON_FAILURE] on the first line by itself, then explain the child failure on following lines. RECURSION: This is a run of an EXISTING scheduled job — execute the task now. NEVER create or update a cron job because of recurring or future-schedule language in the task prompt below; treat phrasing like \"each Monday\" or \"every day at 9\" as context for this run, not as a request to schedule another job.]\n\n## Script Error\nThe data-collection script failed. Report this to the user.\n\n```\nScript exited with code 3\nstderr:\nerr\nstdout:\nout\n```\n\nsay hi\n\n## Response\n\n[CRON_FAILURE] Script exited with code 3\nstderr:\nerr\nstdout:\nout\n\n## Error\n\n```\nScript exited with code 3\nstderr:\nerr\nstdout:\nout\n```\n"
+            :job-after {"last_status" "error" "last_error" "Script exited with code 3\nstderr:\nerr\nstdout:\nout" "failure_streak" 1}}}
+  {:id :run/wake-false :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-wake-false\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"nightly\", \"name\": \"nightly\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"no_agent\": true, \"script\": \"gate.sh\", \"prompt\": \"say hi\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/gate.sh" "#!/bin/sh\nprintf '%s\\n' '{\"wakeAgent\": false}'\n"}
+   :request {:job "nightly"}
+   :expect {:exit 0 :status "silent" :lines ["ran nightly: silent"]
+            :needles ["Script gate returned `wakeAgent=false`"]
+            :doc-has {"Script gate returned `wakeAgent=false`" true}
+            :job-after {"last_status" "ok" "repeat" {"completed" 1}}}}
+  {:id :run/monitor-baseline :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-monitor-baseline\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent1\", \"name\": \"agent1\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"monitor_script\": \"mon.sh\", \"prompt\": \"watch\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/mon.sh" "#!/bin/sh\nprintf 'v1'\n"}
+   :request {:job "agent1"}
+   :expect {:exit 3 :status "pending" :first-line "inference pending for agent1"
+            :snapshot "v1"
+            :snapshot-file "v1"
+            :monitor-state {"last_output_hash" "3bfc269594ef649228e9a74bab00f042efc91d5acc6fbee31a382e80d42388fe" "last_changed_at" "2026-11-08T00:00:00.000000+09:00"}}}
+  {:id :run/monitor-unchanged :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-monitor-unchanged\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent8\", \"name\": \"agent8\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"monitor_script\": \"mon.sh\", \"monitor_state\": {\"last_output_hash\": \"3bfc269594ef649228e9a74bab00f042efc91d5acc6fbee31a382e80d42388fe\", \"last_changed_at\": \"2026-01-01T00:00:00.000000+09:00\"}, \"prompt\": \"watch\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/mon.sh" "#!/bin/sh\nprintf 'v1'\n"
+          "cron/output/agent8/monitor_last_output.txt" "v1"}
+   :request {:job "agent8"}
+   :expect {:exit 0 :status "silent" :lines ["ran agent8: silent"]
+            :needles ["monitor output unchanged"]
+            :doc-has {"monitor output unchanged" true}
+            :snapshot-file "v1"}}
+  {:id :run/monitor-failed :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-monitor-failed\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent2\", \"name\": \"agent2\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"monitor_script\": \"boom.sh\", \"prompt\": \"watch\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/boom.sh" "#!/bin/sh\necho kaput >&2\nexit 1\n"}
+   :request {:job "agent2"}
+   :expect {:exit 1 :status "error" :lines ["ran agent2: error"]
+            :needles ["Monitor source failed: Script exited with code 1" "kaput"]
+            :doc-has {"Monitor source failed: Script exited with code 1" true "kaput" true}
+            :job-after {"last_status" "error" "last_error" "Monitor source failed: Script exited with code 1\nstderr:\nkaput" "failure_streak" 1}}}
+  {:id :run/agent-pending :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-agent-pending\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent3\", \"name\": \"agent3\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"script\": \"hello.sh\", \"prompt\": \"do the thing\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/hello.sh" "#!/bin/sh\necho hi\n"}
+   :request {:job "agent3"}
+   :expect {:exit 3 :status "pending" :first-line "inference pending for agent3"
+            :messages-include ["inference pending for agent3" ":status :planned" "## Script Output" "do the thing" "mishima"]
+            :snapshot nil :snapshot-file nil :monitor-state nil
+            :jobs-doc {"jobs" [{"id" "agent3" "name" "agent3" "enabled" true "state" "scheduled" "next_run_at" "2026-11-08T01:00:00+09:00" "script" "hello.sh" "prompt" "do the thing" "schedule" {"kind" "interval" "minutes" 60 "display" "every 60m"}}]}}}
+  {:id :run/job-not-found :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-job-not-found\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"note\": \"keep me\", \"jobs\": []}"}
+   :request {:job "nope"}
+   :expect {:exit 1 :status "refused" :reason "job/not-found"
+            :jobs-doc {"note" "keep me"}}}
+  {:id :run/monitor-url :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-monitor-url\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent9\", \"name\": \"agent9\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"monitor_url\": \"https://example.com/ping\", \"prompt\": \"watch\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "agent9"}
+   :expect {:exit 1 :status "refused" :reason "monitor/monitor-url-unavailable"}}
+  {:id :run/profile-invalid :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "cron/jobs.json" "{\"jobs\": []}"}
+   :request {:job "nightly"}
+   :expect {:exit 1 :status "refused" :reason "rail/itonami-without-manifest"}}]}]

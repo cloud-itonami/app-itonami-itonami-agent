@@ -26,6 +26,7 @@ otehon/bin/itonami-otehon <basilisp|bb|nbb> pause      [reason words]...   (the 
 otehon/bin/itonami-otehon <basilisp|bb|nbb> resume
 otehon/bin/itonami-otehon <basilisp|bb|nbb> status
 otehon/bin/itonami-otehon <basilisp|bb|nbb> model      <dir> [NAME] [--provider P] [--model M]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> run-exec   <profile-dir> <job-id-or-name> [--capability c]...
 otehon/bin/itonami-otehon <basilisp|bb|nbb> fallback   <dir> [-m M] [--provider P]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> test       otehon/test/cases.edn
 otehon/bin/run-shared-cases [basilisp bb nbb]
@@ -136,17 +137,17 @@ placement standard live in [PORTABILITY.md](./PORTABILITY.md).
 
 `bin/run-shared-cases` runs on each runner:
 
-- `test/cases.edn` — 165 cases, 27 of them negative controls. Each
+- `test/cases.edn` — 178 cases, 27 of them negative controls. Each
   negative control with an edit is also run on the unedited fixture and
   must then *not* match, so the edit causes the rejection. The store
-  cases (pause/status/model/fallback) touch a real scratch store
+  cases (pause/status/model/fallback/run) touch a real scratch store
   (`test/scratch/`, ignored) instead of fixture text: `:seed` writes
   files, `:at` pins the marker timestamp, and adversarial seeds (garbage
   pid, unparsable peers, unnamable profile dirs, folded config text,
   non-string provider values) are asserted as positive cases — paths the
   legacy commands never refuse carry no negative control.
-- `test/must-fail.edn` — nine deliberately wrong cases (one a no-op edit).
-  Every runner must report all nine as FAIL; otherwise the harness could not
+- `test/must-fail.edn` — eleven deliberately wrong cases (one a no-op edit).
+  Every runner must report all eleven as FAIL; otherwise the harness could not
   tell a broken core from a working one.
 - the canonical output of `check` / `dry-run` on the fixtures, a
   pause → status → resume → resume CLI flow on a scratch store
@@ -172,7 +173,12 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
    delivery lanes, the executions ledger.
 2. ~~`cron tick` and `profile import/export`~~ — planned as above.
 3. ~~One turn (`-z`) with the toolset gate~~ — gated as above (`turn-gate`).
-4. Execute the plans on the host (script spawn, rail call, save, apply).
+4. ~~Execute the plans on the host~~ — done 2026-11-08 (JUN-1036
+   S2a): `run-exec` runs one job's host side (script spawn, monitor
+   sources, output-doc save, jobs.json apply) verbatim from the legacy
+   `run-job` path, stopping at `:planned` with exit 3 when an
+   inference turn is needed. What stays open: the live rail call
+   (S2b), delivery lanes, the executions ledger.
 5. Use these outputs as reference values for the Native route (AWAI-60,
    AWAI-131), recorded per the oracle rule, never as its fallback.
 6. ~~Decentralized storage slice~~ — done 2026-11-08 (AWAI-232):
@@ -222,4 +228,6 @@ copy census with `--copies N` threshold and per-peer gates),
 `pause`/`resume`/`status` verbatim with the legacy CLI, plus the
 API/command compat matrix in `otehon/COMPAT.md`),
 `docs/evidence/otehon-model-20261108.md` (165 shared cases;
-`model`/`fallback` verbatim, textual config edit with atomic replace).
+`model`/`fallback` verbatim, textual config edit with atomic replace),
+`docs/evidence/otehon-run-20261108.md` (178 shared cases; `run-exec`
+host side verbatim, stops at `:planned` with exit 3).
