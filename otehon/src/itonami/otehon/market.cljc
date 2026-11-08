@@ -3,12 +3,14 @@
 
   Matching is a pure function over data: asks and bids are maps, the rule
   is cheapest fitting ask wins with deterministic tie-breaks, and one ask
-  serves one bid (one capacity grant per node). Attestations carry an
-  HMAC-SHA256 :sig over a canonical payload, verified against a
-  per-issuer shared secret (permissioned issuers; the secret leaves the
-  keyring only at the CLI boundary). Asymmetric signatures stay open:
-  there is no portable ed25519 in .cljc, so open-market strangers still
-  cannot be verified — only admitted issuers."
+  serves one bid (one capacity grant per node). Attestations carry a :sig
+  over a canonical payload (`signature-payload`, public so the native
+  route hashes the same bytes). The otehon demo suite verifies with
+  HMAC-SHA256 against a per-issuer shared secret; asymmetric keys plug
+  into `verify-asymmetric` as the injected `verify-fn` — otehon checks
+  shape, expiry, issuer, and encodability first, crypto only after.
+  Pure ed25519 stays open (measured infeasible on basilisp): strangers
+  still cannot be verified until the native route supplies keys."
   (:require [clojure.string :as str]
             [itonami.otehon.cas :as cas]
             [itonami.otehon.text :as text]))
@@ -59,9 +61,11 @@
 
 (def ^:private sig-fields [:node :cpu :mem-gib :disk-gib :price :expires :issuer])
 
-(defn- payload-bytes
+(defn signature-payload
   "Canonical signing payload: sig-fields joined with `|`, latin-1.
-  nil when a field is missing or unencodable — never sign ambiguity."
+  nil when a field is missing or unencodable — never sign ambiguity.
+  Public: the native route hashes exactly these bytes with its own
+  asymmetric keys; the .cljc side never sees private key material."
   [att]
   (when (every? #(contains? att %) sig-fields)
     (encode-latin1 (str/join "|" (map #(str (get att %)) sig-fields)))))
@@ -72,9 +76,37 @@
   missing a field or leaves latin-1. The secret travels the CLI
   boundary only; it never lands in a manifest, ask file, or case."
   [att secret]
-  (when-let [pb (payload-bytes att)]
+  (when-let [pb (signature-payload att)]
     (when-let [kb (encode-latin1 secret)]
       (assoc att :sig (cas/bytes-hex (hmac-sha256 kb pb))))))
+
+(defn verify-hmac-sig
+  "The otehon demo suite: HMAC-SHA256 over `payload` (a signature-payload
+  vector) with the issuer's shared `secret`. Native asymmetric keys
+  replace this fn, never its call shape: (payload sig pub-or-secret)
+  -> truthy."
+  [payload sig secret]
+  (boolean (and (vector? payload) (string? sig) (string? secret)
+                (let [kb (encode-latin1 secret)]
+                  (and kb (= sig (cas/bytes-hex (hmac-sha256 kb payload))))))))
+
+(defn verify-asymmetric
+  "Asymmetric verification with injected crypto. `pubkeys` {issuer key}
+  holds opaque key strings otehon never parses; `verify-fn`
+  (payload-bytes sig key -> truthy) comes from the host/native route.
+  Shape, expiry, issuer-presence, and payload-encodability are checked
+  first — crypto runs only when they pass. Returns {:valid bool}
+  with :reason on refusal. Pure: identical on all runners."
+  [att pubkeys verify-fn today]
+  (cond (not (valid-attestation? att today))
+        {:valid false :reason "market/attestation-invalid"}
+        (not (contains? pubkeys (:issuer att)))
+        {:valid false :reason "market/unknown-issuer"}
+        :else
+        (let [pb (signature-payload att)]
+          (cond (nil? pb) {:valid false :reason "market/unsignable"}
+                (verify-fn pb (:sig att) (get pubkeys (:issuer att))) {:valid true}
+                :else {:valid false :reason "market/signature-invalid"}))))
 
 (defn valid-signature?
   "True when `att` carries the :sig its :issuer would mint with the

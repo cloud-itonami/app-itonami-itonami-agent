@@ -567,4 +567,40 @@
              {:peer "p2" :manifest {"r1" {:sha "aa" :size 1}}}]
    :expect {:under [] :healthy 1 :peers ["p1" "p2"] :objects 1}}
   {:id :fleet-plan-empty :op :fleet-plan :desired 2 :remotes []
-   :expect {:under [] :healthy 0 :peers [] :objects 0}}]}
+   :expect {:under [] :healthy 0 :peers [] :objects 0}}
+
+  ;; ------------------------------------------------------------ asymmetric flow
+  {:id :asym-valid-allow :op :market-verify-asym :today "2026-11-09" :via "allow"
+   :pubkeys {"k" "PUB"}
+   :att {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "k" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+   :expect {:valid true
+            :called-with {:payload [110 49 124 52 124 56 124 49 48 48 124 53 124 50 48 50 54 45 49 50 45 51 49 124 107]
+                          :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"
+                          :pub "PUB"}}}
+  {:id :asym-deny :op :market-verify-asym :today "2026-11-09" :via "deny"
+   :pubkeys {"k" "PUB"}
+   :att {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "k" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+   :expect {:valid false :reason "market/signature-invalid"
+            :called-with {:payload [110 49 124 52 124 56 124 49 48 48 124 53 124 50 48 50 54 45 49 50 45 51 49 124 107]
+                          :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"
+                          :pub "PUB"}}}
+  {:id :asym-expired :op :market-verify-asym :today "2026-11-09" :via "allow"
+   :pubkeys {"k" "PUB"}
+   :att {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-01-01" :issuer "k" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+   :expect {:valid false :reason "market/attestation-invalid" :called-with nil}}
+  {:id :asym-unknown-issuer :op :market-verify-asym :today "2026-11-09" :via "allow"
+   :pubkeys {"k" "PUB"}
+   :att {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "zz" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+   :expect {:valid false :reason "market/unknown-issuer" :called-with nil}}
+  {:id :asym-hmac :op :market-verify-asym :today "2026-11-09" :via "hmac"
+   :pubkeys {"k" "s3cr3t"}
+   :att {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "k" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+   :expect {:valid true}}
+  {:id :asym-hmac-wrong :op :market-verify-asym :today "2026-11-09" :via "hmac"
+   :pubkeys {"k" "wrong"}
+   :att {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "k" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+   :expect {:valid false :reason "market/signature-invalid"}}
+  {:id :asym-unsignable :op :market-verify-asym :today "2026-11-09" :via "allow"
+   :pubkeys {"k" "PUB"}
+   :att {:node "日本" :cpu 1 :mem-gib 1 :disk-gib 10 :price 1 :expires "2026-12-31" :issuer "k" :sig "00"}
+   :expect {:valid false :reason "market/unsignable" :called-with nil}}]}
