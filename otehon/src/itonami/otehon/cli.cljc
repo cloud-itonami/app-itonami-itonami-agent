@@ -55,6 +55,7 @@
             [itonami.otehon.run :as run]
             [itonami.otehon.doctor :as doctor]
             [itonami.otehon.sessions :as sessions]
+            [itonami.otehon.notepad :as notepad]
             [itonami.otehon.cas :as cas]
             [itonami.otehon.peer :as peer]
             [itonami.otehon.market :as market]))
@@ -118,7 +119,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -144,6 +145,8 @@
     :run (ops-run c scratch)
     :doctor (ops-doctor c scratch)
     :sessions (ops-sessions c scratch)
+    :notepad (ops-notepad c scratch)
+    :profile (ops-profile c scratch)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -574,10 +577,10 @@
       (some? url) {:refused "monitor/monitor-url-unavailable"}
       :else nil)))
 
-(defn- exec-plan [prof job-ref capabilities now stamp run-at script monitor-context]
+(defn- exec-plan [prof job-ref capabilities now stamp run-at script monitor-context notepad]
   (run/run-plan prof job-ref {:capabilities capabilities :script script :now now
                               :stamp stamp :run-at run-at
-                              :notepad nil :linked nil :monitor-context monitor-context}))
+                              :notepad notepad :linked nil :monitor-context monitor-context}))
 
 (defn- apply-turn!
   "Apply a finished agent turn: doc, jobs.json record and audit rows.
@@ -633,7 +636,13 @@
         stamp (exec/stamp-of iso)
         run-at (exec/human-of iso)
         micros (exec/micros-of iso (:ms now-map))
-        plan (exec-plan prof job-ref capabilities now stamp run-at nil nil)]
+        ;; the notepad section rides agent-turn prompts only (read-only;
+        ;; a missing store reads as empty). no_agent docs never render it,
+        ;; exactly like the legacy no-agent path.
+        found (cron/find-job (:jobs prof) job-ref)
+        nsec (when (and (some? found) (not (true? (get found "no_agent"))))
+               (notepad/render-section home (get found "id")))
+        plan (exec-plan prof job-ref capabilities now stamp run-at nil nil nsec)]
     (cond
       (= :refused (:status plan))
       {:exit 1 :lines [(str "refused: " (:reason plan))] :detail {:status "refused" :reason (:reason plan)}}
@@ -682,7 +691,7 @@
 
           :else
           (let [plan2 (if (and (some? mon) (:changed? mon))
-                        (exec-plan prof job-ref capabilities now stamp run-at nil (:context mon))
+                        (exec-plan prof job-ref capabilities now stamp run-at nil (:context mon) nsec)
                         plan)
                 req (first (:exec plan2))]
             (cond
@@ -707,7 +716,7 @@
               (let [script (spawn-script! prof (cron/find-job (:jobs prof) job-ref)
                                           (get-in plan2 [:job :script]))
                     plan3 (exec-plan prof job-ref capabilities now stamp run-at script
-                                     (when (and (some? mon) (:changed? mon)) (:context mon)))]
+                                     (when (and (some? mon) (:changed? mon)) (:context mon)) nsec)]
                 (cond
                   (contains? #{:silent :ok} (:status plan3))
                   (let [failed? (= "script_error" (:exit-reason plan3))
@@ -871,6 +880,102 @@
                             (:sub req) (:id req) (:limit req))]
         (assoc r :messages (:lines r))))))
 
+(def notepad-usage
+  "usage: itonami-agent cron notepad <job-id> set <key> <value> | get <key> | delete <key> | list")
+
+(defn- notepad-for
+  "One notepad invocation against a profile home. `verb`/`key`/`value`
+  mirror the legacy `cron notepad` args. Shared by the :notepad op and
+  the product command."
+  [home job verb key value now-iso]
+  (try
+    (case (str verb)
+      "set" (if (nil? value)
+              {:exit 2 :lines ["usage: itonami-agent cron notepad <job-id> set <key> <value>"]}
+              (let [saved (notepad/set-note home job key value now-iso)]
+                {:exit 0 :lines [(str (get saved "key") " = " (get saved "value"))]}))
+      "get" (if-let [v (notepad/get-note home job key)]
+              {:exit 0 :lines [v]}
+              {:exit 0 :lines [(str key " is not set")]})
+      "delete" {:exit 0 :lines [(if (notepad/delete-note home job key)
+                                  "deleted"
+                                  (str "no such key: " key))]}
+      "list" {:exit 0 :lines (mapv (fn [n] (str (get n "key") " = " (get n "value")))
+                                   (notepad/list-notes home job))}
+      {:exit 2 :lines [notepad-usage]})
+    (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+      {:exit 1 :lines [(ex-message e)]})))
+
+(defn- ops-notepad [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [req (:request c {})
+          home (str dir "/profiles/" (or (:profile req) "default"))
+          job (str (:job req ""))]
+      (doseq [{:keys [key value]} (:setup req [])]
+        (notepad/set-note home job key value "2026-11-08T00:00:00+09:00"))
+      (let [r (notepad-for home job (:sub req) (:key req) (:value req)
+                           "2026-11-08T00:00:00+09:00")]
+        (assoc r :messages (:lines r))))))
+
+(defn- profile-list-lines
+  [store]
+  (vec (concat [(str (text/pad-end "Profile" 34) (text/pad-end "Model" 34)
+                     (text/pad-end "itonami" 9) "Scheduler")]
+               (mapv (fn [n]
+                       (let [home (str store "/profiles/" n)
+                             prof (profile/load-profile
+                                   {:name n :read-text (hio/read-text-fn home)
+                                    :parse-edn hio/parse-edn :parse-json hio/parse-json})
+                             cfg (:config prof)
+                             m (:manifest prof)]
+                         (str (text/pad-end n 34)
+                              (text/pad-end (str (get-in cfg ["model" "default"])) 34)
+                              (text/pad-end (if m "yes" "-") 9)
+                              (if m (name (get-in m [:runtime :scheduler] :hermes)) "hermes"))))
+                     (cons "default" (listing-names store))))))
+
+(defn- profile-show-lines
+  [store name]
+  (let [home (str store "/profiles/" name)]
+    (if-not (hio/dir? home)
+      {:exit 1 :lines [(str "profile not found: " name)]}
+      (let [prof (assoc (profile/load-profile
+                         {:name name :read-text (hio/read-text-fn home)
+                          :parse-edn hio/parse-edn :parse-json hio/parse-json})
+                        :home home)
+            cfg (:config prof)]
+        {:exit 0
+         :lines [(str "profile: " name)
+                 (str "home: " home)
+                 (str "description: " (get-in prof [:profile-yaml "description"]))
+                 (str "model: " (get-in cfg ["model" "provider"]) "/"
+                      (get-in cfg ["model" "default"]))
+                 (str "jobs: " (count (:jobs prof)))
+                 (str "itonami: " (if (:manifest prof)
+                                    (let [m (:manifest prof)]
+                                      (str "{"
+                                           (str/join ", "
+                                                     (keep (fn [k]
+                                                             (when (contains? m k)
+                                                               (str k " " (pr-str (get m k)))))
+                                                           [:runtime :placement :bundle]))
+                                           "}"))
+                                    "no"))]}))))
+
+(defn- ops-profile [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [req (:request c {})
+          r (case (str (:sub req "list"))
+              "list" {:exit 0 :lines (profile-list-lines dir)}
+              "show" (profile-show-lines dir (or (:name req) "default"))
+              {:exit 2 :lines [(str "unknown profile command: " (:sub req))]}
+              )]
+      (assoc r :messages (:lines r)))))
+
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
         base (if dir (hio/read-text-fn dir) (constantly nil))
@@ -921,7 +1026,7 @@
           :else (recur (next as) (update m :pos conj (first as))))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list|show <name>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -1407,6 +1512,22 @@
                                        (first pos) (second pos) limit)]
                    (doseq [l (:lines r)] (println l))
                    (:exit r))
+      "notepad" (if (or (not a) (not b))
+                  (usage)
+                  (let [[verb k v] more
+                        r (notepad-for (str a) b verb k v (:iso (host-now)))]
+                    (doseq [l (:lines r)] (println l))
+                    (:exit r)))
+      "profile" (let [sub (or a "list")]
+                  (cond (= sub "list")
+                        (let [r {:exit 0 :lines (profile-list-lines (pause/store-root hio/env))}]
+                          (doseq [l (:lines r)] (println l))
+                          (:exit r))
+                        (= sub "show")
+                        (let [r (profile-show-lines (pause/store-root hio/env) (or b "default"))]
+                          (doseq [l (:lines r)] (println l))
+                          (:exit r))
+                        :else (do (println (str "unknown profile command: " sub)) 2)))
       "cas-put" (let [files (if b (cons b more) [])]
                   (if (or (nil? a) (empty? files))
                     (usage)

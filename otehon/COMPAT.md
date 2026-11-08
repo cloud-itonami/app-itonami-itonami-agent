@@ -23,8 +23,8 @@ covered by shared cases on all three runners.
 | `vault` | `vault-cmd` | — | S6 |
 | `mcp` | `mcp-cmd` | — | S6 |
 | `dapps` | `dapps-cmd` | — | S6 |
-| `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor) | done run/tick-exec (JUN-1036 S2a/S2b; ledger-backed runs/incidents S4/S5) |
-| `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check`, `store-plan` (import/export copy plan) | S4 remaining verbs |
+| `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor), `notepad` (KV verbatim) | done run/tick-exec + notepad (JUN-1036 S2a/S2b/S4a; ledger-backed runs/incidents S4/S5) |
+| `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check`, `store-plan` (import/export copy plan), `profile list/show` | S4 remaining verbs (refresh/itonamify/adopt/release/soul/did/organize/readiness/hy-*) |
 | `doctor` | `doctor-cmd` | `doctor` (store verbs; S6-owned finding kinds deferred, recorded below) | done (JUN-1036 S3b) |
 | `sessions [list]/show/resume` | `sessions-cmd` | `sessions` (reads state.db read-only; resume refuses verbatim) | done (JUN-1036 S3b) |
 | `model [NAME] [--provider]` | `model-cmd` | `model` (positional dir, otehon convention) | done (JUN-1036 S3b) |
@@ -73,7 +73,7 @@ from source, the rest follow the module name until their slice lands.
 | `main.cljk` *CLI dispatch* | `cli.cljc` | partial (this table) |
 | `manifest.cljk` | `manifest.cljc` | done |
 | `mcp.cljk`, `mcp_http_client.mjs` | — | planned S6 |
-| `notepad.cljk` | — | planned S4 (sqlite host) |
+| `notepad.cljk` | `notepad.cljc` | done (JUN-1036 S4a; clear is ported, unwired — no CLI surface) |
 | `oauth.cljk` | — | planned S6 |
 | `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; serve/run S5) |
 | `pause.cljk` * | `pause.cljc` | done (JUN-1036 S3a) |
@@ -109,6 +109,10 @@ from source, the rest follow the module name until their slice lands.
   doctor finding kinds (unsupported toolsets/tools, browser backend,
   oauth cache) and the sqlite write path stay later slices; the resume
   re-entry landing was already a verbatim refusal in the legacy).
-- S4 store writes: adopt/release/refresh/notepad/profile verbs, soul.
+- S4a store verbs part 1 — done (JUN-1036: `cron notepad`
+  set/get/delete/list with caps verbatim, job section wired into
+  run prompts; `profile list`/`show` reads).
+- S4 remaining: refresh/itonamify/adopt/release/soul/did/organize/readiness/hy-*,
+  runs/incidents reads, ledger-backed writes.
 - S5 messaging: gateway/send/deliver/ledger/peers/chat.
 - S6 tools: backends + bridge/chat/vault/mcp/dapps CLIs.

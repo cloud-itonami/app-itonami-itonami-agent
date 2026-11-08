@@ -303,6 +303,13 @@
      :clj (System/currentTimeMillis)
      :cljs (.now js/Date)))
 
+(defn utf8-bytes
+  "The UTF-8 byte length of `s`."
+  [s]
+  #?(:lpy (len (.encode (str s) "utf-8"))
+     :clj (count (.getBytes (str s) "UTF-8"))
+     :cljs (.-length (.encode (js/TextEncoder.) (str s)))))
+
 (defn random-hex
   "N random bytes as lowercase hex."
   [n]
@@ -437,6 +444,28 @@
                (.exec db script)
                (finally (.close db))))
      :clj (let [r (spawn-sync! ["sqlite3" (str db-path) script] {:timeout-ms 30000})]
+            (when-not (zero? (:exit r))
+              (throw (ex-info (str "sqlite3 failed: " (str/trim (:stderr r)))
+                              {:db db-path}))))))
+
+(defn sqlite-run!
+  "A DML statement with bound params (bb inlines escaped literals through
+  the sqlite3 CLI). Throws ex-info on failure."
+  [db-path sql params]
+  #?(:lpy (let [sqlite (python/__import__ "sqlite3")
+                con (.connect sqlite db-path)]
+            (try
+              (.execute con sql (vec params))
+              (.commit con)
+              (finally (.close con))))
+     :cljs (let [sqlite (js/require "node:sqlite")
+                 db (new (.-DatabaseSync sqlite) db-path)]
+             (try
+               (let [stmt (.prepare db sql)]
+                 (.apply (.-run stmt) stmt (clj->js (vec params))))
+               (finally (.close db))))
+     :clj (let [r (spawn-sync! ["sqlite3" (str db-path) (sqlite-inline sql params)]
+                               {:timeout-ms 30000})]
             (when-not (zero? (:exit r))
               (throw (ex-info (str "sqlite3 failed: " (str/trim (:stderr r)))
                               {:db db-path}))))))

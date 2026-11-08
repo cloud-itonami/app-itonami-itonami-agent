@@ -29,6 +29,8 @@ otehon/bin/itonami-otehon <basilisp|bb|nbb> model      <dir> [NAME] [--provider 
 otehon/bin/itonami-otehon <basilisp|bb|nbb> run-exec   <profile-dir> <job-id-or-name> [--capability c]...
 otehon/bin/itonami-otehon <basilisp|bb|nbb> doctor     [--profile P]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> sessions   [list|show <id>|resume] [--profile P] [--limit N]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> notepad    <profile-dir> <job> <verb> [key] [value]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> profile    [list|show <name>]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> fallback   <dir> [-m M] [--provider P]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> test       otehon/test/cases.edn
 otehon/bin/run-shared-cases [basilisp bb nbb]
@@ -139,7 +141,7 @@ placement standard live in [PORTABILITY.md](./PORTABILITY.md).
 
 `bin/run-shared-cases` runs on each runner:
 
-- `test/cases.edn` — 203 cases, 27 of them negative controls. Each
+- `test/cases.edn` — 219 cases, 27 of them negative controls. Each
   negative control with an edit is also run on the unedited fixture and
   must then *not* match, so the edit causes the rejection. The store
   cases (pause/status/model/fallback/run) touch a real scratch store
@@ -212,6 +214,13 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
    legacy filters and order, `resume` refuses verbatim. Eighteen shared
    cases. What stays open: S6-owned finding kinds (toolsets, browser,
    oauth), the sqlite write path, the live rail call.
+10. ~~Store verbs part 1 (`notepad`, `profile list/show`)~~ — done
+    2026-11-08 (JUN-1036 S4a): `cron notepad` set/get/delete/list with
+    the legacy caps and line formats (WAL store, 16KB values, 128-char
+    keys, 64KB per job); the job section renders into run prompts;
+    `profile list`/`show` print the legacy tables. Sixteen shared
+    cases. What stays open: S4 remaining verbs, runs/incidents reads,
+    ledger-backed writes, S5, S6.
 
 Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
 `docs/evidence/otehon-cljc-20261108.md`,
@@ -245,4 +254,7 @@ host side verbatim, stops at `:planned` with exit 3),
 `docs/evidence/otehon-turn-20261108.md` (185 shared cases; finished-turn
 apply verbatim, unresolved-lane message, ledger/queue rows deferred),
 `docs/evidence/otehon-doctor-sessions-20261108.md` (203 shared cases;
-`doctor` findings and `sessions` reads verbatim, S6 kinds deferred).
+`doctor` findings and `sessions` reads verbatim, S6 kinds deferred),
+`docs/evidence/otehon-notepad-profile-20261108.md` (219 shared cases;
+`cron notepad` KV verbatim, section wired into run prompts,
+`profile list`/`show` tables verbatim).
