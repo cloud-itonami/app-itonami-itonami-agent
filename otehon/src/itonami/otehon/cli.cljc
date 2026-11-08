@@ -113,7 +113,12 @@
                 prof (if (contains? c :jobs) (assoc prof :jobs (:jobs c)) prof)]
             (tick/tick-plan (:jobs prof) (:now c)))
     :turn-gate (turn/turn-gate (load-dir dir read-text) (:prompt c "")
-                               {:capabilities (:capabilities c [])})
+                               {:capabilities (:capabilities c [])
+                                :toolsets (:toolsets c)
+                                :tool-names (:tool-names c)
+                                :known-catalog (when (contains? c :known-catalog)
+                                                 (set (:known-catalog c)))
+                                :platform (:platform c)})
     :run-plan (let [prof (load-dir dir read-text)
                     prof (if (contains? c :jobs) (assoc prof :jobs (:jobs c)) prof)]
                 (run/run-plan prof (:job c)
@@ -126,6 +131,10 @@
     :store (store/plan-copy {:from (:source c {}) :to (:target c {})
                              :force? (:force? c) :direction (:direction c :export)
                              :from-name (:from-name c) :to-name (:to-name c)})
+    :apply-order (run/apply-order {:job-id (:job-id c) :stamp (:stamp c)
+                                  :status (:result-status c)
+                                  :output-path (:output-path c)
+                                  :record (:record c) :deliver (:deliver c)})
     :cas-sha {:sha (cas/sha256-hex (:bytes c []))}
     :cas-manifest (let [files (:files c {})
                         tamper (:tamper c {})
