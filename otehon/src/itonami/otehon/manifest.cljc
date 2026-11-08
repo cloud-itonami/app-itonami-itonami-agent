@@ -126,3 +126,26 @@
           (warn [k] "unknown key")))))))
 
 (defn errors [problems] (filterv #(= :error (:level %)) problems))
+
+(defn with-org
+  "Project a registry entry onto a manifest and mark it v2. The organisation
+  keys are replaced as a set; every other key is untouched. :ids is the
+  cross-walk to the profile's source repo and yakuwari id. :authority points
+  at yakuwari.edn when the profile has one; without it the profile may only
+  ask (:approval-required). Verbatim from manifest.cljk."
+  [m entry {:keys [yakuwari?]}]
+  (let [repo (get-in entry [:source :repo])
+        ;; manifest/agent-registry.edn writes :yakuwari/id; the P1 draft nested it
+        yid (or (:yakuwari/id entry) (get-in entry [:yakuwari :id]))
+        ids (cond-> {}
+              repo (assoc :repo repo)
+              yid (assoc :yakuwari/id (str yid))
+              (:did entry) (assoc :did (:did entry)))
+        org (into {} (remove (comp nil? val))
+                  (select-keys entry [:agent/kind :org/world :org/path :org/github :org/unit
+                                      :org/layer :invocation :awai/business]))]
+    (cond-> (merge (apply dissoc m org-keys) org)
+      true (assoc :itonami/schema schema-v2
+                  :authority (cond-> {:default-decision :approval-required}
+                               yakuwari? (assoc :source :yakuwari :ref "yakuwari.edn")))
+      (seq ids) (assoc :ids ids))))

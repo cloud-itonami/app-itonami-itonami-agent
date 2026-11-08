@@ -303,12 +303,52 @@
      :clj (spit path s :encoding "UTF-8" :append true)
      :cljs (.appendFileSync fs path s "utf8")))
 
+(defn- json-escape
+  "A JSON string literal with JavaScript escaping (controls other than
+  the named ones pass through raw), mirrored from bundle/json-string so
+  emission never depends on a host encoder."
+  [s]
+  (str "\""
+       (apply str
+              (map (fn [ch]
+                     (case ch
+                       \" "\\\""
+                       \\ "\\\\"
+                       \backspace "\\b"
+                       \formfeed "\\f"
+                       \newline "\\n"
+                       \return "\\r"
+                       \tab "\\t"
+                       (str ch)))
+                   (str s)))
+       "\""))
+
 (defn json-str
-  "Encode `x` as JSON text."
+  "Encode `x` as compact JSON with object keys sorted by name. Map
+  iteration order differs per runner (Basilisp's py->lisp build does not
+  preserve document order), so the order is explicit here: the same
+  value writes the same bytes on all three runners. Keyword keys are
+  written by name. Readers compare parsed content; the legacy indent-2
+  layout is not reproduced (see COMPAT.md)."
   [x]
-  #?(:lpy (.dumps (python/__import__ "json") (lisp->py x))
-     :clj (json/generate-string x)
-     :cljs (.stringify js/JSON (clj->js x))))
+  (letfn [(key-name [k] (if (keyword? k) (name k) (str k)))
+          (emit [v]
+            (cond (nil? v) "null"
+                  (true? v) "true"
+                  (false? v) "false"
+                  (number? v) (str v)
+                  (string? v) (json-escape v)
+                  (map? v) (if (empty? v) "{}"
+                             (str "{"
+                                  (str/join ","
+                                            (map (fn [[k val]]
+                                                   (str (json-escape (key-name k)) ":" (emit val)))
+                                                 (sort-by (fn [[k _]] (key-name k)) v)))
+                                  "}"))
+                  (sequential? v) (if (empty? v) "[]"
+                                    (str "[" (str/join "," (map emit v)) "]"))
+                  :else (throw (ex-info "json-str: unsupported value" {}))))]
+    (emit x)))
 
 (defn sha256-utf8
   "The sha256 hex of the utf8 bytes of `s`."
@@ -541,6 +581,52 @@
                      (catch Exception _ false))
            :cljs (try (.kill js/process n 0) true
                       (catch :default e (not= "ESRCH" (.-code e)))))))))))
+
+(defn realpath
+  "The canonical path (links resolved). Throws when the path does not
+  exist — callers that probe containment catch it, as in the legacy."
+  [p]
+  #?(:lpy (.realpath os/path p)
+     :clj (.getCanonicalPath (java.io.File. ^String p))
+     :cljs (.realpathSync fs p)))
+
+(defn- lock-holder
+  "The pid recorded in a lock file, or nil when it is missing/garbage."
+  [lock-path]
+  (let [raw (try (slurp-utf8 lock-path) (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil))
+        digits (str/replace (str raw) #"^0+" "")]
+    (when (and (string? raw) (re-matches #"\d+" raw) (< (count digits) 11))
+      (parse-long (if (= digits "") "0" digits)))))
+
+(defn acquire-lock!
+  "Acquire an O_EXCL lock file holding our pid; take over only a dead
+  holder. Verbatim from host.cljk (createNewFile/openSync-wx are the
+  portable O_EXCL takes; pid liveness reuses pid-alive?)."
+  [lock-path]
+  (mkdirs! (dirname lock-path))
+  (let [take! (fn [] #?(:lpy (try (do (with-open [f (python/open lock-path ** :mode "x")]
+                                            (.write f (str (process-id))))
+                                        true)
+                                    (catch python/Exception _ false))
+                              :clj (if (.createNewFile (java.io.File. ^String lock-path))
+                                     (do (spit lock-path (str (process-id)) :encoding "UTF-8") true)
+                                     false)
+                              :cljs (try (do (let [fd (.openSync fs lock-path "wx")]
+                                               (try (.writeSync fs fd (str (process-id)))
+                                                    (finally (.closeSync fs fd))))
+                                          true)
+                                       (catch :default _ false))))]
+    (boolean (or (take!)
+                 (let [holder (lock-holder lock-path)]
+                   (when-not (and (some? holder) (pid-alive? holder))
+                     (delete-file! lock-path)
+                     (take!)))))))
+
+(defn release-lock!
+  "Release a lock file, but only when our pid still holds it."
+  [lock-path]
+  (when (= (lock-holder lock-path) (process-id))
+    (delete-file! lock-path)))
 
 ;; ---------------------------------------------------------------- exec plans
 ;; Declarative requests for the two host executions (JUN-1020, owner choice
