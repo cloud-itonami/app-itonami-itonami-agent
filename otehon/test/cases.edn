@@ -1193,4 +1193,263 @@
    :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
           "cron/jobs.json" "{\"jobs\": []}"}
    :request {:job "nightly"}
-   :expect {:exit 1 :status "refused" :reason "rail/itonami-without-manifest"}}]}]
+   :expect {:exit 1 :status "refused" :reason "rail/itonami-without-manifest"}}
+  ;; S4b: profile check — one clean itonami profile, no problems
+  {:id :profile-check-clean :op :profile
+   :seed {"profiles/pc/SOUL.md" "soul\n"
+          "profiles/pc/profile.yaml" "name: pc\ndescription: Clean\n"
+          "profiles/pc/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/pc/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/pc/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"}
+   :request {:sub "check" :name "pc"}
+   :expect {:exit 0 :lines ["1 profile(s): 0 with errors, 0 with warnings"]}}
+  ;; S4b: profile check — a bad manifest schema: schema, deny-hosts and
+  ;; rail findings (3 errors, no warnings; v2-only org/world warn is absent)
+  {:id :profile-check-errors :op :profile
+   :seed {"profiles/pe/SOUL.md" "soul\n"
+          "profiles/pe/profile.yaml" "name: pe\n"
+          "profiles/pe/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/pe/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/pe/itonami.edn" "{:itonami/schema \"nope\" :profile/id \"pe\"}\n"}
+   :request {:sub "check" :name "pe"}
+   :expect {:exit 1 :lines ["error  pe  [:itonami/schema] not one of cloud.itonami.profile.v1, cloud.itonami.profile.v2" "error  pe  [:profile/hermes-compatible] missing" "error  pe  [:runtime :engine] missing" "error  pe  [:runtime :scheduler] missing" "error  pe  [:placement :mode] missing" "error  pe  [:placement :order] missing" "error  pe  [:placement :inference-rail] missing" "error  pe  [:state] missing" "error  pe  [:bundle :cid] missing" "error  pe  [:bundle :files] missing" "error  pe  [:capabilities] missing" "error  pe  [:cron?] missing" "error  pe  [:inference :deny-hosts] must name openrouter.ai (Two CLIs: itonami never rides the Hermes rail)" "error  pe  [:inference :rails] rail/itonami-without-rail" "1 profile(s): 1 with errors, 0 with warnings"]}}
+  ;; S4b: profile check --summary prints only the count line
+  {:id :profile-check-summary :op :profile
+   :seed {"profiles/pe/SOUL.md" "soul\n"
+          "profiles/pe/profile.yaml" "name: pe\n"
+          "profiles/pe/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/pe/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/pe/itonami.edn" "{:itonami/schema \"nope\" :profile/id \"pe\"}\n"}
+   :request {:sub "check" :name "pe" :summary true}
+   :expect {:exit 1 :lines ["1 profile(s): 1 with errors, 0 with warnings"]}}
+  ;; S4b: profile check --all over a clean itonami profile and a Hermes
+  ;; profile (whose murakumo models read rail/hermes-on-murakumo, twice —
+  ;; the count is profiles-with-errors, not problems)
+  {:id :profile-check-all :op :profile
+   :seed {"profiles/pc/SOUL.md" "soul\n"
+          "profiles/pc/profile.yaml" "name: pc\ndescription: Clean\n"
+          "profiles/pc/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/pc/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/pc/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"
+          "profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "check" :all true}
+   :expect {:exit 1 :messages-include ["rail/hermes-on-murakumo" "2 profile(s): 1 with errors, 0 with warnings"]}}
+  ;; S4b: profile readiness — a clean profile is ready (an empty state.db
+  ;; seed answers the state-db finding; :env {} keeps host env out)
+  {:id :profile-readiness-ready :op :profile
+   :seed {"profiles/pc/SOUL.md" "soul\n"
+          "profiles/pc/profile.yaml" "name: pc\ndescription: Clean\n"
+          "profiles/pc/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/pc/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/pc/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"
+          "profiles/pc/state.db" ""}
+   :request {:sub "readiness" :name "pc" :env {}}
+   :expect {:exit 0 :lines ["ready   pc" "0 profile(s) blocked; 0 compatibility issue(s)"]}}
+  ;; S4b: profile readiness — a foreign-lane job and a missing script
+  ;; block (deliver pigeon has no token env, so no missing-token finding)
+  {:id :profile-readiness-blocked :op :profile
+   :seed {"profiles/pr/SOUL.md" "soul\n"
+          "profiles/pr/profile.yaml" "name: pr\n"
+          "profiles/pr/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/pr/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"deliver\": \"pigeon\", \"script\": \"a.py\"}]}\n"
+          "profiles/pr/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pr\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? true :org/world :kotoba}\n"
+          "profiles/pr/state.db" ""}
+   :request {:sub "readiness" :name "pr" :env {}}
+   :expect {:exit 0 :lines ["blocked pr  delivery_adapter=1[pigeon], script_not_found=1[script=a.py]" "1 profile(s) blocked; 2 compatibility issue(s)"]}}
+  ;; S4b: profile readiness — a malformed jobs.json is an error line
+  ;; (the engine-specific parse text is asserted by prefix only)
+  {:id :profile-readiness-error :op :profile
+   :seed {"profiles/pr/SOUL.md" "soul\n"
+          "profiles/pr/profile.yaml" "name: pr\n"
+          "profiles/pr/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/pr/cron/jobs.json" "{\"jobs\": ["}
+   :request {:sub "readiness" :name "pr" :env {}}
+   :expect {:exit 0 :messages-include ["error   pr" "1 profile(s) blocked; 1 compatibility issue(s)"]}}
+  ;; S4b: profile itonamify writes the manifest (bytes probed live; the
+  ;; CID is cross-checked against an independent Python oracle)
+  {:id :profile-itonamify-wrote :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"}
+   :request {:sub "itonamify" :name "ph"}
+   :expect {:exit 0 :lines ["wrote   ph  bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma" "1 profile(s) itonamified"]
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 4, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}}
+  ;; S4b: profile itonamify keeps an itonamified profile (no --force)
+  {:id :profile-itonamify-keep :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 4, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}
+   :request {:sub "itonamify" :name "ph"}
+   :expect {:exit 0 :lines ["keep    ph  bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma" "0 profile(s) itonamified"]}}
+  ;; S4b: profile itonamify --force rewrites (the bundle now counts the
+  ;; manifest itself: files 4 -> 5, same CID inputs)
+  {:id :profile-itonamify-force :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 4, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}
+   :request {:sub "itonamify" :name "ph" :force true}
+   :expect {:exit 0 :lines ["wrote   ph  bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma" "1 profile(s) itonamified"]
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}}
+  ;; S4b: profile itonamify skips a missing home
+  {:id :profile-itonamify-skip :op :profile
+   :seed {}
+   :request {:sub "itonamify" :name "ghost"}
+   :expect {:exit 0 :lines ["skip    ghost  no such profile" "0 profile(s) itonamified"]}}
+  ;; S4b: profile itonamify --dry-run prints would and writes nothing
+  {:id :profile-itonamify-dry :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"}
+   :request {:sub "itonamify" :name "ph" :dry-run true}
+   :expect {:exit 0 :lines ["would  ph  bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma" "1 profile(s) would be itonamified"]}}
+  ;; S4b: profile refresh keeps a current bundle CID
+  {:id :profile-refresh-keep :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}
+   :request {:sub "refresh" :name "ph"}
+   :expect {:exit 0 :lines ["keep    ph" "0 bundle CID(s) refreshed"]}}
+  ;; S4b: profile refresh rewrites a stale bundle CID
+  {:id :profile-refresh-wrote :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreistale00000000000000000000000000000000000000000\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}
+   :request {:sub "refresh" :name "ph"}
+   :expect {:exit 0 :lines ["wrote   ph  bafkreistale00000000000000000000000000000000000000000 -> bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma" "1 bundle CID(s) refreshed"]}}
+  ;; S4b: profile refresh skips a Hermes profile (no manifest)
+  {:id :profile-refresh-skip :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "refresh" :name "ph"}
+   :expect {:exit 0 :lines ["skip    ph  no itonami.edn" "0 bundle CID(s) refreshed"]}}
+  ;; S4b: profile refresh --all with no profiles is a usage refusal
+  {:id :profile-refresh-usage :op :profile
+   :seed {}
+   :request {:sub "refresh" :all true}
+   :expect {:exit 2 :lines ["usage: itonami-agent profile refresh <p>|--all [--dry-run]"]}}
+  ;; S4b: profile refresh --dry-run prints would and keeps the stale file
+  {:id :profile-refresh-dry :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreistale00000000000000000000000000000000000000000\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}
+   :request {:sub "refresh" :name "ph" :dry-run true}
+   :expect {:exit 0 :lines ["would  ph  bafkreistale00000000000000000000000000000000000000000 -> bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma" "1 bundle CID(s) would be refreshed"]
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreistale00000000000000000000000000000000000000000\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}}
+  ;; S4b: profile rail points a murakumo profile at kotoba (the bundle CID
+  ;; is untouched: rail rewrites rail keys only)
+  {:id :profile-rail-wrote :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}
+   :request {:sub "rail" :name "ph" :to "kotoba"}
+   :expect {:exit 0 :lines ["wrote   ph  murakumo -> kotoba" "1 profile(s) pointed at kotoba"]
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.kotoba.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:kotoba]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :kotoba, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}}
+  ;; S4b: profile rail keeps a profile already on the rail
+  {:id :profile-rail-keep :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.kotoba.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:kotoba]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :kotoba, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}
+   :request {:sub "rail" :name "ph" :to "kotoba"}
+   :expect {:exit 0 :lines ["keep    ph" "0 profile(s) pointed at kotoba"]}}
+  ;; S4b: profile rail skips a Hermes profile
+  {:id :profile-rail-skip :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "rail" :name "ph" :to "kotoba"}
+   :expect {:exit 0 :lines ["skip    ph  no itonami.edn" "0 profile(s) pointed at kotoba"]}}
+  ;; S4b: profile rail without a known rail is a usage refusal
+  {:id :profile-rail-usage :op :profile
+   :seed {"profiles/ph/itonami.edn" "{:profile/id \"ph\"}"}
+   :request {:sub "rail" :name "ph" :to "bogus"}
+   :expect {:exit 2 :lines ["usage: itonami-agent profile rail <p>|--all --to murakumo|kotoba|itonami-p2p [--dry-run]"]}}
+  ;; S4b: profile rail --dry-run prints would and keeps the old rail
+  {:id :profile-rail-dry :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}
+   :request {:sub "rail" :name "ph" :to "kotoba" :dry-run true}
+   :expect {:exit 0 :lines ["would  ph  murakumo -> kotoba" "1 profile(s) would be pointed at kotoba"]}}
+  ;; S4b: runs lists execution rows newest first, joined with the run
+  ;; receipts (provider/model and peer print only when the detail joins)
+  {:id :runs-rows :op :runs
+   :seed {"profiles/p1/cron/itonami-runs.jsonl" "{\"execution_id\": \"e2\", \"provider\": \"murakumo\", \"model\": \"mishima\", \"peer\": \"p9\"}\n"}
+   :request {:profile "p1" :setup-sql ["CREATE TABLE executions (id TEXT PRIMARY KEY, job_id TEXT, source TEXT, process_id TEXT, pid INTEGER, process_started_at INTEGER, status TEXT, handoff_pending INTEGER, handoff_started_at REAL, claimed_at TEXT, started_at TEXT, finished_at TEXT, error TEXT, delivery_outcome TEXT, scheduled_instant TEXT)"
+               "INSERT INTO executions (id, job_id, source, status, claimed_at, delivery_outcome) VALUES ('e1', 'j1', 'tick', 'completed', '2026-11-08T00:00:01+09:00', NULL)"
+               "INSERT INTO executions (id, job_id, source, status, claimed_at, delivery_outcome) VALUES ('e2', 'j1', 'tick', 'failed', '2026-11-08T00:00:02+09:00', 'ok')"
+               "INSERT INTO executions (id, job_id, source, status, claimed_at, delivery_outcome) VALUES ('e3', 'j2', 'cron', 'running', '2026-11-08T00:00:03+09:00', NULL)"]}
+   :expect {:exit 0 :lines ["running    job=j2  2026-11-08T00:00:03+09:00  id=e3  source=cron" "failed     job=j1  2026-11-08T00:00:02+09:00  id=e2  source=tick  delivery=ok  murakumo/mishima  peer=p9" "completed  job=j1  2026-11-08T00:00:01+09:00  id=e1  source=tick"]}}
+  ;; S4b: runs --limit keeps the OLDEST rows of the newest-first order
+  ;; (take-last, verbatim from the legacy command)
+  {:id :runs-limit-1 :op :runs
+   :request {:profile "p1" :limit "1" :setup-sql ["CREATE TABLE executions (id TEXT PRIMARY KEY, job_id TEXT, source TEXT, process_id TEXT, pid INTEGER, process_started_at INTEGER, status TEXT, handoff_pending INTEGER, handoff_started_at REAL, claimed_at TEXT, started_at TEXT, finished_at TEXT, error TEXT, delivery_outcome TEXT, scheduled_instant TEXT)"
+               "INSERT INTO executions (id, job_id, source, status, claimed_at, delivery_outcome) VALUES ('e1', 'j1', 'tick', 'completed', '2026-11-08T00:00:01+09:00', NULL)"
+               "INSERT INTO executions (id, job_id, source, status, claimed_at, delivery_outcome) VALUES ('e2', 'j1', 'tick', 'failed', '2026-11-08T00:00:02+09:00', 'ok')"
+               "INSERT INTO executions (id, job_id, source, status, claimed_at, delivery_outcome) VALUES ('e3', 'j2', 'cron', 'running', '2026-11-08T00:00:03+09:00', NULL)"]}
+   :expect {:exit 0 :lines ["completed  job=j1  2026-11-08T00:00:01+09:00  id=e1  source=tick"]}}
+  ;; S4b: runs on a missing ledger reads as no runs (no file is created)
+  {:id :runs-empty :op :runs
+   :seed {}
+   :request {:profile "p1"}
+   :expect {:exit 0 :lines []}}
+  ;; S4b: runs on an unreadable ledger names the failure (the engine text
+  ;; differs per runner, so only the prefix is asserted)
+  {:id :runs-unreadable :op :runs
+   :seed {"profiles/p1/cron/executions.db" "not a database"}
+   :request {:profile "p1"}
+   :expect {:exit 1 :messages-include ["runs: "]}}
+  ;; S4b: runs with a garbage limit prints no rows (parseInt finds no digits)
+  {:id :runs-limit-garbage :op :runs
+   :request {:profile "p1" :limit "xx" :setup-sql ["CREATE TABLE executions (id TEXT PRIMARY KEY, job_id TEXT, source TEXT, process_id TEXT, pid INTEGER, process_started_at INTEGER, status TEXT, handoff_pending INTEGER, handoff_started_at REAL, claimed_at TEXT, started_at TEXT, finished_at TEXT, error TEXT, delivery_outcome TEXT, scheduled_instant TEXT)"
+               "INSERT INTO executions (id, job_id, source, status, claimed_at, delivery_outcome) VALUES ('e1', 'j1', 'tick', 'completed', '2026-11-08T00:00:01+09:00', NULL)"]}
+   :expect {:exit 0 :lines []}}
+  ;; S4b: incidents lists every signature newest first
+  {:id :incidents-list :op :incidents
+   :request {:profile "p1" :setup-sql ["CREATE TABLE cron_incidents (id TEXT PRIMARY KEY, job_id TEXT, error_sig TEXT, state TEXT, failure_type TEXT, first_seen_at TEXT, last_seen_at TEXT, acked_at TEXT, alerted_at TEXT, closed_at TEXT, error TEXT, output_file TEXT)"
+               "INSERT INTO cron_incidents (id, job_id, state, failure_type, first_seen_at, last_seen_at) VALUES ('s1', 'j1', 'detected', 'timeout', '2026-11-08T00:00:01+09:00', '2026-11-08T00:00:01+09:00')"
+               "INSERT INTO cron_incidents (id, job_id, state, failure_type, first_seen_at, last_seen_at) VALUES ('s2', 'j1', 'alerted', 'agent', '2026-11-08T00:00:02+09:00', '2026-11-08T00:00:02+09:00')"]}
+   :expect {:exit 0 :lines ["alerted   job=j1 type=agent id=s2 last=2026-11-08T00:00:02+09:00" "detected  job=j1 type=timeout id=s1 last=2026-11-08T00:00:01+09:00"]}}
+  ;; S4b: incidents ack closes one signature
+  {:id :incidents-ack :op :incidents
+   :request {:profile "p1" :sub "ack" :id "s1" :setup-sql ["CREATE TABLE cron_incidents (id TEXT PRIMARY KEY, job_id TEXT, error_sig TEXT, state TEXT, failure_type TEXT, first_seen_at TEXT, last_seen_at TEXT, acked_at TEXT, alerted_at TEXT, closed_at TEXT, error TEXT, output_file TEXT)"
+               "INSERT INTO cron_incidents (id, job_id, state, failure_type, first_seen_at, last_seen_at) VALUES ('s1', 'j1', 'detected', 'timeout', '2026-11-08T00:00:01+09:00', '2026-11-08T00:00:01+09:00')"]}
+   :expect {:exit 0 :lines ["closed incident s1"]}}
+  ;; S4b: incidents ack on a missing signature refuses the same way
+  {:id :incidents-ack-missing :op :incidents
+   :seed {}
+   :request {:profile "p1" :sub "ack" :id "s9"}
+   :expect {:exit 2 :lines ["no such incident: s9"]}}
+  ;; S4b: incidents ack on a closed signature refuses the same way
+  {:id :incidents-ack-closed :op :incidents
+   :request {:profile "p1" :sub "ack" :id "s1" :setup-sql ["CREATE TABLE cron_incidents (id TEXT PRIMARY KEY, job_id TEXT, error_sig TEXT, state TEXT, failure_type TEXT, first_seen_at TEXT, last_seen_at TEXT, acked_at TEXT, alerted_at TEXT, closed_at TEXT, error TEXT, output_file TEXT)"
+               "INSERT INTO cron_incidents (id, job_id, state, failure_type, first_seen_at, last_seen_at) VALUES ('s1', 'j1', 'closed', 'timeout', '2026-11-08T00:00:01+09:00', '2026-11-08T00:00:01+09:00')"]}
+   :expect {:exit 2 :lines ["no such incident: s1"]}}
+  ;; S4b: incidents on a missing ledger reads as no incidents
+  {:id :incidents-empty :op :incidents
+   :seed {}
+   :request {:profile "p1"}
+   :expect {:exit 0 :lines []}}]}]
