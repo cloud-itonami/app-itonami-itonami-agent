@@ -157,6 +157,41 @@
      :clj (.delete (java.io.File. ^String path))
      :cljs (try (.unlinkSync fs path) true (catch :default _ false))))
 
+(defn write-text!
+  "Write UTF-8 text to `path` (no mkdir; the caller creates parents).
+  The pause marker and other small store files go through here."
+  [path s]
+  #?(:lpy (with-open [f (python/open path ** :mode "w" :encoding "utf-8")] (.write f s))
+     :clj (spit path s :encoding "UTF-8")
+     :cljs (.writeFileSync fs path s "utf8")))
+
+(defn pid-alive?
+  "Whether `s` names a live process: digits only, in 2..2^31-1 (0 and 1
+  are never a gateway owner), and the host still sees the owner.
+  Mirrors the legacy pid checks: a dead owner (ESRCH) reads false, an
+  unparsable value is garbage and reads false, EPERM (another user owns
+  it) still reads live."
+  [s]
+  (if-not (re-matches #"\d+" (str s))
+    false
+    ;; strip leading zeros first so a long zero-padded value cannot
+    ;; overflow the parse; anything left over 10 digits is out of int32
+    ;; and reads as garbage, as in the legacy check.
+    (let [digits (str/replace (str s) #"^0+" "")
+          digits (if (= digits "") "0" digits)]
+      (if (> (count digits) 10)
+        false
+        (let [n (parse-long digits)]
+          (if (or (nil? n) (< n 2) (> n 2147483647))
+            false
+        #?(:lpy (try (.kill os n 0) true
+                     (catch python/Exception e (not= 3 (.-errno e))))
+           :clj (try (let [o (java.lang.ProcessHandle/of (long n))]
+                       (boolean (and (.isPresent o) (.isAlive (.get o)))))
+                     (catch Exception _ false))
+           :cljs (try (.kill js/process n 0) true
+                      (catch :default e (not= "ESRCH" (.-code e)))))))))))
+
 ;; ---------------------------------------------------------------- exec plans
 ;; Declarative requests for the two host executions (JUN-1020, owner choice
 ;; io.cljc extension). Pure constructors: no process spawns, no model is

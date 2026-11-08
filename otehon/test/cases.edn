@@ -603,4 +603,70 @@
   {:id :asym-unsignable :op :market-verify-asym :today "2026-11-09" :via "allow"
    :pubkeys {"k" "PUB"}
    :att {:node "日本" :cpu 1 :mem-gib 1 :disk-gib 10 :price 1 :expires "2026-12-31" :issuer "k" :sig "00"}
-   :expect {:valid false :reason "market/unsignable" :called-with nil}}]}
+   :expect {:valid false :reason "market/unsignable" :called-with nil}}
+
+  ;; ------------------------------------------------------------ pause / status (JUN-1036)
+  ;; The store ops touch a real scratch store (test/scratch/<ns>-<name>),
+  ;; not fixture text: :seed writes files, :at pins the marker timestamp
+  ;; so every runner asserts the same strings.
+  {:id :pause/set-show-lift :op :pause
+   :steps [{:action "set" :reason "owner check" :at "2026-11-08T00:00:00+09:00"}
+           {:action "show"}
+           {:action "lift"}]
+   :expect {:steps [{:action "set" :active true
+                     :record "2026-11-08T00:00:00+09:00 owner check"
+                     :message "paused — cron dispatch and new gateway turns are stopped (owner check). lift with: itonami-agent resume"}
+                    {:action "show" :active true
+                     :record "2026-11-08T00:00:00+09:00 owner check"}
+                    {:action "lift" :was-active true :active false
+                     :message "resumed — emergency stop lifted"}]}}
+  {:id :pause/set-no-reason-lift-idempotent :op :pause
+   :steps [{:action "lift"}
+           {:action "set" :at "2026-11-08T00:00:00+09:00"}
+           {:action "lift"}
+           {:action "lift"}]
+   :expect {:steps [{:action "lift" :was-active false :active false
+                     :message "nothing to resume (not paused)"}
+                    {:action "set" :active true
+                     :record "2026-11-08T00:00:00+09:00"
+                     :message "paused — cron dispatch and new gateway turns are stopped. lift with: itonami-agent resume"}
+                    {:action "lift" :was-active true :active false
+                     :message "resumed — emergency stop lifted"}
+                    {:action "lift" :was-active false :active false
+                     :message "nothing to resume (not paused)"}]}}
+  {:id :pause/unknown-action :op :pause
+   :steps [{:action "freeze"}]
+   :expect {:steps [{:action "freeze" :status :refused :reason "pause/unknown-action"}]}}
+  {:id :status/one-profile :op :status
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"p1\" :runtime {:engine :itonami-agent :scheduler :itonami}}"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"name\": \"nightly\", \"enabled\": true, \"state\": \"active\"}, {\"id\": \"j2\", \"name\": \"old\", \"enabled\": true, \"state\": \"paused\"}]}"
+          "peers.edn" "{:trusted #{\"did:key:zABC\"} :peers []}"
+          "gateway.pid" "abc"}
+   :expect {:paused nil
+            :profiles [{:name "p1" :scheduler "itonami" :jobs 1}]
+            :gateway-tick "not running"
+            :gateway-serve "not running"
+            :peers-trusted 1
+            :lines ["paused: no"
+                    "profiles (1):"
+                    "  p1                              scheduler=itonami  jobs=1"
+                    "gateway (cron tick): not running"
+                    "gateway serve: not running"
+                    "peers: 1 trusted"]}}
+  {:id :status/paused-mixed :op :status
+   :seed {"paused" "2026-11-08T00:00:00+09:00 owner check\n"
+          "profiles/h1/cron/jobs.json" "{\"jobs\": []}"
+          "profiles/Bad Name/itonami.edn" "{}"
+          "peers.edn" "{oops"
+          "gateway.pid" "99999999999999999999999"}
+   :expect {:paused "2026-11-08T00:00:00+09:00 owner check"
+            :profiles [{:name "h1" :scheduler "hermes" :jobs 0}]
+            :gateway-tick "not running"
+            :gateway-serve "not running"
+            :peers-trusted nil
+            :lines ["paused: 2026-11-08T00:00:00+09:00 owner check"
+                    "profiles (1):"
+                    "  h1                              scheduler=hermes  jobs=0"
+                    "gateway (cron tick): not running"
+                    "gateway serve: not running"
+                    "peers: ? trusted"]}}]}
