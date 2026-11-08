@@ -25,8 +25,8 @@ covered by shared cases on all three runners.
 | `dapps` | `dapps-cmd` | — | S6 |
 | `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor) | done run/tick-exec (JUN-1036 S2a/S2b; ledger-backed runs/incidents S4/S5) |
 | `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check`, `store-plan` (import/export copy plan) | S4 remaining verbs |
-| `doctor` | `doctor-cmd` | — | S3b (needs readiness ports) |
-| `sessions [list]/show/resume` | `sessions-cmd` | — | S3b (sqlite host reads) |
+| `doctor` | `doctor-cmd` | `doctor` (store verbs; S6-owned finding kinds deferred, recorded below) | done (JUN-1036 S3b) |
+| `sessions [list]/show/resume` | `sessions-cmd` | `sessions` (reads state.db read-only; resume refuses verbatim) | done (JUN-1036 S3b) |
 | `model [NAME] [--provider]` | `model-cmd` | `model` (positional dir, otehon convention) | done (JUN-1036 S3b) |
 | `fallback` | `fallback-cmd` | `fallback` (positional dir, otehon convention) | done (JUN-1036 S3b) |
 | `status` | `status-cmd` | `status` | done (JUN-1036 S3a) |
@@ -104,7 +104,11 @@ from source, the rest follow the module name until their slice lands.
   delivery-queue ROWS stay slice S5 — only their observable inputs,
   statuses and messages are produced here).
 - S3a store verbs pause/status — done (this unit: 5 cases + 2 must-fail).
-- S3b read/show ops: model/fallback/doctor/sessions.
+- S3b read/show ops — done (JUN-1036: model/fallback first; doctor +
+  sessions list/show/resume-refusal second, 18 cases. The S6-owned
+  doctor finding kinds (unsupported toolsets/tools, browser backend,
+  oauth cache) and the sqlite write path stay later slices; the resume
+  re-entry landing was already a verbatim refusal in the legacy).
 - S4 store writes: adopt/release/refresh/notepad/profile verbs, soul.
 - S5 messaging: gateway/send/deliver/ledger/peers/chat.
 - S6 tools: backends + bridge/chat/vault/mcp/dapps CLIs.
