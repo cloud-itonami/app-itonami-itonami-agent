@@ -20,6 +20,7 @@
     peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>]
     market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>]
     market-sign <att.edn> --issuer-secret <secret>
+    market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD]
     test       <cases.edn>
 
   tick, turn-gate and run-plan decide without doing: no script runs, no
@@ -164,6 +165,17 @@
     :market-sign {:sig (:sig (market/sign-attestation (:att c {}) (:secret c "")))}
     :market-verify {:valid (market/valid-signature? (:att c {}) (:secrets c {}))}
     :market-match-signed (market/match-signed (:asks c []) (:bids c []) (:secrets c))
+    :market-verify-asym (let [called (atom nil)
+                              record (fn [p s k] (reset! called {:payload p :sig s :pub k}) true)
+                              stub (case (:via c "deny")
+                                     "allow" (fn [p s k] (record p s k) true)
+                                     "echo" (fn [p s k] (record p s k) {:echoed [p s k]})
+                                     "hmac" (fn [p s k] (record p s k)
+                                              (market/verify-hmac-sig p s k))
+                                     (fn [p s k] (record p s k) false))]
+                          (assoc (market/verify-asymmetric (:att c {}) (:pubkeys c {})
+                                                           stub (:today c ""))
+                                 :called-with @called))
     :decide (let [p (load-dir dir read-text)]
               (yakuwari/decide (:yakuwari p) (get-in p [:manifest :authority]) (:capability c)))
     :additive (let [full (load-dir dir read-text)
@@ -237,7 +249,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -731,6 +743,15 @@
                                  r (market/match-signed asks bids secrets)]
                              (println (canon (if (= :refused (:status r)) r (assoc r :status :ok))))
                              (if (= :refused (:status r)) 1 0)))))
+      "market-verify" (let [secret (market-flag (cons b more) "--suite-secret")]
+                      (if-not (and a secret)
+                        (usage)
+                        (let [att (let [raw (read-edn-file a)] (if (map? raw) (kw-keys raw) raw))
+                              today (or (market-today more) (subs (:iso (hio/now-parts)) 0 10))
+                              r (market/verify-asymmetric att {(:issuer att) secret}
+                                                          market/verify-hmac-sig today)]
+                          (println (canon r))
+                          (if (:valid r) 0 1))))
       "market-sign" (let [secret (market-flag (cons b more) "--issuer-secret")]
                       (if-not (and a secret)
                         (usage)

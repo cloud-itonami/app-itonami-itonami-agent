@@ -61,7 +61,7 @@ the owner, 64 usage.
 | `src/itonami/otehon/text.cljc` | portable string ops, JVM whitespace pinned | `kotoba.lang.text` (the `.cljk` reference nbb cannot load) |
 | `src/itonami/otehon/cas.cljc` | pure SHA-256, object sharding, manifests, gc/rebuild/retention plans | AWAI-232 (slices 1, 6, 8, 9) |
 | `src/itonami/otehon/peer.cljc` | permissioned node registry, sync/repair plans, fleet census | AWAI-232 (slices 2, 4, 7, 10) |
-| `src/itonami/otehon/market.cljc` | capacity attestations, ask/bid match, escrow, HMAC sigs | AWAI-232 (slices 3, 5) |
+| `src/itonami/otehon/market.cljc` | capacity attestations, ask/bid match, escrow, HMAC + injected-asym flow | AWAI-232 (slices 3, 5, 11) |
 
 Everything except `io.cljc` and the two host-leaf branches in `text.cljc`
 (`lower-case` case-folding) is pure and host-independent; `io.cljc` is the
@@ -160,8 +160,8 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
    `cas-put/get/verify` (content-addressed store, pure SHA-256),
    `peer-push/pull` (permissioned node sync with registry gate),
    `market-match` (capacity asks/bids, attestation expiry).
-   Bytes travel latin-1; hashing stays pure. What stays open: asymmetric
-   signatures (measured infeasible in pure `.cljc`)
+   Bytes travel latin-1; hashing stays pure. What stays open: native
+   supply of the asymmetric verify-fn (flow + payload contract done)
    and native execution of these planners (the awai fs gap list).
 
 Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
@@ -183,4 +183,6 @@ conflicts refuse without writing),
 `docs/evidence/otehon-retention.md` (130 shared cases; `cas-gc
 --retain-days N` with tombstone grace, date math verified vs python),
 `docs/evidence/otehon-fleet.md` (134 shared cases; `fleet-status`
-copy census with `--copies N` threshold and per-peer gates).
+copy census with `--copies N` threshold and per-peer gates),
+`docs/evidence/otehon-asym-flow.md` (141 shared cases; injected-crypto
+`verify-asymmetric` + `market-verify` demo suite; native handoff contract).
