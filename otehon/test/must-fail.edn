@@ -42,4 +42,18 @@
   {:id :must-fail/model-wrong-written :op :model
    :seed {"config.yaml" "model:\n  default: mishima\n"}
    :request {:pos ["k2"]}
-   :expect {:written "WRONG"}}]}
+   :expect {:written "WRONG"}}
+  ;; a wrong first line on a finished run (proves lines are asserted)
+  {:id :must-fail/run-wrong-line :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-wrong-line\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"nightly\", \"name\": \"nightly\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"no_agent\": true, \"script\": \"hello.sh\", \"prompt\": \"say hi\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/hello.sh" "#!/bin/sh\necho hi\n"}
+   :request {:job "nightly"}
+   :expect {:exit 0 :status "ok" :lines ["ran nightly: WRONG"]}}
+  ;; a wrong status on a refused run
+  {:id :must-fail/run-wrong-status :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "cron/jobs.json" "{\"jobs\": []}"}
+   :request {:job "nightly"}
+   :expect {:status "ok"}}]}]

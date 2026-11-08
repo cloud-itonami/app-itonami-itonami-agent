@@ -14,6 +14,7 @@
     status
     model      <dir> [NAME] [--provider P] [--model M]
     fallback   <dir> [-m M] [--provider P]
+    run-exec   <dir> <job> [--capability c]...   (agent turns stop pending: S2b)
     cas-put    <store> <file>...
     cas-get    <store> <sha> <out>
     cas-verify <store>
@@ -42,6 +43,8 @@
             [itonami.otehon.pause :as pause]
             [itonami.otehon.status :as status]
             [itonami.otehon.model :as model]
+            [itonami.otehon.exec :as exec]
+            [itonami.otehon.cron :as cron]
             [itonami.otehon.profile :as profile]
             [itonami.otehon.yakuwari :as yakuwari]
             [itonami.otehon.yaml :as yaml]
@@ -100,8 +103,9 @@
           read-text edits))
 
 (defn- load-dir [dir read-text]
-  (profile/load-profile {:name (hio/basename dir) :read-text read-text
-                         :parse-edn hio/parse-edn :parse-json hio/parse-json}))
+  (assoc (profile/load-profile {:name (hio/basename dir) :read-text read-text
+                                :parse-edn hio/parse-edn :parse-json hio/parse-json})
+         :home dir))
 
 (defn check-result [prof]
   (let [ps (profile/check prof)]
@@ -112,7 +116,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback)
+(declare ops-pause ops-status ops-model ops-fallback ops-run)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -135,6 +139,7 @@
     :status (ops-status c scratch)
     :model (ops-model c scratch)
     :fallback (ops-fallback c scratch)
+    :run (ops-run c scratch)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -228,7 +233,7 @@
 
 (defn- satisfied? [c got]
   (let [want (:expect c)]
-    (and (subset? (dissoc want :messages-include :reason-in) got)
+    (and (subset? (dissoc want :messages-include :reason-in :needles) got)
          (includes-all? (:messages got) (:messages-include want []))
          (or (nil? (:reason-in want)) (contains? (:reason-in want) (:reason got))))))
 
@@ -414,6 +419,316 @@
         (let [r (resolve-in dir {:run-model run-model :provider provider})]
           {:lines (model/fallback-lines r)})))))
 
+;; ---------------------------------------------------------------- run execution
+
+(defn- safe-parse [s]
+  (try (hio/parse-json (str s))
+       (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil)))
+
+(defn- jobs-file [home] (str home "/cron/jobs.json"))
+
+(defn- read-jobs-vec [home]
+  (try (let [p (jobs-file home)]
+         (if (hio/file? p)
+           (vec (cron/jobs-of (hio/parse-json (hio/slurp-utf8 p))))
+           []))
+       (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ [])))
+
+(defn- update-jobs-doc!
+  "Read/modify/write cron/jobs.json preserving top-level extension fields
+  and stamping updated_at — the legacy write-jobs-unlocked! contract
+  (formatting stays compact; parsed content is what both sides read).
+  `f` takes the doc and its jobs vector and returns the updated doc
+  (with \"jobs\" replaced)."
+  [home micros f]
+  (let [doc (try (let [v (when (hio/file? (jobs-file home))
+                              (hio/parse-json (hio/slurp-utf8 (jobs-file home))))]
+                      (if (map? v) v {}))
+                    (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ {}))
+        jobs (vec (cron/jobs-of doc))]
+    (hio/mkdirs! (str home "/cron"))
+    (hio/replace-file! (jobs-file home)
+                       (hio/json-str (assoc (f doc jobs) "updated_at" micros)))))
+
+(defn- hy-deps
+  "Resolve Hy's site-packages for script runs. `env-map` is the merged
+  profile+host env. Verbatim from the cron.cljk resolution, minus the
+  memo (one CLI run resolves once); POSIX separators only — Otehon has
+  no Windows runner."
+  [prof env-map]
+  (let [configured (or (get env-map "KOTOBA_HY_DEPS") (hio/env "KOTOBA_HY_DEPS"))
+        paths (when (string? configured) (remove str/blank? (str/split configured #":")))
+        valid? (and (seq paths)
+                    (some #(hio/file? (str % "/hy/__init__.py")) paths)
+                    (some #(hio/file? (str % "/funcparserlib/__init__.py")) paths))
+        home (:home prof)
+        hermes-root (or (some-> (hio/env "ITONAMI_HERMES_ROOT") (exec/expand-home (hio/env "HOME")))
+                        (when (and (string? home) (str/includes? home "/.hermes/profiles/"))
+                          (hio/dirname (hio/dirname home))))]
+    (or (when valid? (str/join ":" paths))
+        (when hermes-root
+          (let [installs (str hermes-root "/installs")
+                cands (for [install (hio/read-dir-names installs)
+                            :let [envs (str installs "/" install "/environments")]
+                            environment (hio/read-dir-names envs)
+                            :let [libs (str envs "/" environment "/venv/lib")]
+                            py-version (hio/read-dir-names libs)
+                            :let [sp (str libs "/" py-version "/site-packages")]
+                            :when (and (hio/file? (str sp "/hy/__init__.py"))
+                                       (hio/file? (str sp "/funcparserlib/__init__.py")))]
+                        sp)]
+            (when (seq cands) (str/join ":" cands)))))))
+
+(defn- script-env
+  [prof home script-ref]
+  (let [base (merge (:env prof {}) {"HERMES_HOME" home "ITONAMI_PROFILE_HOME" home})]
+    (if (boolean (re-find #"\.hy$" (str/lower-case (str script-ref))))
+      (if-let [deps (hy-deps prof base)]
+        (assoc base "KOTOBA_HY_DEPS" deps)
+        base)
+      base)))
+
+(defn- spawn-script!
+  "Run one job script ref; always returns {:ok? :output :wake?}. The wake
+  flag is true unless the last output line parses as wakeAgent false —
+  the run-plan contract (a failed gate still skips the turn). Paths the
+  child sees are absolute: it resolves relatives against its own cwd."
+  [prof job script-ref]
+  (let [home (hio/abs-path (:home prof))
+        scripts (str home "/scripts")
+        check (exec/check-script scripts script-ref {:symlink? hio/symlink? :file? hio/file?})]
+    (if (not= :ok (:status check))
+      {:ok? false :output (:reason check) :wake? true}
+      (let [env (script-env prof home script-ref)
+            workdir (exec/expand-home (or (get job "workdir") scripts) (hio/env "HOME"))
+            argv (exec/script-argv script-ref (:path check)
+                                   [(get job "interpreter")
+                                    (get-in prof [:config "cron" "script_python"])
+                                    (get env "ITONAMI_PYTHON")
+                                    (get env "HERMES_PYTHON")])
+            res (hio/spawn-sync! argv {:cwd workdir
+                                       :timeout-ms (* 1000 (exec/script-timeout-s (:config prof) env))
+                                       :env env})
+            [ok? out] (exec/script-result res)]
+        {:ok? ok? :output out :wake? (not (exec/wake-false? out safe-parse))}))))
+
+(defn- current-row [home job-id]
+  (first (filter #(= job-id (get % "id")) (read-jobs-vec home))))
+
+(defn- append-error-section
+  "A failed run's doc appends the raw error under `## Error`, and the job
+  row records the full text as last_error. Verbatim from run-job-core."
+  [doc err-text]
+  (str doc "\n## Error\n\n```\n" err-text "\n```\n"))
+
+(defn- apply-and-save!
+  "Write the output doc, prune past 50, and apply the finished-run record
+  to the CURRENT jobs.json row. Returns the output path."
+  [home job-id doc failed? error stamp micros]
+  (let [outdir (str home "/cron/output/" job-id)
+        f (str outdir "/" stamp ".md")]
+    (hio/mkdirs! outdir)
+    (hio/replace-file! f doc)
+    (doseq [old (exec/prune-outputs (hio/read-dir-names outdir))]
+      (hio/delete-file! (str outdir "/" old)))
+    (let [jobs (read-jobs-vec home)
+          cur (first (filter #(= job-id (get % "id")) jobs))]
+      (when cur
+        (update-jobs-doc! home micros
+          (fn [doc js] (assoc doc "jobs" (exec/jobs-with js (exec/apply-record cur micros failed? error nil)))))))
+    f))
+
+(defn- run-monitor!
+  "Evaluate a job's monitor_script (monitor_url refuses: fetching is slice
+  S2b). Applies the snapshot + monitor_state writes on change. Returns nil
+  (no monitor), {:refused ...}, or the exec/monitor-decide verdict with
+  the script result attached."
+  [prof job micros]
+  (let [ms (some-> (get job "monitor_script") str/trim not-empty)
+        url (some-> (get job "monitor_url") str/trim not-empty)]
+    (cond
+      (some? ms)
+      (let [home (:home prof)
+            id (get job "id")
+            s (spawn-script! prof job ms)
+            digest (hio/sha256-utf8 (:output s))
+            snap (str home "/cron/output/" id "/monitor_last_output.txt")
+            old (when (hio/file? snap) (hio/slurp-utf8 snap))
+            state (get (current-row home id) "monitor_state")
+            d (exec/monitor-decide {:ok? (:ok? s) :output (:output s)}
+                                   {:digest digest :old-output old :old-hash (get state "last_output_hash")}
+                                   micros)]
+        (when (:changed? d)
+          (hio/mkdirs! (str home "/cron/output/" id))
+          (hio/replace-file! snap (:snapshot d))
+          (let [jobs (read-jobs-vec home)
+                cur (first (filter #(= id (get % "id")) jobs))]
+            (when cur
+              (update-jobs-doc! home micros
+                (fn [doc js] (assoc doc "jobs" (exec/jobs-with js (assoc cur "monitor_state" (:state d)))))))))
+        (assoc d :script s))
+      (some? url) {:refused "monitor/monitor-url-unavailable"}
+      :else nil)))
+
+(defn- exec-plan [prof job-ref capabilities now stamp run-at script monitor-context]
+  (run/run-plan prof job-ref {:capabilities capabilities :script script :now now
+                              :stamp stamp :run-at run-at
+                              :notepad nil :linked nil :monitor-context monitor-context}))
+
+(defn- execute-run
+  "Run one job's host side now. `now-map` = {:iso :parts :ms}. Returns
+  {:exit :lines :detail}: detail carries :status plus the saved artifacts
+  (output-doc, job-after, snapshot, monitor-state) for the shared cases."
+  [prof job-ref capabilities now-map]
+  (let [home (:home prof)
+        iso (:iso now-map)
+        now {:iso iso :parts (:parts now-map)}
+        stamp (exec/stamp-of iso)
+        run-at (exec/human-of iso)
+        micros (exec/micros-of iso (:ms now-map))
+        plan (exec-plan prof job-ref capabilities now stamp run-at nil nil)]
+    (cond
+      (= :refused (:status plan))
+      {:exit 1 :lines [(str "refused: " (:reason plan))] :detail {:status "refused" :reason (:reason plan)}}
+
+      (= :held (:status plan))
+      {:exit 2 :lines [(str "held: " (:reason plan))] :detail {:status "held" :reason (:reason plan)}}
+
+      (contains? #{:silent :ok} (:status plan))
+      (let [f (apply-and-save! home (get-in plan [:job :id]) (:output-doc plan) false nil stamp micros)
+            id (get-in plan [:job :id])]
+        {:exit 0
+         :lines [(str "ran " id ": " (name (:status plan)))]
+         :detail {:status (name (:status plan)) :output-file f
+                 :output-doc (:output-doc plan) :job-after (current-row home id)}})
+
+      :else
+      (let [job (cron/find-job (:jobs prof) job-ref)
+            has-mon (or (some-> (get job "monitor_script") str/trim not-empty)
+                        (some-> (get job "monitor_url") str/trim not-empty))
+            mon (when (and (some? job) (some? has-mon)) (run-monitor! prof job micros))]
+        (cond
+          (some? (:refused mon))
+          {:exit 1 :lines [(:refused mon)] :detail {:status "refused" :reason (:refused mon)}}
+
+          (and (some? mon) (false? (:ok? mon)))
+          (let [msg (str "Monitor source failed: " (:error mon))
+                doc (append-error-section
+                     (run/output-doc job {:prompt (or (get job "prompt") "")
+                                          :response (str "[CRON_FAILURE] " msg)
+                                          :failed? true} run-at)
+                     msg)
+                f (apply-and-save! home (get job "id") doc true msg stamp micros)]
+            {:exit 1
+             :lines [(str "ran " (get job "id") ": error")]
+             :detail {:status "error" :output-file f :output-doc doc
+                      :job-after (current-row home (get job "id"))}})
+
+          (and (some? mon) (false? (:changed? mon)))
+          (let [doc (run/output-doc job {:prompt "" :response "[SILENT]"
+                                         :status-line "**Status:** monitor output unchanged"} run-at)
+                f (apply-and-save! home (get job "id") doc false nil stamp micros)]
+            {:exit 0
+             :lines [(str "ran " (get job "id") ": silent")]
+             :detail {:status "silent" :output-file f :output-doc doc
+                      :job-after (current-row home (get job "id"))}})
+
+          :else
+          (let [plan2 (if (and (some? mon) (:changed? mon))
+                        (exec-plan prof job-ref capabilities now stamp run-at nil (:context mon))
+                        plan)
+                req (first (:exec plan2))]
+            (cond
+              (contains? #{:silent :ok} (:status plan2))
+              (let [failed? (= "script_error" (:exit-reason plan2))
+                    err-text (when failed?
+                               (str/replace-first (str (:final plan2))
+                                                  (str run/failure-token " ") ""))
+                    doc (if failed? (append-error-section (:output-doc plan2) err-text)
+                            (:output-doc plan2))
+                    f (apply-and-save! home (get-in plan2 [:job :id]) doc
+                                       failed? err-text stamp micros)
+                    id (get-in plan2 [:job :id])]
+                {:exit (if failed? 1 0)
+                 :lines [(str "ran " id ": " (if failed? "error" (name (:status plan2))))]
+                 :detail {:status (if failed? "error" (name (:status plan2)))
+                          :output-file f :output-doc doc
+                          :job-after (current-row home id)
+                          :snapshot (:snapshot mon) :monitor-state (:state mon)}})
+
+              (and (= :planned (:status plan2)) (= "script" (:id req)))
+              (let [script (spawn-script! prof (cron/find-job (:jobs prof) job-ref)
+                                          (get-in plan2 [:job :script]))
+                    plan3 (exec-plan prof job-ref capabilities now stamp run-at script
+                                     (when (and (some? mon) (:changed? mon)) (:context mon)))]
+                (cond
+                  (contains? #{:silent :ok} (:status plan3))
+                  (let [failed? (= "script_error" (:exit-reason plan3))
+                        err-text (when failed?
+                                   (str/replace-first (str (:final plan3))
+                                                      (str run/failure-token " ") ""))
+                        doc (if failed? (append-error-section (:output-doc plan3) err-text)
+                                (:output-doc plan3))
+                        f (apply-and-save! home (get-in plan3 [:job :id]) doc
+                                           failed? err-text stamp micros)
+                        id (get-in plan3 [:job :id])]
+                    {:exit (if failed? 1 0)
+                     :lines [(str "ran " id ": " (if failed? "error" (name (:status plan3))))]
+                     :detail {:status (if failed? "error" (name (:status plan3)))
+                              :output-file f :output-doc doc
+                              :job-after (current-row home id)
+                              :snapshot (:snapshot mon) :monitor-state (:state mon)}})
+
+                  (= :planned (:status plan3))
+                  {:exit 3
+                   :lines [(str "inference pending for " (get-in plan3 [:job :id])) (canon plan3)]
+                   :detail {:status "pending" :plan (canon plan3)
+                            :snapshot (:snapshot mon) :monitor-state (:state mon)}}
+
+                  :else
+                  {:exit (if (= :held (:status plan3)) 2 1)
+                   :lines [(str (name (:status plan3)) ": " (:reason plan3))]
+                   :detail {:status (name (:status plan3)) :reason (:reason plan3)}}))
+
+              (= :planned (:status plan2))
+              {:exit 3
+               :lines [(str "inference pending for " (get-in plan2 [:job :id])) (canon plan2)]
+               :detail {:status "pending" :plan (canon plan2)
+                        :snapshot (:snapshot mon) :monitor-state (:state mon)}}
+
+              :else
+              {:exit (if (= :held (:status plan2)) 2 1)
+               :lines [(str (name (:status plan2)) ": " (:reason plan2))]
+               :detail {:status (name (:status plan2)) :reason (:reason plan2)}})))))))
+
+(defn- host-now []
+  (let [np (hio/now-parts)]
+    {:iso (:iso np) :parts (:parts np) :ms (hio/now-ms)}))
+
+(defn- ops-run [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [req (:request c {})
+          prof (load-dir dir (hio/read-text-fn dir))
+          r (execute-run prof (:job req) (vec (:capabilities req []))
+                         (merge {:iso "2026-11-08T00:00:00+09:00"
+                                 :ms 0
+                                 :parts {:year 2026 :month 11 :day 8 :hour 0 :minute 0}}
+                                (:now req)))
+          doc (or (:output-doc (:detail r)) "")
+          jobs-doc (try (when (hio/file? (jobs-file dir))
+                          (hio/parse-json (hio/slurp-utf8 (jobs-file dir))))
+                        (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil))
+          snap-path (str dir "/cron/output/" (:job req) "/monitor_last_output.txt")]
+      (merge {:exit (:exit r) :lines (:lines r) :first-line (first (:lines r))
+              :messages (:lines r)}
+             (:detail r)
+             {:jobs-doc jobs-doc
+              :snapshot-file (when (hio/file? snap-path) (hio/slurp-utf8 snap-path))
+              :doc-has (into {} (map (fn [n] [n (boolean (str/includes? doc (str n)))])
+                                     (:needles (:expect c []))))}))))
+
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
         base (if dir (hio/read-text-fn dir) (constantly nil))
@@ -455,7 +770,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -925,6 +1240,12 @@
                        (let [r (resolve-in a {:run-model run-model :provider provider})]
                          (doseq [l (model/fallback-lines r)] (println l))
                          0))))
+      "run-exec" (if (or (not a) (not b))
+                   (usage)
+                   (let [prof (load-dir a (hio/read-text-fn a))
+                         r (execute-run prof b (capabilities-arg more) (host-now))]
+                     (doseq [l (:lines r)] (println l))
+                     (:exit r)))
       "cas-put" (let [files (if b (cons b more) [])]
                   (if (or (nil? a) (empty? files))
                     (usage)

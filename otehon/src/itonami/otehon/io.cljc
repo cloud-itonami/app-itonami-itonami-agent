@@ -236,6 +236,136 @@
       (throw (ex-info "replace-file!: host write reported failure" {:path path})))
     target))
 
+(defn symlink?
+  "Whether `path` itself is a symlink (never follows it)."
+  [path]
+  #?(:lpy (.islink os/path path)
+     :clj (java.nio.file.Files/isSymbolicLink (.toPath (java.io.File. ^String path)))
+     :cljs (try (boolean (.isSymbolicLink (.lstatSync fs path)))
+                (catch :default _ false))))
+
+(defn cwd
+  "This process's working directory."
+  []
+  #?(:lpy (.getcwd os)
+     :clj (System/getProperty "user.dir")
+     :cljs (.cwd js/process)))
+
+(defn abs-path
+  "An absolute path: untouched when already absolute, else joined onto
+  the working directory. Spawned children resolve relative paths against
+  THEIR cwd, so everything a child sees goes through here."
+  [p]
+  (let [s (str p)]
+    (if (str/starts-with? s "/") s (str (cwd) "/" s))))
+
+(defn all-env
+  "This process's environment as a string map."
+  []
+  #?(:lpy (into {} (.items os/environ))
+     :clj (into {} (System/getenv))
+     ;; process.env is a magic object js->clj leaves alone: copy its keys.
+     :cljs (into {} (map (fn [k] [k (aget js/process.env k)]))
+                 (js-keys js/process.env))))
+
+(defn append-text!
+  "Append utf8 `s` to `path` (no mkdir; the caller creates parents)."
+  [path s]
+  #?(:lpy (with-open [f (python/open path ** :mode "a" :encoding "utf-8")] (.write f s))
+     :clj (spit path s :encoding "UTF-8" :append true)
+     :cljs (.appendFileSync fs path s "utf8")))
+
+(defn json-str
+  "Encode `x` as JSON text."
+  [x]
+  #?(:lpy (.dumps (python/__import__ "json") (lisp->py x))
+     :clj (json/generate-string x)
+     :cljs (.stringify js/JSON (clj->js x))))
+
+(defn sha256-utf8
+  "The sha256 hex of the utf8 bytes of `s`."
+  [s]
+  #?(:lpy (let [h (.sha256 (python/__import__ "hashlib"))]
+            (.update h (.encode (str s) "utf-8"))
+            (.hexdigest h))
+     :clj (let [d (java.security.MessageDigest/getInstance "SHA-256")]
+            (.update d (.getBytes (str s) "UTF-8"))
+            (apply str (map (fn [b] (let [h (Integer/toString (bit-and 255 (int b)) 16)]
+                                      (if (= 1 (count h)) (str "0" h) h)))
+                            (.digest d))))
+     :cljs (let [c (js/require "crypto")]
+             (.digest (.update (.createHash c "sha256") (str s) "utf8") "hex"))))
+
+(defn now-ms
+  "Wall-clock milliseconds."
+  []
+  #?(:lpy (int (* 1000 (.time (python/__import__ "time"))))
+     :clj (System/currentTimeMillis)
+     :cljs (.now js/Date)))
+
+(defn random-hex
+  "N random bytes as lowercase hex."
+  [n]
+  #?(:lpy (.hex (.token_bytes (python/__import__ "secrets") n))
+     :clj (let [b (byte-array n)]
+            (.nextBytes (java.security.SecureRandom.) b)
+            (apply str (map #(let [h (Integer/toString (bit-and 255 %) 16)]
+                               (if (= 1 (count h)) (str "0" h) h)) b)))
+     :cljs (.toString (.randomBytes (js/require "crypto") n) "hex")))
+
+(defn spawn-sync!
+  "Run argv with no shell, capturing stdout/stderr as text. `opts`:
+  :cwd, :timeout-ms (default 180000), :env (merged over this process's
+  env unless :exact-env?). Returns {:exit :stdout :stderr :timed-out?}.
+  Never throws on a non-zero exit; a spawn failure reads exit -1 with the
+  error message in stderr (the legacy run-process contract: ETIMEDOUT
+  marks :timed-out?, anything else does not)."
+  [argv {:keys [cwd timeout-ms env exact-env?]}]
+  (let [ms (or timeout-ms 180000)
+        full-env (if exact-env? (or env {}) (merge (all-env) (or env {})))]
+    #?(:lpy (let [merged (python/dict)]
+              (.update merged full-env)
+              (try
+                (let [r (.run (python/__import__ "subprocess") (vec argv)
+                                 ** :capture_output true :text true
+                                 :encoding "utf-8" :errors "replace"
+                                 :timeout (/ ms 1000.0)
+                                 :cwd cwd :env merged)]
+                  {:exit (.-returncode r) :stdout (str (.-stdout r)) :stderr (str (.-stderr r)) :timed-out? false})
+                (catch python/Exception e
+                  (let [expired? (boolean (re-find #"TimeoutExpired" (str (type e))))]
+                    {:exit -1
+                     :stdout (if expired? (try (str (.-stdout e)) (catch python/Exception _ "")) "")
+                     :stderr (str (if expired? (try (str (.-stderr e)) (catch python/Exception _ "")) "") (str e))
+                     :timed-out? expired?}))))
+       :clj (let [proc-ns (symbol "babashka.process")]
+              (require proc-ns)
+              (let [start (resolve (symbol "babashka.process/process"))
+                    destroy (resolve (symbol "babashka.process/destroy-tree"))]
+                (try
+                  (let [p (start (vec argv) (cond-> {:out :string :err :string}
+                                             cwd (assoc :dir (str cwd))
+                                             true (assoc :env full-env)))
+                        r (deref p ms ::timeout)]
+                    (if (= ::timeout r)
+                      (do (destroy p)
+                          {:exit -1 :stdout "" :stderr (str "timed out after " ms "ms") :timed-out? true})
+                      {:exit (:exit @p) :stdout (str (:out @p)) :stderr (str (:err @p)) :timed-out? false}))
+                  (catch Exception e
+                    {:exit -1 :stdout "" :stderr (str (.getMessage e)) :timed-out? false}))))
+       :cljs (let [cp (js/require "child_process")
+                   r (try (.spawnSync cp (first argv) (clj->js (rest argv))
+                                      (clj->js (cond-> {:encoding "utf8" :timeout ms :env full-env}
+                                                 cwd (assoc :cwd (str cwd)))))
+                          (catch :default e {:error e}))]
+               (if-let [err (:error r)]
+                 {:exit -1 :stdout "" :stderr (str (.-message err)) :timed-out? false}
+                 (let [e (.-error r)]
+                   {:exit (if e -1 (.-status r))
+                    :stdout (str (or (.-stdout r) ""))
+                    :stderr (str (or (.-stderr r) "") (when e (str (.-message e))))
+                    :timed-out? (boolean (and e (= "ETIMEDOUT" (.-code e))))}))))))
+
 (defn pid-alive?
   "Whether `s` names a live process: digits only, in 2..2^31-1 (0 and 1
   are never a gateway owner), and the host still sees the owner.
