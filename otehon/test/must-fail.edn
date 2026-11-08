@@ -135,4 +135,17 @@
           "profiles/p2/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"p2\" :profile/hermes-compatible true :runtime {:engine :itonami-agent, :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}\n"
           "profiles/p2/gateway.parked" "2026-11-08T00:00:00+09:00\n"}
    :request {:sub "hy-migrate" :name "p2" :env {"KOTOBA_HY_DEPS" "test/fixtures/hydeps"}}
-   :expect {:exit 0 :jobs-doc "WRONG"}}]}]
+   :expect {:exit 0 :jobs-doc "WRONG"}}
+  ;; a wrong did line (proves did:key output is asserted)
+  {:id :must-fail/profile-did-wrong-did :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\n"}
+   :request {:sub "did" :name "p1" :env {"ITONAMI_AGENT_IDENTITY_SEED" "9d61b19deffd5a60ba844af492ec2af44445687652b3cca8f0d0d3f7c5f5f5f0"}}
+   :expect {:exit 0 :lines ["WRONG"]}}
+  ;; a wrong bundle CID (proves the manifest lines are asserted)
+  {:id :must-fail/profile-bundle-wrong-cid :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "bundle" :name "p2"}
+   :expect {:exit 0 :lines ["WRONG"]}}]}]

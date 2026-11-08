@@ -1949,4 +1949,97 @@
           "profiles/p2/cron/.itonami-tick.lock/.keep" ""}
    :request {:sub "hy-migrate" :name "p2" :env {"KOTOBA_HY_DEPS" "test/fixtures/hydeps"}}
    :expect {:exit 0
-            :lines ["skip    p2  Kotoba tick is in progress" "0 script ref(s) converted; 1 profile(s) skipped"]}}]}]
+            :lines ["skip    p2  Kotoba tick is in progress" "0 script ref(s) converted; 1 profile(s) skipped"]}}
+  ;; S4e: profile did derives one did:key from the fleet seed (values
+  ;; cross-checked against node:crypto, the legacy route)
+  {:id :profile-did-wrote :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\n"}
+   :request {:sub "did" :name "p1" :env {"ITONAMI_AGENT_IDENTITY_SEED" "9d61b19deffd5a60ba844af492ec2af44445687652b3cca8f0d0d3f7c5f5f5f0"}}
+   :expect {:exit 0
+            :lines ["p1  did:key:z6MknsjhtU9q1V678XCcqmJLfx4RqtUohuvnLcn1HfAhfXmN  epoch 0" "1 DID(s)"]}}
+  ;; S4e: profile did rotates the key id with the registry epoch
+  {:id :profile-did-epoch :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :did/epoch 2}]}\n"}
+   :request {:sub "did" :name "p1" :registry "registry.edn" :env {"ITONAMI_AGENT_IDENTITY_SEED" "c5aa8df432f2aef4e3c3d38bda3d627f7ebbb7e8d7ae8c6c0f2b56d4c5e0ab22"}}
+   :expect {:exit 0
+            :lines ["p1  did:key:z6Mkq8PzicW6WXcQkskV35MAhPwHBHmusYop9K3axxcGqocH  epoch 2" "1 DID(s)"]}}
+  ;; S4e: profile did --all sorts registry profiles, epochs included
+  {:id :profile-did-all :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\n"
+          "profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "registry.edn" "{:agents [{:agent/id \"p2\"} {:agent/id \"p1\" :did/epoch 2}]}\n"}
+   :request {:sub "did" :all true :registry "registry.edn" :env {"ITONAMI_AGENT_IDENTITY_SEED" "9d61b19deffd5a60ba844af492ec2af44445687652b3cca8f0d0d3f7c5f5f5f0"}}
+   :expect {:exit 0
+            :lines ["p1  did:key:z6Mkfa89fEVZ152bTovt2aKcCxTMpVo1oaid9c4YRSWHRU1c  epoch 2"
+                    "p2  did:key:z6Mki7PNtuzaGVCyo9viF1LCtGveJqXfpqFCYipnEDBRjAYu  epoch 0"
+                    "2 DID(s)"]}}
+  ;; S4e: profile did --out writes the public-keys EDN file
+  {:id :profile-did-out :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :did/epoch 2}]}\n"}
+   :request {:sub "did" :name "p1" :registry "registry.edn" :out "did-out.edn" :env {"ITONAMI_AGENT_IDENTITY_SEED" "c5aa8df432f2aef4e3c3d38bda3d627f7ebbb7e8d7ae8c6c0f2b56d4c5e0ab22"}}
+   :expect {:exit 0
+            :messages-include ["p1  did:key:z6Mkq8PzicW6WXcQkskV35MAhPwHBHmusYop9K3axxcGqocH  epoch 2" "1 DID(s) written to " "did-out.edn"]
+            :did-out ";; per-profile did:key (ADR-2610141512 D7). Public keys only.\n{\"p1\" {:did \"did:key:z6Mkq8PzicW6WXcQkskV35MAhPwHBHmusYop9K3axxcGqocH\" :epoch 2}}\n"}}
+  ;; S4e: profile did refuses without the seed (the passed env only; a
+  ;; host export cannot leak in, so the control holds everywhere)
+  {:id :profile-did-refused :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\n"}
+   :request {:sub "did" :name "p1" :env {}}
+   :expect {:exit 2
+            :lines ["REFUSED: ITONAMI_AGENT_IDENTITY_SEED is not set (64 hex characters). Fill it from the kagi item shared/agent-identity-seed in a human session, for this one command; it is never printed."]}}
+  ;; S4e: profile did refuses a malformed seed the same way
+  {:id :profile-did-bad-seed :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\n"}
+   :request {:sub "did" :name "p1" :env {"ITONAMI_AGENT_IDENTITY_SEED" "not-hex"}}
+   :expect {:exit 2
+            :lines ["REFUSED: ITONAMI_AGENT_IDENTITY_SEED is not set (64 hex characters). Fill it from the kagi item shared/agent-identity-seed in a human session, for this one command; it is never printed."]}}
+  ;; S4e: profile did --all with no targets refuses with usage
+  {:id :profile-did-usage :op :profile
+   :seed {}
+   :request {:sub "did" :all true :env {"ITONAMI_AGENT_IDENTITY_SEED" "9d61b19deffd5a60ba844af492ec2af44445687652b3cca8f0d0d3f7c5f5f5f0"}}
+   :expect {:exit 2
+            :lines ["usage: itonami-agent profile did <p>|--all [--registry <agent-registry.edn>] [--out <file>]"]}}
+  ;; S4e: profile did --all falls back to store profiles without a registry
+  {:id :profile-did-all-store :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\n"}
+   :request {:sub "did" :all true :env {"ITONAMI_AGENT_IDENTITY_SEED" "9d61b19deffd5a60ba844af492ec2af44445687652b3cca8f0d0d3f7c5f5f5f0"}}
+   :expect {:exit 0
+            :lines ["p1  did:key:z6MknsjhtU9q1V678XCcqmJLfx4RqtUohuvnLcn1HfAhfXmN  epoch 0"
+                    "p2  did:key:z6Mki7PNtuzaGVCyo9viF1LCtGveJqXfpqFCYipnEDBRjAYu  epoch 0"
+                    "2 DID(s)"]}}
+  ;; S4e: profile bundle prints one bundle CID and its file manifest
+  {:id :profile-bundle-ok :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\ndescription: Hermes profile\n"
+          "profiles/p2/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"
+          "profiles/p2/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreifu3u6nzst4qwvyvq2p7qfpforgormpkt2fcpkk4o5rinqoz5ubzm\", :files 7, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"p2\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "profiles/p2/gateway.parked" "2026-11-08T00:00:00+09:00\n"}
+   :request {:sub "bundle" :name "p2"}
+   :expect {:exit 0
+            :lines ["bafkreifu3u6nzst4qwvyvq2p7qfpforgormpkt2fcpkk4o5rinqoz5ubzm"
+                    "  a14f50a0f1b4  SOUL.md"
+                    "  1346b7bc63b5  config.yaml"
+                    "  50d643d34f45  cron/jobs.json"
+                    "  306928abe334  profile.yaml"
+                    "  67fb159b2675  scripts/a.hy"
+                    "  cc42155088fc  scripts/a.py"]}}
+  ;; S4e: profile bundle errors on a missing home
+  {:id :profile-bundle-missing :op :profile
+   :seed {}
+   :request {:sub "bundle" :name "p9"}
+   :expect {:exit 0 :lines ["error   p9  no such profile"]}}]}]

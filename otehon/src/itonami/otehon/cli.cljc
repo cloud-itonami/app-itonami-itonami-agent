@@ -59,6 +59,7 @@
             [itonami.otehon.bundle :as bundle]
             [itonami.otehon.manifest :as manifest]
             [itonami.otehon.soul :as soul]
+            [itonami.otehon.ed25519 :as ed]
             [itonami.otehon.cas :as cas]
             [itonami.otehon.peer :as peer]
             [itonami.otehon.market :as market]))
@@ -1669,6 +1670,56 @@
      :lines (conj lines (str @converted " script ref(s) " (if dry-run? "would be " "")
                              "converted; " @skipped " profile(s) skipped"))}))
 
+(defn- did-lines
+  "The `profile did` lines: per-profile did:key from the fleet seed, the
+  epoch from the registry, an optional public-keys EDN file. Verbatim
+  from main.cljk (seed REFUSED exit 2, usage without targets, sorted
+  --all, exit 0 with the count line)."
+  [store name all? env reg-path out-path]
+  (let [seed (ed/parse-seed (get env ed/seed-env-name))]
+    (if (nil? seed)
+      {:exit 2 :lines [(str "REFUSED: " ed/seed-env-name " is not set (64 hex characters). Fill it from the kagi item shared/agent-identity-seed in a human session, for this one command; it is never printed.")]}
+      (let [reg (when reg-path (read-edn-opt reg-path))
+            by-id (into {} (map (juxt :agent/id identity)) (:agents reg))
+            targets (if all?
+                      (if (seq by-id) (sort (keys by-id)) (listing-names store))
+                      [name])]
+        (if-not (first targets)
+          {:exit 2 :lines ["usage: itonami-agent profile did <p>|--all [--registry <agent-registry.edn>] [--out <file>]"]}
+          (let [out (mapv (fn [t]
+                            (let [epoch (or (:did/epoch (get by-id t)) 0)]
+                              [t {:did (ed/did-of seed t epoch) :epoch epoch}]))
+                          targets)
+                doc (str ";; per-profile did:key (ADR-2610141512 D7). Public keys only.\n"
+                         "{" (str/join ", " (map (fn [[t {:keys [did epoch]}]]
+                                                    (str (pr-str t) " {:did " (pr-str did)
+                                                         " :epoch " epoch "}"))
+                                                  out))
+                         "}\n")]
+            (when out-path (hio/write-text! out-path doc))
+            {:exit 0
+             :did-out (when out-path doc)
+             :lines (conj (mapv (fn [[t {:keys [did epoch]}]]
+                                  (str t "  " did "  epoch " epoch))
+                                out)
+                          (str (count out) " DID(s)"
+                               (when out-path (str " written to " out-path))))}))))))
+
+(defn- bundle-lines
+  "The `profile bundle` lines: print one profile's bundle CID and file
+  manifest, read-only. Verbatim from main.cljk; a missing home errors
+  (the legacy loader throws there — the lite loader never does, so the
+  error line lives here, adopt-style, exit 0)."
+  [store name]
+  (let [home (str store "/profiles/" name)]
+    (if-not (hio/dir? home)
+      {:exit 0 :lines [(str "error   " name "  no such profile")]}
+      (let [prof (load-home store name)
+            files (bundle/bundle-files home (select-keys (get-in prof [:manifest :bundle]) [:skills :dirs]))]
+        {:exit 0 :lines (into [(bundle/bundle-cid files)]
+                              (map (fn [[p sha]] (str "  " (subs sha 0 12) "  " p))
+                                   (bundle/bundle-manifest files)))}))))
+
 (defn- transfer-usage [sub]
   (str "usage: itonami-agent profile " sub " <p>|--all [--"
        (if (= sub "export") "to" "from") " DIR] [--force] [--dry-run]"))
@@ -1752,6 +1803,10 @@
                                           (boolean (:dry-run req)))
               "hy-migrate" (hy-migrate-lines dir (if (:all req) (listing-names dir) [(:name req)])
                                              env (boolean (:dry-run req)) "2026-11-08T00:00:00.000000+09:00")
+              "did" (did-lines dir (:name req) (boolean (:all req)) env
+                                (when (:registry req) (str dir "/" (:registry req)))
+                                (when (:out req) (str dir "/" (:out req))))
+              "bundle" (bundle-lines dir (or (:name req) "default"))
               {:exit 2 :lines [(str "unknown profile command: " (:sub req))]})
           in-place? (and (not (:all req)) (:name req)
                          (contains? #{"refresh" "itonamify" "rail" "refresh-bundle" "release"
@@ -1778,6 +1833,7 @@
               (when (hio/file? p) (hio/slurp-utf8 p))))
           staged (when (= sub "hy-stage") (:staged r))
           soul-written (when (= sub "soul") (:soul-written r))
+          did-out (when (= sub "did") (:did-out r))
           soul-backup
           (when (and (= sub "soul") (not (:all req)) (:name req))
             (let [stamp (str/replace (subs "2026-11-08T00:00:00+09:00" 0 19) #"[^0-9T]" "")
@@ -1789,7 +1845,8 @@
                jobs-doc (assoc :jobs-doc jobs-doc)
                staged (assoc :staged staged)
                (some? soul-written) (assoc :soul-written soul-written)
-               soul-backup (assoc :soul-backup soul-backup))
+               soul-backup (assoc :soul-backup soul-backup)
+               did-out (assoc :did-out did-out))
              :messages (:lines r)))))
 
 (defn- ops-runs [c scratch]
@@ -1872,7 +1929,7 @@
           :else (recur (next as) (update m :pos conj (first as))))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] <artifact> [--dry-run] | hy-migrate [<p>|--all] [--dry-run]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | bundle <name> | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] <artifact> [--dry-run] | hy-migrate [<p>|--all] [--dry-run] | did [<p>|--all] [--registry R] [--out F]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -2413,6 +2470,12 @@
                         (run (hy-migrate-lines root (if (flag? "--all") (listing-names root) [b])
                                                   (hio/all-env) (flag? "--dry-run")
                                                   (exec/micros-of (:iso now) (:ms now)))))
+                      (= sub "did")
+                      (run (did-lines root b (flag? "--all") (hio/all-env)
+                                      (some-> (opt-val "--registry") (exec/expand-home (hio/env "HOME")))
+                                      (some-> (opt-val "--out") (exec/expand-home (hio/env "HOME")))))
+                      (= sub "bundle")
+                      (if-not b (usage) (run (bundle-lines root b)))
                       (= sub "release")
                       (run (release-lines root (if (flag? "--all") (listing-names root) [b])
                                            (flag? "--dry-run") (:iso (host-now))))
