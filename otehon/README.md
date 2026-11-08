@@ -60,7 +60,7 @@ the owner, 64 usage.
 | `src/itonami/otehon/run.cljc` | real-run plan: prompt, output doc, record (pure) | `src/itonami/agent/cron.cljk` `build-prompt`, `output-doc`, `record-run-state!` |
 | `src/itonami/otehon/text.cljc` | portable string ops, JVM whitespace pinned | `kotoba.lang.text` (the `.cljk` reference nbb cannot load) |
 | `src/itonami/otehon/cas.cljc` | pure SHA-256, object sharding, manifests | AWAI-232 (decentralized storage slice 1) |
-| `src/itonami/otehon/peer.cljc` | permissioned node registry, sync plans | AWAI-232 (slice 2) |
+| `src/itonami/otehon/peer.cljc` | permissioned node registry, sync plans, repair plans | AWAI-232 (slices 2, 4) |
 | `src/itonami/otehon/market.cljc` | capacity attestations, ask/bid match, escrow | AWAI-232 (slice 3) |
 
 Everything except `io.cljc` and the two host-leaf branches in `text.cljc`
@@ -160,10 +160,13 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
    `cas-put/get/verify` (content-addressed store, pure SHA-256),
    `peer-push/pull` (permissioned node sync with registry gate),
    `market-match` (capacity asks/bids, attestation expiry).
-   Bytes travel latin-1; hashing stays pure. What stays open: native
-   POSIX access, peer repair of tampered objects, signature crypto,
+   Bytes travel latin-1; hashing stays pure. What stays open: multi-peer
+   fallback, manifest repair, signature crypto,
    fleet metadata, retention/GC (the awai fs gap list).
 
 Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
 `docs/evidence/otehon-cljc-20261108.md`,
-`docs/evidence/otehon-cas12.md`.
+`docs/evidence/otehon-cas12.md`,
+`docs/evidence/otehon-repair.md` (106 shared cases; `peer-repair`
+heals tampered objects from a permissioned peer, refuses when the
+peer lacks or corrupts them).
