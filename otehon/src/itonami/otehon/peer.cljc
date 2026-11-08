@@ -47,6 +47,36 @@
      :send (mapv (fn [s] {:sha s :size (get lm s)}) send)
      :same (count (filter lks rks))}))
 
+(defn fleet-copies
+  "Union view of a fleet: `remotes` [{:peer :manifest}] in any order.
+  Returns {:copies {sha {:peers [sorted] :count n}} :peers [sorted]
+  :objects n}. Read-only planning input for replication and repair
+  triage. Deterministic: everything sorted."
+  [remotes]
+  (let [by-sha (reduce (fn [acc {:keys [peer manifest]}]
+                         (reduce (fn [a [_ {:keys [sha]}]]
+                                   (update a sha (fnil conj #{}) peer))
+                                 acc manifest))
+                       {} remotes)
+        copies (into {} (map (fn [[sha peers]]
+                               [sha {:peers (vec (sort peers)) :count (count peers)}])
+                             by-sha))]
+    {:copies copies
+     :peers (vec (sort (distinct (map :peer remotes))))
+     :objects (count copies)}))
+
+(defn replication-plan
+  "Which digests fall below `desired` copies. `copies` is the :copies
+  map from fleet-copies. Returns {:under [{:sha :have :want}] (sorted,
+  have < desired) :healthy n}. Deterministic."
+  [copies desired]
+  (let [under (vec (sort-by :sha
+                            (keep (fn [[sha {:keys [count]}]]
+                                    (when (< count desired)
+                                      {:sha sha :have count :want desired}))
+                                  copies)))]
+    {:under under :healthy (- (count copies) (count under))}))
+
 (defn apply-record
   "Describe an applied copy for the journal: digest, direction, bytes."
   [sha direction size verified?]
