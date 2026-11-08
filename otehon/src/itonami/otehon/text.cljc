@@ -221,3 +221,13 @@
                                (str (replacement m))
                                (str replacement)))))))))
       (host/replace s match replacement))))
+
+;; ---------------------------------------------------------------- pad
+
+(defn pad-end
+  "Pad `s` with spaces to width `w` (no truncation). The portable twin of
+  the `.padEnd` calls in the legacy CLI tables (status, sessions, profile
+  list): hosts agree on space padding, so the loop stays branch-free."
+  [s w]
+  (let [s (str s) n (count s)]
+    (if (>= n w) s (str s (apply str (repeat (- w n) " "))))))

@@ -38,6 +38,15 @@ for r in $runners; do
     "$run" "$r" dry-run "$fixtures/itonami-ok" digest-tick --capability publish_external; echo "exit $?"
     echo "dry-run hermes-ok daily"
     "$run" "$r" dry-run "$fixtures/hermes-ok" daily; echo "exit $?"
+    root="$out/root-$r"; rm -rf "$root"; mkdir -p "$root/profiles"
+    cp -r "$fixtures/itonami-ok" "$root/profiles/p1"
+    echo "status fresh"; ITONAMI_DIR="$root" "$run" "$r" status; echo "exit $?"
+    echo "pause"; ITONAMI_DIR="$root" "$run" "$r" pause owner check; echo "exit $?"
+    echo "status paused"
+    ITONAMI_DIR="$root" "$run" "$r" status > "$out/status-$r.txt"; echo "exit $?"
+    sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{2}:[0-9]{2}/TS/' "$out/status-$r.txt"
+    echo "resume"; ITONAMI_DIR="$root" "$run" "$r" resume; echo "exit $?"
+    echo "resume idle"; ITONAMI_DIR="$root" "$run" "$r" resume; echo "exit $?"
     grep -v '^:' "$out/$r.cases" | sed 's/, :runner "[^"]*"//'
   } > "$out/$r.canon" 2>> "$out/$r.err"
 done

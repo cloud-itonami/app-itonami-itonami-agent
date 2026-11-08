@@ -9,6 +9,9 @@
     run-plan   <profile-dir> <job-id-or-name> [--capability <name>]...
                [--script-file <path> | --script-error <text>] [--script-no-wake]
     store-plan --direction import|export --from <dir> --to <dir> [--force]
+    pause      [reason words]...   (the store is ITONAMI_DIR, else ~/.itonami)
+    resume
+    status
     cas-put    <store> <file>...
     cas-get    <store> <sha> <out>
     cas-verify <store>
@@ -25,12 +28,17 @@
 
   tick, turn-gate and run-plan decide without doing: no script runs, no
   inference is called, nothing is saved (side-effects :none). store-plan
-  prints the copy plan; the host copies the bytes.
+  prints the copy plan; the host copies the bytes. pause, resume and
+  status touch and read the store exactly like the legacy CLI (the pause
+  marker text and every status line are verbatim), so their shared cases
+  assert the same strings.
   Output is one canonical EDN value (sorted map keys) so the three runners
   can be compared byte for byte. Exit 0 ok, 1 refused / errors / failures,
   2 held for the owner, 64 usage."
   (:require [clojure.string :as str]
             [itonami.otehon.io :as hio]
+            [itonami.otehon.pause :as pause]
+            [itonami.otehon.status :as status]
             [itonami.otehon.profile :as profile]
             [itonami.otehon.yakuwari :as yakuwari]
             [itonami.otehon.yaml :as yaml]
@@ -98,6 +106,11 @@
 
 ;; ---------------------------------------------------------------- shared cases
 
+;; Forward: the store-backed case ops live below with the other store
+;; code (gather lives next to its CLI commands), while observe dispatches
+;; every op from here. `declare` is the same idiom yaml.cljc uses.
+(declare ops-pause ops-status)
+
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
   [want got]
@@ -110,9 +123,13 @@
   (every? (fn [n] (some #(str/includes? % n) msgs)) needles))
 
 (defn- observe
-  "What one case's operation returns for the given read-text."
-  [c dir read-text]
+  "What one case's operation returns for the given read-text. The :pause
+  and :status ops touch a real store instead: they seed a fresh scratch
+  directory and run the same gather code the CLI commands use."
+  [c dir read-text scratch]
   (case (:op c)
+    :pause (ops-pause c scratch)
+    :status (ops-status c scratch)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -210,17 +227,125 @@
          (includes-all? (:messages got) (:messages-include want []))
          (or (nil? (:reason-in want)) (contains? (:reason-in want) (:reason got))))))
 
-(defn run-case [c fixtures]
+;; ---------------------------------------------------------------- store ops
+;; pause / resume / status touch a real store (unlike the fixture-text
+;; cases above): each case gets a fresh directory under test/scratch and
+;; seeds it with :seed {relative-path text}. The legacy commands never
+;; refuse these paths (a missing file reads as absent, garbage as
+;; not-live), so there are no negative controls here — the adversarial
+;; seeds (garbage pid, unparsable peers, unnamable profile dirs) are the
+;; coverage, asserted as positive cases.
+
+(defn- scratch-case-dir [scratch c]
+  (str scratch "/" (namespace (:id c)) "-" (name (:id c))))
+
+(defn- seed-files! [dir seeds]
+  (doseq [[rel text] seeds]
+    (let [p (str dir "/" rel)]
+      (hio/mkdirs! (hio/dirname p))
+      (hio/write-text! p (str text)))))
+
+(defn- read-trim [path]
+  (let [t (when (hio/file? path) (hio/slurp-utf8 path))]
+    (when (some? t) (str/trim t))))
+
+(defn- read-edn-or [path dflt]
+  (try (if (hio/file? path)
+         (let [v (hio/parse-edn (hio/slurp-utf8 path))]
+           (if (nil? v) dflt v))
+         dflt)
+       (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ dflt)))
+
+(defn- read-json-or [path dflt]
+  (try (if (hio/file? path)
+         (let [v (hio/parse-json (hio/slurp-utf8 path))]
+           (if (nil? v) dflt v))
+         dflt)
+       (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ dflt)))
+
+(defn- listing-names [root]
+  "Profile names under a store root: valid names whose directory exists,
+  sorted so every runner lists the same order. Mirrors profile.cljk
+  names-in (the legacy order is filesystem order, which differs per
+  host readdir)."
+  (let [d (str root "/profiles")]
+    (vec (sort (filter #(and (status/valid-name? %)
+                             (hio/dir? (str d "/" %)))
+                       (hio/read-dir-names d))))))
+
+(defn- gather-status
+  "Read a store root into status/render-status data. Missing files read
+  as absent (no profiles, not running, zero peers); an unparsable
+  peers.edn reads nil (the legacy `?`)."
+  [root]
+  (let [marker (str root "/paused")
+        paused (when (hio/file? marker) (pause/since-of (hio/slurp-utf8 marker)))
+        names (listing-names root)
+        rows (mapv (fn [n]
+                     (let [home (str root "/profiles/" n)
+                           m (read-edn-or (str home "/itonami.edn") nil)
+                           jobs (read-json-or (str home "/cron/jobs.json") nil)
+                           jobs (if (map? jobs) (get jobs "jobs") jobs)]
+                       (status/profile-row n m (if (sequential? jobs) jobs []))))
+                   names)
+        tick (status/pid-state (read-trim (str root "/gateway.pid"))
+                               (hio/pid-alive? (read-trim (str root "/gateway.pid"))))
+        serve (status/pid-state (read-trim (str root "/gateway-serve.pid"))
+                                (hio/pid-alive? (read-trim (str root "/gateway-serve.pid"))))
+        peers (if (hio/file? (str root "/peers.edn"))
+                  (try (count (:trusted (hio/parse-edn (hio/slurp-utf8 (str root "/peers.edn")))))
+                       (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil))
+                  0)]
+    {:paused paused :profiles rows
+     :gateway-tick tick :gateway-serve serve :peers-trusted peers}))
+
+(defn- ops-pause [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    {:steps (mapv (fn [st]
+                    (case (:action st)
+                      "set" (do (hio/mkdirs! dir)
+                                (hio/write-text! (pause/marker-path dir)
+                                                 (pause/format-record (:at st "2026-11-08T00:00:00+09:00")
+                                                                      (:reason st)))
+                                {:action "set"
+                                 :message (pause/pause-message (:reason st))
+                                 :active true
+                                 :record (pause/since-of (hio/slurp-utf8 (pause/marker-path dir)))})
+                      "show" (let [m (pause/marker-path dir)
+                                   on? (hio/file? m)]
+                               {:action "show"
+                                :active on?
+                                :record (when on? (pause/since-of (hio/slurp-utf8 m)))})
+                      "lift" (let [m (pause/marker-path dir)
+                                   was (hio/file? m)]
+                               (when was (hio/delete-file! m))
+                               {:action "lift"
+                                :message (pause/resume-message was)
+                                :was-active was
+                                :active (boolean (hio/file? m))})
+                      {:action (:action st) :status :refused :reason "pause/unknown-action"}))
+                  (:steps c []))}))
+
+(defn- ops-status [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [r (gather-status dir)]
+      (assoc r :lines (status/render-status r)))))
+
+(defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
         base (if dir (hio/read-text-fn dir) (constantly nil))
         edited (apply-edits base (:edit c []))
-        got (try (observe c dir edited)
+        got (try (observe c dir edited scratch)
                  (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
                    {:crash (str (ex-message e))}))
         ok? (satisfied? c got)
         ;; negative control: the edit, not the fixture, must cause the rejection
         control-ok? (if (and (:negative c) (seq (:edit c)))
-                      (not (satisfied? c (try (observe c dir base)
+                      (not (satisfied? c (try (observe c dir base scratch)
                                               (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
                                                 {:crash (str (ex-message e))}))))
                       true)]
@@ -231,13 +356,15 @@
 (defn run-cases [path]
   (let [doc (hio/parse-edn (hio/slurp-utf8 path))
         fixtures (str (hio/dirname path) "/" (:fixtures doc "fixtures"))
-        results (mapv #(run-case % fixtures) (:cases doc))]
+        scratch (str (hio/dirname path) "/scratch")]
+    (hio/mkdirs! scratch)
+    (let [results (mapv #(run-case % fixtures scratch) (:cases doc))]
     {:runner (hio/runner-version)
      :cases (count results)
      :pass (count (filter :pass results))
      :fail (vec (for [r results :when (not (:pass r))] (dissoc r :pass)))
      :negative-controls (count (filter :negative results))
-     :ids (mapv #(str (:id %) (if (:pass %) " ok" " FAIL")) results)}))
+     :ids (mapv #(str (:id %) (if (:pass %) " ok" " FAIL")) results)})))
 
 ;; ---------------------------------------------------------------- main
 
@@ -249,7 +376,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -672,6 +799,23 @@
                                                  :from-name from :to-name to})]
                          (println (canon r))
                          (if (= :ok (:status r)) 0 1))))
+      "pause" (let [root (pause/store-root hio/env)
+                    reason (let [r (str/trim (str/join " " (filter some? (cons a (cons b more)))))]
+                             (when-not (str/blank? r) r))]
+                (hio/mkdirs! root)
+                (hio/write-text! (pause/marker-path root)
+                                 (pause/format-record (:iso (hio/now-parts)) reason))
+                (println (pause/pause-message reason))
+                0)
+      "resume" (let [root (pause/store-root hio/env)
+                     m (pause/marker-path root)
+                     was (hio/file? m)]
+                 (when was (hio/delete-file! m))
+                 (println (pause/resume-message was))
+                 0)
+      "status" (let [r (gather-status (pause/store-root hio/env))]
+                 (doseq [l (status/render-status r)] (println l))
+                 0)
       "cas-put" (let [files (if b (cons b more) [])]
                   (if (or (nil? a) (empty? files))
                     (usage)

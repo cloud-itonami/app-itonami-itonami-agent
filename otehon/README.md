@@ -22,6 +22,9 @@ otehon/bin/itonami-otehon <basilisp|bb|nbb> tick       <profile-dir>
 otehon/bin/itonami-otehon <basilisp|bb|nbb> turn-gate  <profile-dir> <prompt> [--capability c]...
 otehon/bin/itonami-otehon <basilisp|bb|nbb> run-plan   <profile-dir> <job-id-or-name> [--capability c]...
 otehon/bin/itonami-otehon <basilisp|bb|nbb> store-plan --direction import|export --from <dir> --to <dir> [--force]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> pause      [reason words]...   (the store is ITONAMI_DIR, else ~/.itonami)
+otehon/bin/itonami-otehon <basilisp|bb|nbb> resume
+otehon/bin/itonami-otehon <basilisp|bb|nbb> status
 otehon/bin/itonami-otehon <basilisp|bb|nbb> test       otehon/test/cases.edn
 otehon/bin/run-shared-cases [basilisp bb nbb]
 ```
@@ -52,7 +55,9 @@ the owner, 64 usage.
 | `src/itonami/otehon/rail.cljc` | Hermes / itonami rail verdicts, inference target | `kotoba/itonami/rail.kotoba`, Hermes `cron/scheduler.py` order |
 | `src/itonami/otehon/cron.cljc` | jobs.json, cron hint, toolsets, plan | `src/itonami/agent/cron.cljk` |
 | `src/itonami/otehon/profile.cljc` | load, check, dry-run (pure) | `profile.cljk` |
-| `src/itonami/otehon/io.cljc` | files, JSON, EDN, exit, clock, listing: the only host code | — |
+| `src/itonami/otehon/io.cljc` | files, JSON, EDN, exit, clock, listing, utf8 writes, pid liveness: the only host code | — |
+| `src/itonami/otehon/pause.cljc` | emergency-stop marker paths, record, messages (pure) | `src/itonami/agent/pause.cljk`, `main.cljk` pause/resume-cmd |
+| `src/itonami/otehon/status.cljc` | store status lines (pure) | `main.cljk` status-cmd |
 | `src/itonami/otehon/cli.cljc` | commands, canonical print, shared-case runner | — |
 | `src/itonami/otehon/tick.cljc` | due jobs, next fire times (pure cron math) | `src/itonami/agent/cron.cljk` `parse-cron`, `next-run`, `due?` |
 | `src/itonami/otehon/store.cljc` | import/export copy plan (pure) | `src/itonami/agent/profile.cljk` `copy-profile!` |
@@ -71,7 +76,10 @@ choice: expand the host surface) adds clock and directory listing to `io.cljc`
 only — no other namespace carries `#?`, so every host difference stays
 visible in this one file. The third slice (same day, AWAI-232) adds
 latin-1 byte read/write and recursive mkdir to `io.cljc` under the same
-rule; hashing itself stays pure so digests agree on every runner. `text.cljc` pins `trim`/`blank?` to JVM
+rule; hashing itself stays pure so digests agree on every runner. The fourth
+addition (same day, JUN-1036 S3a) is utf8 writes and pid liveness, again
+`io.cljc`-only: `pause`/`resume`/`status` keep every other namespace pure.
+`text.cljc` pins `trim`/`blank?` to JVM
 `Character/isWhitespace` (NBSP kept) and `split` trailing empties to Java
 semantics; regex matching itself stays host regex, as in `kotoba.lang.text`.
 No `#?@`, no `.charAt`, no `str/trimr`, no `array-map`, no `\\\\` in regex
@@ -125,15 +133,22 @@ placement standard live in [PORTABILITY.md](./PORTABILITY.md).
 
 `bin/run-shared-cases` runs on each runner:
 
-- `test/cases.edn` — 78 cases (18 `:text` oracle cases), 27 of them
-  negative controls. Each negative control with an edit is also run on the
-  unedited fixture and must then *not* match, so the edit causes the
-  rejection.
-- `test/must-fail.edn` — five deliberately wrong cases (one a no-op edit).
-  Every runner must report all four as FAIL; otherwise the harness could not
+- `test/cases.edn` — 146 cases, 27 of them negative controls. Each
+  negative control with an edit is also run on the unedited fixture and
+  must then *not* match, so the edit causes the rejection. The five
+  pause/status cases touch a real scratch store (`test/scratch/`,
+  ignored) instead of fixture text: `:seed` writes files, `:at` pins the
+  marker timestamp, and adversarial seeds (garbage pid, unparsable peers,
+  unnamable profile dirs) are asserted as positive cases — the legacy
+  commands never refuse these paths, so there is nothing for a negative
+  control to catch.
+- `test/must-fail.edn` — seven deliberately wrong cases (one a no-op edit).
+  Every runner must report all seven as FAIL; otherwise the harness could not
   tell a broken core from a working one.
-- the canonical output of `check` / `dry-run` on the fixtures and the case
-  summary, compared byte for byte across runners.
+- the canonical output of `check` / `dry-run` on the fixtures, a
+  pause → status → resume → resume CLI flow on a scratch store
+  (timestamps normalized), and the case summary, compared byte for byte
+  across runners.
 
 CI: `.github/workflows/oracle-otehon-cljc.yml`, an oracle-only job with
 pinned runners. It is not a required check.
@@ -163,6 +178,13 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
    Bytes travel latin-1; hashing stays pure. What stays open: native
    supply of the asymmetric verify-fn (flow + payload contract done)
    and native execution of these planners (the awai fs gap list).
+7. ~~Store verbs `pause`/`resume`/`status`~~ — done 2026-11-08 (JUN-1036
+   S3a): the emergency-stop marker and the store status lines verbatim
+   from the legacy CLI (same texts, same exit codes), five shared cases
+   plus two must-fail controls. `otehon/COMPAT.md` records the full
+   API/command denominator and the remaining slices (S2 host execution,
+   S3b model/fallback/doctor/sessions, S4 store writes, S5 messaging,
+   S6 tool backends).
 
 Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
 `docs/evidence/otehon-cljc-20261108.md`,
@@ -185,4 +207,7 @@ conflicts refuse without writing),
 `docs/evidence/otehon-fleet.md` (134 shared cases; `fleet-status`
 copy census with `--copies N` threshold and per-peer gates),
 `docs/evidence/otehon-asym-flow.md` (141 shared cases; injected-crypto
-`verify-asymmetric` + `market-verify` demo suite; native handoff contract).
+`verify-asymmetric` + `market-verify` demo suite; native handoff contract),
+`docs/evidence/otehon-pause-status-20261108.md` (146 shared cases;
+`pause`/`resume`/`status` verbatim with the legacy CLI, plus the
+API/command compat matrix in `otehon/COMPAT.md`).
