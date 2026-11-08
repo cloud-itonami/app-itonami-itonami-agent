@@ -427,4 +427,39 @@
    :expect {:valid false}}
   {:id :market-attest-unsigned :op :market-attest :today "2026-11-08"
    :att {:node "n1" :cpu 2 :mem-gib 4 :disk-gib 50 :expires "2026-12-31" :issuer "k"}
-   :expect {:valid false}}]}
+   :expect {:valid false}}
+
+  ;; ------------------------------------------------------------ market signatures
+  {:id :market-sign-basic :op :market-sign :secret "s3cr3t"
+   :att {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "k"}
+   :expect {:sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}}
+  {:id :market-sign-unencodable :op :market-sign :secret "s3cr3t"
+   :att {:node "日本" :cpu 1 :mem-gib 1 :disk-gib 10 :price 1 :expires "2026-12-31" :issuer "k"}
+   :expect {:sig nil}}
+  {:id :market-verify-valid :op :market-verify
+   :secrets {"k" "s3cr3t"}
+   :att {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "k" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+   :expect {:valid true}}
+  {:id :market-verify-tampered :op :market-verify
+   :secrets {"k" "s3cr3t"}
+   :att {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 6 :expires "2026-12-31" :issuer "k" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+   :expect {:valid false}}
+  {:id :market-verify-unknown-issuer :op :market-verify
+   :secrets {"k" "s3cr3t"}
+   :att {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "zz" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+   :expect {:valid false}}
+  {:id :market-match-signed-ok :op :market-match-signed
+   :secrets {"k" "s3cr3t"}
+   :asks [{:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "k" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+          {:node "n2" :cpu 8 :mem-gib 16 :disk-gib 200 :price 9 :expires "2026-12-31" :issuer "k" :sig "cfc7657abca7aabb3a8a6e6049a4ca635f281d28349a915b71983b924074ef39"}]
+   :bids [{:id "b1" :cpu 2 :mem-gib 4 :disk-gib 50 :max-price 6}
+          {:id "b2" :cpu 8 :mem-gib 16 :disk-gib 200 :max-price 10}]
+   :expect {:matches [{:bid "b1" :ask "n1" :price 5}
+                      {:bid "b2" :ask "n2" :price 9}]
+            :unmatched []}}
+  {:id :market-match-signed-badsig :op :market-match-signed
+   :secrets {"k" "s3cr3t"}
+   :asks [{:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "k" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
+          {:node "n2" :cpu 8 :mem-gib 16 :disk-gib 200 :price 9 :expires "2026-12-31" :issuer "k" :sig "0000000000000000000000000000000000000000000000000000000000000000"}]
+   :bids [{:id "b1" :cpu 2 :mem-gib 4 :disk-gib 50 :max-price 6}]
+   :expect {:status :refused :reason "market/signature-invalid" :nodes ["n2"]}}]}

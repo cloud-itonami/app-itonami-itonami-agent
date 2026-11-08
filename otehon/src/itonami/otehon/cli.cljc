@@ -15,7 +15,8 @@
     peer-push  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-pull  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-repair <store> <peerdir> [--as <node> --registry <reg.edn>]
-    market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD]
+    market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>]
+    market-sign <att.edn> --issuer-secret <secret>
     test       <cases.edn>
 
   tick, turn-gate and run-plan decide without doing: no script runs, no
@@ -148,6 +149,9 @@
                                         (:remote c {}))
     :market-match (market/match-orders (:asks c []) (:bids c []))
     :market-attest {:valid (market/valid-attestation? (:att c) (:today c ""))}
+    :market-sign {:sig (:sig (market/sign-attestation (:att c {}) (:secret c "")))}
+    :market-verify {:valid (market/valid-signature? (:att c {}) (:secrets c {}))}
+    :market-match-signed (market/match-signed (:asks c []) (:bids c []) (:secrets c))
     :decide (let [p (load-dir dir read-text)]
               (yakuwari/decide (:yakuwari p) (get-in p [:manifest :authority]) (:capability c)))
     :additive (let [full (load-dir dir read-text)
@@ -221,7 +225,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir> [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir> [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -418,6 +422,18 @@
           (= "--today" (first as)) (recur (nnext as) (second as))
           :else (recur (next as) today))))
 
+(defn- market-flag [more flag]
+  (loop [as (seq more)]
+    (cond (nil? as) nil
+          (= flag (first as)) (second as)
+          :else (recur (next as)))))
+
+(defn- str-keys
+  "Issuer secrets keyed by name: keyword keys become their name so
+  hand-written {\"k\" ...} and {:k ...} EDN agree. Values pass through."
+  [m]
+  (into {} (map (fn [[k v]] [(if (keyword? k) (name k) (str k)) v]) m)))
+
 (defn main* [args]
   (let [[cmd a b & more] args]
     (case cmd
@@ -508,9 +524,19 @@
                              bad (vec (sort (map :node (filter #(not (market/valid-attestation? % today)) asks))))]
                          (if (seq bad)
                            (do (println (canon {:status :refused :reason "market/attestation-invalid" :nodes bad})) 1)
-                           (let [r (market/match-orders asks bids)]
-                             (println (canon (assoc r :status :ok)))
-                             0))))
+                           (let [secrets (when-let [p (market-flag more "--secrets")]
+                                           (when-let [raw (read-edn-file p)] (str-keys raw)))
+                                 r (market/match-signed asks bids secrets)]
+                             (println (canon (if (= :refused (:status r)) r (assoc r :status :ok))))
+                             (if (= :refused (:status r)) 1 0)))))
+      "market-sign" (let [secret (market-flag (cons b more) "--issuer-secret")]
+                      (if-not (and a secret)
+                        (usage)
+                        (let [att (let [raw (read-edn-file a)] (if (map? raw) (kw-keys raw) raw))
+                              signed (market/sign-attestation att secret)]
+                          (if (nil? signed)
+                            (do (println (canon {:status :refused :reason "market/unsignable"})) 1)
+                            (do (println (canon signed)) 0)))))
       "test" (if-not a
                (usage)
                (let [r (run-cases a)]

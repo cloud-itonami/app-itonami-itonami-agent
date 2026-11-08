@@ -61,7 +61,7 @@ the owner, 64 usage.
 | `src/itonami/otehon/text.cljc` | portable string ops, JVM whitespace pinned | `kotoba.lang.text` (the `.cljk` reference nbb cannot load) |
 | `src/itonami/otehon/cas.cljc` | pure SHA-256, object sharding, manifests | AWAI-232 (decentralized storage slice 1) |
 | `src/itonami/otehon/peer.cljc` | permissioned node registry, sync plans, repair plans | AWAI-232 (slices 2, 4) |
-| `src/itonami/otehon/market.cljc` | capacity attestations, ask/bid match, escrow | AWAI-232 (slice 3) |
+| `src/itonami/otehon/market.cljc` | capacity attestations, ask/bid match, escrow, HMAC sigs | AWAI-232 (slices 3, 5) |
 
 Everything except `io.cljc` and the two host-leaf branches in `text.cljc`
 (`lower-case` case-folding) is pure and host-independent; `io.cljc` is the
@@ -161,7 +161,7 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
    `peer-push/pull` (permissioned node sync with registry gate),
    `market-match` (capacity asks/bids, attestation expiry).
    Bytes travel latin-1; hashing stays pure. What stays open: multi-peer
-   fallback, manifest repair, signature crypto,
+   fallback, manifest repair, asymmetric signatures,
    fleet metadata, retention/GC (the awai fs gap list).
 
 Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
@@ -169,4 +169,7 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
 `docs/evidence/otehon-cas12.md`,
 `docs/evidence/otehon-repair.md` (106 shared cases; `peer-repair`
 heals tampered objects from a permissioned peer, refuses when the
-peer lacks or corrupts them).
+peer lacks or corrupts them),
+`docs/evidence/otehon-market-sig.md` (113 shared cases; HMAC-SHA256
+attestation sigs verified against python hashlib, `market-sign` +
+`market-match --secrets`; asymmetric sigs stay open).

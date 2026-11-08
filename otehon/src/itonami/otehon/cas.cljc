@@ -97,13 +97,27 @@
               t2 (add (big-sigma0 a) (maj a b c))]
           (recur (inc i) (add t1 t2) a b c (add d t1) e f g))))))
 
-(defn sha256-hex
-  "Lowercase hex SHA-256 of a vector of 0-255 ints."
+(defn sha256-digest
+  "Raw SHA-256 digest: 32 ints in 0-255, big-endian. Same computation
+  as sha256-hex; exposed so keyed constructions (HMAC) can chain the
+  raw bytes without re-parsing hex."
   [bytes]
   (let [padded (pad (vec bytes))
         h (loop [blocks (partition 64 padded) h H0]
             (if (empty? blocks) h (recur (rest blocks) (compress h (first blocks)))))]
-    (apply str (mapcat (fn [w] (map #(nth HEXDIGITS %) (map (fn [k] (mod (quot w (nth P2 (* k 4))) 16)) (range 7 -1 -1)))) h))))
+    (vec (mapcat (fn [w] (map (fn [p] (mod (quot w p) 256))
+                              [(nth P2 24) (nth P2 16) (nth P2 8) 1]))
+                 h))))
+
+(defn bytes-hex
+  "Lowercase hex of a vector of 0-255 ints."
+  [bs]
+  (apply str (mapcat (fn [b] [(nth HEXDIGITS (quot b 16)) (nth HEXDIGITS (mod b 16))]) bs)))
+
+(defn sha256-hex
+  "Lowercase hex SHA-256 of a vector of 0-255 ints."
+  [bytes]
+  (bytes-hex (sha256-digest bytes)))
 
 (defn object-rel
   "Store-relative object path for a digest, git-style sharded."
