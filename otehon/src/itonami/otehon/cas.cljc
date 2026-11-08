@@ -1,0 +1,145 @@
+(ns itonami.otehon.cas
+  "Content addressing: pure SHA-256, object sharding, manifests.
+
+  The hash runs on vectors of 0-255 ints with only non-negative integer
+  arithmetic (quot/mod on halves), so every runner computes identical
+  digests: no host crypto, no reader, no branches. Bytes enter through
+  hio/read-latin1 + hio/bytes-of; digests leave as lowercase hex."
+  (:require [clojure.string :as str]))
+
+(def ^:private M32 4294967296)
+(def ^:private H0 [0x6a09e667 0xbb67ae85 0x3c6ef372 0xa54ff53a
+                   0x510e527f 0x9b05688c 0x1f83d9ab 0x5be0cd19])
+(def ^:private K
+  [0x428a2f98 0x71374491 0xb5c0fbcf 0xe9b5dba5 0x3956c25b 0x59f111f1
+   0x923f82a4 0xab1c5ed5 0xd807aa98 0x12835b01 0x243185be 0x550c7dc3
+   0x72be5d74 0x80deb1fe 0x9bdc06a7 0xc19bf174 0xe49b69c1 0xefbe4786
+   0x0fc19dc6 0x240ca1cc 0x2de92c6f 0x4a7484aa 0x5cb0a9dc 0x76f988da
+   0x983e5152 0xa831c66d 0xb00327c8 0xbf597fc7 0xc6e00bf3 0xd5a79147
+   0x06ca6351 0x14292967 0x27b70a85 0x2e1b2138 0x4d2c6dfc 0x53380d13
+   0x650a7354 0x766a0abb 0x81c2c92e 0x92722c85 0xa2bfe8a1 0xa81a664b
+   0xc24b8b70 0xc76c51a3 0xd192e819 0xd6990624 0xf40e3585 0x106aa070
+   0x19a4c116 0x1e376c08 0x2748774c 0x34b0bcb5 0x391c0cb3 0x4ed8aa4a
+   0x5b9cca4f 0x682e6ff3 0x748f82ee 0x78a5636f 0x84c87814 0x8cc70208
+   0x90befffa 0xa4506ceb 0xbef9a3f7 0xc67178f2])
+(def ^:private P2 (vec (take 33 (iterate #(* % 2) 1))))
+(def ^:private HEXDIGITS "0123456789abcdef")
+
+(defn- add [& xs] (mod (apply + xs) M32))
+
+(defn- band [x y]
+  (+ (* (bit-and (quot x 65536) (quot y 65536)) 65536)
+     (bit-and (mod x 65536) (mod y 65536))))
+
+(defn- bor [x y]
+  (+ (* (bit-or (quot x 65536) (quot y 65536)) 65536)
+     (bit-or (mod x 65536) (mod y 65536))))
+
+(defn- bxor2 [x y]
+  (+ (* (bit-xor (quot x 65536) (quot y 65536)) 65536)
+     (bit-xor (mod x 65536) (mod y 65536))))
+
+(defn- bnot [x] (- 4294967295 x))
+(defn- shr [x n] (quot x (nth P2 n)))
+
+(defn- rotr [x n]
+  (mod (+ (* (mod x (nth P2 n)) (nth P2 (- 32 n))) (quot x (nth P2 n))) M32))
+
+(defn- ch [x y z] (bxor2 (band x y) (band (bnot x) z)))
+
+(defn- maj [x y z]
+  (bxor2 (band x y) (bxor2 (band x z) (band y z))))
+
+(defn- big-sigma0 [x] (bxor2 (rotr x 2) (bxor2 (rotr x 13) (rotr x 22))))
+(defn- big-sigma1 [x] (bxor2 (rotr x 6) (bxor2 (rotr x 11) (rotr x 25))))
+(defn- small-sigma0 [x] (bxor2 (rotr x 7) (bxor2 (rotr x 18) (shr x 3))))
+(defn- small-sigma1 [x] (bxor2 (rotr x 17) (bxor2 (rotr x 19) (shr x 10))))
+
+(defn- pad [bytes]
+  (let [mlen (count bytes)
+        with-1 (conj (vec bytes) 0x80)
+        npad (mod (- 56 (mod (count with-1) 64)) 64)
+        bitlen (* mlen 8)
+        hi (quot bitlen M32)
+        lo (mod bitlen M32)
+        len-bytes [(quot hi 16777216) (mod (quot hi 65536) 256)
+                   (mod (quot hi 256) 256) (mod hi 256)
+                   (quot lo 16777216) (mod (quot lo 65536) 256)
+                   (mod (quot lo 256) 256) (mod lo 256)]]
+    (into with-1 (concat (repeat npad 0) len-bytes))))
+
+(defn- words [block]
+  (vec (for [i (range 16)]
+         (+ (* (nth block (* i 4)) 16777216)
+            (* (nth block (+ (* i 4) 1)) 65536)
+            (* (nth block (+ (* i 4) 2)) 256)
+            (nth block (+ (* i 4) 3))))))
+
+(defn- schedule [w16]
+  (loop [i 16 w w16]
+    (if (= i 64)
+      w
+      (recur (inc i)
+             (conj w (add (small-sigma1 (nth w (- i 2)))
+                          (nth w (- i 7))
+                          (small-sigma0 (nth w (- i 15)))
+                          (nth w (- i 16))))))))
+
+(defn- compress [h block]
+  (let [w (schedule (words block))]
+    (loop [i 0 a (nth h 0) b (nth h 1) c (nth h 2) d (nth h 3)
+           e (nth h 4) f (nth h 5) g (nth h 6) hh (nth h 7)]
+      (if (= i 64)
+        [(add (nth h 0) a) (add (nth h 1) b) (add (nth h 2) c)
+         (add (nth h 3) d) (add (nth h 4) e) (add (nth h 5) f)
+         (add (nth h 6) g) (add (nth h 7) hh)]
+        (let [t1 (add hh (big-sigma1 e) (ch e f g) (nth K i) (nth w i))
+              t2 (add (big-sigma0 a) (maj a b c))]
+          (recur (inc i) (add t1 t2) a b c (add d t1) e f g))))))
+
+(defn sha256-hex
+  "Lowercase hex SHA-256 of a vector of 0-255 ints."
+  [bytes]
+  (let [padded (pad (vec bytes))
+        h (loop [blocks (partition 64 padded) h H0]
+            (if (empty? blocks) h (recur (rest blocks) (compress h (first blocks)))))]
+    (apply str (mapcat (fn [w] (map #(nth HEXDIGITS %) (map (fn [k] (mod (quot w (nth P2 (* k 4))) 16)) (range 7 -1 -1)))) h))))
+
+(defn object-rel
+  "Store-relative object path for a digest, git-style sharded."
+  [sha]
+  (str (subs sha 0 2) "/" (subs sha 2)))
+
+(defn ingest
+  "Describe bytes for the store without touching the disk."
+  [rel bytes]
+  (let [sha (sha256-hex bytes)]
+    {:rel rel :sha sha :size (count bytes) :object (object-rel sha)}))
+
+(defn manifest-add
+  "Add one file's bytes to a manifest {rel {:sha :size}}."
+  [manifest rel bytes]
+  (assoc manifest rel (let [sha (sha256-hex bytes)]
+                        {:sha sha :size (count bytes)})))
+
+(defn manifest-shas
+  "The set of digests a manifest references."
+  [manifest]
+  (set (map (comp :sha val) manifest)))
+
+(defn verify-manifest
+  "Re-hash every file through `read-bytes` (rel -> bytes or nil).
+  Pure: the caller injects the reader, so the shared cases run
+  without a disk and the CLI passes the io one."
+  [manifest read-bytes]
+  (reduce (fn [acc [rel {:keys [sha]}]]
+            (let [bs (read-bytes rel)]
+              (cond (nil? bs) (-> acc
+                                  (update :missing (fnil conj []) rel)
+                                  (update :checked inc))
+                    (= sha (sha256-hex bs)) (update acc :checked inc)
+                    :else (-> acc
+                              (update :mismatch (fnil conj []) rel)
+                              (update :checked inc)))))
+          {:checked 0 :mismatch [] :missing []}
+          (sort-by key manifest)))
