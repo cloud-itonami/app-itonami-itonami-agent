@@ -15,7 +15,7 @@
     cas-gc     <store> [--apply]
     peer-push  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-pull  <store> <peerdir> [--as <node> --registry <reg.edn>]
-    peer-repair <store> <peerdir> [--as <node> --registry <reg.edn>]
+    peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>]
     market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>]
     market-sign <att.edn> --issuer-secret <secret>
     test       <cases.edn>
@@ -148,7 +148,7 @@
     :peer-plan (peer/sync-plan (:local c {}) (:remote c {}))
     :peer-repair-plan (peer/repair-plan {:mismatch (:mismatch c [])
                                          :missing (:missing c [])}
-                                        (:remote c {}))
+                                        (:remotes c []))
     :market-match (market/match-orders (:asks c []) (:bids c []))
     :market-attest {:valid (market/valid-attestation? (:att c) (:today c ""))}
     :market-sign {:sig (:sig (market/sign-attestation (:att c {}) (:secret c "")))}
@@ -227,7 +227,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir> [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -378,11 +378,14 @@
             dst-manifest shas)))
 
 (defn- peer-args [args]
-  (loop [as (seq args) m {}]
+  "Parses --as/--registry; every other arg is a peer dir, collected in
+  :peers in order. push/pull ignore :peers; repair heals across them."
+  [args]
+  (loop [as (seq args) m {:peers []}]
     (cond (nil? as) m
           (= "--as" (first as)) (recur (nnext as) (assoc m :as (second as)))
           (= "--registry" (first as)) (recur (nnext as) (assoc m :registry (second as)))
-          :else (recur (next as) m))))
+          :else (recur (next as) (update m :peers conj (first as))))))
 
 (defn- peer-gate [registry as peerdir today]
   (cond (nil? registry) {:ok true}
@@ -412,38 +415,58 @@
           (do (cas-write-manifest! dst (peer-merge-manifest dstm srcm (map :sha jobs)))
               {:status :ok :direction direction :plan plan :applied (count applied)}))))))
 
+(defn- repair-one
+  "Copy one bad object from the first candidate peer whose manifest
+  lists its rel (try-order), re-hashed on receipt. Returns the
+  peer-apply-one record with :rel and the winning :from, or :ok false
+  when every candidate copy failed."
+  [candidates store {:keys [rel sha size]}]
+  (loop [cs (filter #(contains? (:manifest %) rel) candidates)]
+    (if (empty? cs)
+      {:rel rel :sha sha :size size :ok false :from nil}
+      (let [r (peer-apply-one (:peer (first cs)) store sha size)]
+        (if (:ok r)
+          (assoc r :rel rel :from (:peer (first cs)))
+          (recur (rest cs)))))))
+
 (defn- peer-repair
-  "Heal tampered or missing local objects from a peer. Same gate as
-  peer-sync; then verify the local store, copy every repairable object
-  the peer manifest covers (re-hashed on receipt via peer-apply-one),
-  and verify again. :ok only when the final verify is clean; otherwise
+  "Heal tampered or missing local objects from admitted peers, in
+  listed order with fallback: each bad object is copied from the first
+  peer whose manifest lists it, and on copy failure the next such peer
+  is tried. Peers failing the registry gate are listed in :skipped and
+  never touched. :ok only when the final verify is clean; otherwise
   refused with the remaining bad rels. The manifest is untouched: bad
   rels already point at the right digests."
-  [store peerdir opts today]
+  [store opts today]
   (let [raw (when (:registry opts) (read-edn-file (:registry opts)))
         registry (when raw (into {} (map (fn [[n e]] [n (if (map? e) (kw-keys e) e)]) raw)))
-        gate (peer-gate registry (:as opts) peerdir today)]
-    (if-not (:ok gate)
-      {:status :refused :gate (dissoc gate :ok)}
+        gated (mapv (fn [pd] {:dir pd :gate (peer-gate registry (:as opts) pd today)})
+                    (:peers opts))
+        admitted (filterv #(get-in % [:gate :ok]) gated)
+        skipped (mapv (fn [{:keys [dir gate]}] {:peer dir :reason (:reason gate)})
+                      (remove #(get-in % [:gate :ok]) gated))]
+    (if (empty? admitted)
+      {:status :refused :reason "peer/repair-no-peer" :skipped skipped}
       (let [lm (cas-read-manifest store)
             read-local (fn [rel] (when-let [e (get lm rel)]
                                    (when-let [s (hio/read-latin1 (cas-object-path store (:sha e)))]
                                      (hio/bytes-of s))))
-            rm (cas-read-manifest peerdir)
-            plan (peer/repair-plan (cas/verify-manifest lm read-local) rm)
-            applied (mapv (fn [{:keys [sha size]}] (peer-apply-one peerdir store sha size))
-                          (:repair plan))
-            failed (filterv (complement :ok) applied)]
+            rms (mapv (fn [{:keys [dir]}] {:peer dir :manifest (cas-read-manifest dir)})
+                      admitted)
+            plan (peer/repair-plan (cas/verify-manifest lm read-local) rms)
+            healed (mapv #(repair-one rms store %) (:repair plan))
+            failed (filterv (complement :ok) healed)]
         (if (seq failed)
           {:status :refused :reason "peer/repair-copy-failed"
-           :plan plan :failed (mapv :sha failed)}
+           :failed (mapv :sha failed) :skipped skipped}
           (let [vr (cas/verify-manifest lm read-local)
                 left (vec (sort (distinct (concat (:mismatch vr []) (:missing vr [])))))]
             (if (seq left)
               {:status :refused :reason "peer/repair-incomplete"
-               :unrepairable (:unrepairable plan) :remaining left}
-              {:status :ok :repaired (count applied)
-               :unrepairable (:unrepairable plan)})))))))
+               :unrepairable (:unrepairable plan) :remaining left :skipped skipped}
+              {:status :ok :repaired (count healed)
+               :from (frequencies (map :from healed))
+               :skipped skipped :unrepairable (:unrepairable plan)})))))))
 
 (defn- market-today [more]
   (loop [as (seq more) today nil]
@@ -547,7 +570,7 @@
                       (if (= :ok (:status r)) 0 1)))
       "peer-repair" (if-not (and a b)
                       (usage)
-                      (let [r (peer-repair a b (peer-args more) (subs (:iso (hio/now-parts)) 0 10))]
+                      (let [r (peer-repair a (peer-args (cons b more)) (subs (:iso (hio/now-parts)) 0 10))]
                         (println (canon r))
                         (if (= :ok (:status r)) 0 1)))
       "market-match" (if-not (and a b)
