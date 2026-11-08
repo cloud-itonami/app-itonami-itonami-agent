@@ -77,7 +77,8 @@ semantics; regex matching itself stays host regex, as in `kotoba.lang.text`.
 No `#?@`, no `.charAt`, no `str/trimr`, no `array-map`, no `\\\\` in regex
 literals (Basilisp folds it); `\\x5c` is used for a literal backslash, and no
 `\\u` escapes appear anywhere (Basilisp rejects them — whitespace is built
-from code points via `char`).
+from code points via `char`). The full constraint set and the oracle
+placement standard live in [PORTABILITY.md](./PORTABILITY.md).
 
 ## Compatibility kept
 
