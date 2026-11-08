@@ -59,7 +59,7 @@ the owner, 64 usage.
 | `src/itonami/otehon/turn.cljc` | one-turn `-z` gate (pure) | `main.cljk` `oneshot` gating, `loop.cljk` toolset rule |
 | `src/itonami/otehon/run.cljc` | real-run plan: prompt, output doc, record (pure) | `src/itonami/agent/cron.cljk` `build-prompt`, `output-doc`, `record-run-state!` |
 | `src/itonami/otehon/text.cljc` | portable string ops, JVM whitespace pinned | `kotoba.lang.text` (the `.cljk` reference nbb cannot load) |
-| `src/itonami/otehon/cas.cljc` | pure SHA-256, object sharding, manifests | AWAI-232 (decentralized storage slice 1) |
+| `src/itonami/otehon/cas.cljc` | pure SHA-256, object sharding, manifests, gc plans | AWAI-232 (slices 1, 6) |
 | `src/itonami/otehon/peer.cljc` | permissioned node registry, sync plans, repair plans | AWAI-232 (slices 2, 4) |
 | `src/itonami/otehon/market.cljc` | capacity attestations, ask/bid match, escrow, HMAC sigs | AWAI-232 (slices 3, 5) |
 
@@ -162,7 +162,7 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
    `market-match` (capacity asks/bids, attestation expiry).
    Bytes travel latin-1; hashing stays pure. What stays open: multi-peer
    fallback, manifest repair, asymmetric signatures,
-   fleet metadata, retention/GC (the awai fs gap list).
+   fleet metadata, time-based retention (the awai fs gap list).
 
 Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
 `docs/evidence/otehon-cljc-20261108.md`,
@@ -172,4 +172,6 @@ heals tampered objects from a permissioned peer, refuses when the
 peer lacks or corrupts them),
 `docs/evidence/otehon-market-sig.md` (113 shared cases; HMAC-SHA256
 attestation sigs verified against python hashlib, `market-sign` +
-`market-match --secrets`; asymmetric sigs stay open).
+`market-match --secrets`; asymmetric sigs stay open),
+`docs/evidence/otehon-gc.md` (116 shared cases; `cas-gc` drops only
+unreferenced objects, dry-run by default; time-based retention open).

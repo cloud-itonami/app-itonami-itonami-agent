@@ -12,6 +12,7 @@
     cas-put    <store> <file>...
     cas-get    <store> <sha> <out>
     cas-verify <store>
+    cas-gc     <store> [--apply]
     peer-push  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-pull  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-repair <store> <peerdir> [--as <node> --registry <reg.edn>]
@@ -138,6 +139,7 @@
                                   :output-path (:output-path c)
                                   :record (:record c) :deliver (:deliver c)})
     :cas-sha {:sha (cas/sha256-hex (:bytes c []))}
+    :cas-gc-plan (cas/gc-plan (:manifest c {}) (:inventory c {}))
     :cas-manifest (let [files (:files c {})
                         tamper (:tamper c {})
                         absent (set (:absent c []))
@@ -225,7 +227,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir> [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir> [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -332,6 +334,33 @@
         ok? (and (empty? (:mismatch r)) (empty? (:missing r)))]
     (assoc r :status (if ok? :ok :refused)
            :reason (when-not ok? "cas/verify-failed"))))
+
+(defn- cas-inventory
+  "Physical objects/ content as {sha size}. Missing dirs read empty;
+  files that vanish mid-listing are skipped (the next gc sees them)."
+  [store]
+  (let [top (str store "/objects")]
+    (into {} (mapcat (fn [shard]
+                       (let [d (str top "/" shard)]
+                         (keep (fn [f] (when-let [sz (hio/file-size (str d "/" f))]
+                                         [(str shard f) sz]))
+                               (hio/read-dir-names d))))
+                     (hio/read-dir-names top)))))
+
+(defn- cas-gc
+  "Drop objects no manifest references. Dry-run by default (prints the
+  plan, deletes nothing); --apply deletes and reports :deleted. The
+  manifest is never rewritten; a failed delete refuses the whole gc."
+  [store apply?]
+  (let [plan (cas/gc-plan (cas-read-manifest store) (cas-inventory store))]
+    (if-not apply?
+      (assoc plan :status :ok :applied false)
+      (let [paths (mapv #(str store "/objects/" (cas/object-rel %)) (:drop plan))
+            ok? (mapv hio/delete-file! paths)
+            failed (mapv first (filter (complement second) (map vector (:drop plan) ok?)))]
+        (if (seq failed)
+          {:status :refused :reason "cas/gc-failed" :failed failed}
+          (assoc plan :status :ok :applied true :deleted (count (:drop plan))))))))
 
 (defn- peer-apply-one [src dst sha size]
   (let [s (hio/read-latin1 (cas-object-path src sha))]
@@ -501,6 +530,11 @@
                      (let [r (cas-verify a)]
                        (println (canon r))
                        (if (= :ok (:status r)) 0 1)))
+      "cas-gc" (if-not a
+                 (usage)
+                 (let [r (cas-gc a (boolean (some #{"--apply"} (cons b more))))]
+                   (println (canon r))
+                   (if (= :ok (:status r)) 0 1)))
       "peer-push" (if-not (and a b)
                     (usage)
                     (let [r (peer-sync a b :send (peer-args more) (subs (:iso (hio/now-parts)) 0 10))]
