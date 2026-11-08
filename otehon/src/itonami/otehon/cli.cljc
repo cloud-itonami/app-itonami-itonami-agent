@@ -58,6 +58,7 @@
             [itonami.otehon.notepad :as notepad]
             [itonami.otehon.bundle :as bundle]
             [itonami.otehon.manifest :as manifest]
+            [itonami.otehon.soul :as soul]
             [itonami.otehon.cas :as cas]
             [itonami.otehon.peer :as peer]
             [itonami.otehon.market :as market]))
@@ -1014,14 +1015,22 @@
        sort
        (str/join ", ")))
 
-(defn- readiness-one
-  "Readiness for one profile: the doctor findings over its active jobs,
-  summarized the way the legacy command prints them. The malformed
-  jobs.json gate mirrors doctor-for (the legacy loader throws; the lite
-  loader records the problem, so the raw text is parsed again here)."
-  [store name env model-override]
+(defn- job-issues-for
+  "Job-level readiness issues for a loaded profile: what `readiness`,
+  `adopt` and `hy-migrate` refuse on. The S6-owned kotoba-job-issues
+  kinds (toolsets/tools, browser backends, oauth cache) are deferred."
+  [prof home env]
+  (doctor/readiness-issues (:jobs prof) home
+                           {:file? hio/file? :symlink? hio/symlink?}
+                           (hy-deps prof env)))
+
+(defn- profile-issues
+  "Job-level readiness issues for one store profile: {:error msg} when
+  its jobs.json is malformed (the legacy loader throws there; the lite
+  loader records the problem, so the raw text is parsed again here),
+  else {:findings [...]}."
+  [store name env]
   (let [home (str store "/profiles/" name)
-        prof (load-home store name)
         raw (when (hio/file? (str home "/cron/jobs.json"))
               (hio/slurp-utf8 (str home "/cron/jobs.json")))
         parsed (when (some? raw)
@@ -1029,25 +1038,27 @@
                       (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
                         {:error (ex-message e)})))]
     (if (:error parsed)
+      {:error (str (:error parsed))}
+      {:findings (job-issues-for (load-home store name) home env)})))
+
+(defn- readiness-one
+  "Readiness for one profile: the job-level findings summarized the way
+  the legacy command prints them. Model, state.db, pause and token
+  findings are doctor-only: the legacy readiness reads active jobs and
+  nothing else (corrected in S4d from the S4b full-findings port)."
+  [store name env]
+  (let [{:keys [error findings]} (profile-issues store name env)]
+    (if error
       {:blocked 1 :issues 1
-       :lines [(str "error   " name "  " (str (:error parsed)))]}
-      (let [marker (str store "/paused")
-            paused (when (hio/file? marker) (pause/since-of (hio/slurp-utf8 marker)))
-            findings (doctor/profile-findings
-                      {:config (:config prof) :home home :jobs (:jobs prof)}
-                      {:env env :model-override model-override
-                       :paused-record paused
-                       :state-db? (hio/file? (str home "/state.db"))
-                       :hy-deps (hy-deps prof env)
-                       :probes {:file? hio/file? :symlink? hio/symlink?}})]
-        (if (seq findings)
-          {:blocked 1 :issues (count findings)
-           :lines [(str "blocked " name "  " (issue-summary findings))]}
-          {:blocked 0 :issues 0 :lines [(str "ready   " name)]})))))
+       :lines [(str "error   " name "  " error)]}
+      (if (seq findings)
+        {:blocked 1 :issues (count findings)
+         :lines [(str "blocked " name "  " (issue-summary findings))]}
+        {:blocked 0 :issues 0 :lines [(str "ready   " name)]}))))
 
 (defn- readiness-lines
-  [store targets env model-override]
-  (let [rs (mapv #(readiness-one store % env model-override) targets)
+  [store targets env]
+  (let [rs (mapv #(readiness-one store % env) targets)
         blocked (reduce + 0 (map :blocked rs))
         issues (reduce + 0 (map :issues rs))]
     {:exit 0
@@ -1266,6 +1277,398 @@
                       targets)]
       {:exit 0 :lines (conj lines (str @changed " profile(s) " (if dry-run? "would be " "") "released"))})))
 
+(defn- hy-script-target
+  "The .hy sibling a .py script ref rewrites to, when the .py file exists
+  and the .hy file exists below the same scripts/ tree. Verbatim from
+  main.cljk (POSIX separators only — Otehon has no Windows runner)."
+  [home rel]
+  (when (and (string? rel) (str/ends-with? rel ".py"))
+    (let [scripts (str home "/scripts")
+          target (str (subs rel 0 (- (count rel) 3)) ".hy")
+          source (str scripts "/" rel)
+          abs (str scripts "/" target)
+          source-contained? (try
+                              (let [root (hio/realpath scripts)
+                                    resolved (hio/realpath source)]
+                                (str/starts-with? resolved (str root "/")))
+                              (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ false))]
+      (when (and (exec/script-path-safe? scripts target hio/symlink?)
+                 source-contained?
+                 (hio/file? source)
+                 (hio/file? abs))
+        target))))
+
+(defn- rewrite-job-hy-refs
+  "Rewrite a jobs vector's .py refs to their .hy siblings. Verbatim from
+  main.cljk (pure: counts how many refs moved per field)."
+  [home jobs]
+  (let [counts (atom {"script" 0 "monitor_script" 0})
+        updated
+        (mapv (fn [job]
+                (if-not (map? job) job
+                  (reduce (fn [j field]
+                            (if-let [target (hy-script-target home (get j field))]
+                              (do (swap! counts update field inc)
+                                  (assoc j field target))
+                              j))
+                          job ["script" "monitor_script"])))
+              jobs)]
+    {:jobs updated :counts @counts}))
+
+(defn- jobs-doc
+  "The parsed jobs.json document, or {} when it is missing or malformed."
+  [home]
+  (try (let [v (when (hio/file? (jobs-file home))
+                 (hio/parse-json (hio/slurp-utf8 (jobs-file home))))]
+         (if (map? v) v {}))
+       (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ {})))
+
+(defn- transform-jobs!
+  "Apply one locked transformation to the current jobs vector, preserving
+  top-level fields and stamping updated_at. Verbatim from cron.cljk
+  (JUN-1036 S2a established update-jobs-doc! for the write itself)."
+  [home micros f]
+  (let [lock (str home "/cron/.itonami-jobs.lock")]
+    (if-not (hio/acquire-lock! lock)
+      (throw (ex-info "cron jobs are being updated by another process" {:lock lock}))
+      (try (let [before (vec (cron/jobs-of (jobs-doc home)))
+                 after (vec (f before))]
+             (when-not (= before after)
+               (update-jobs-doc! home micros (fn [doc _] (assoc doc "jobs" after))))
+             after)
+           (finally (hio/release-lock! lock))))))
+
+(defn- adopt-lines
+  "The `profile adopt` lines: hand scheduler ownership to Kotoba (manifest
+  flip, Hermes parked, bundle CID refreshed). Entries that are not
+  Kotoba-ready refuse; --all refuses the whole batch when any entry
+  blocks. Verbatim from main.cljk; a missing home is skipped (the legacy
+  loader throws there), and a missing name is a usage refusal (the
+  legacy blank-name outcomes are accidents of load-profile(nil))."
+  [store targets all? env dry-run? now-iso]
+  (if (some nil? targets)
+    {:exit 2 :lines ["usage: itonami-agent profile adopt <p>|--all [--dry-run]"]}
+    (let [entries (mapv (fn [n]
+                          (let [home (str store "/profiles/" n)]
+                            (if-not (hio/dir? home)
+                              {:name n :error "no such profile"}
+                              (try
+                                (let [prof (load-home store n)
+                                      m (or (:manifest prof) (bundle/default-manifest prof))
+                                      scheduler (or (get-in m [:runtime :scheduler]) :hermes)]
+                                  {:name n :profile prof :manifest m
+                                   :error (when-not (contains? #{:hermes :itonami} scheduler)
+                                            (str "scheduler " (name scheduler)
+                                                 " must be retired before Kotoba adoption"))
+                                   :already? (and (= :itonami (get-in m [:runtime :scheduler]))
+                                                  (hio/file? (str home "/gateway.parked")))
+                                   :issues (:findings (profile-issues store n env))})
+                                (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                                  {:name n :error (ex-message e)})))))
+                        targets)
+          blockers (filter #(or (:error %) (seq (:issues %))) entries)
+          changed (atom 0)]
+      (if (and all? (seq blockers))
+        {:exit 0
+         :lines (vec (concat (mapv (fn [{:keys [name error issues]}]
+                                     (str (if error "error   " "blocked ") name "  "
+                                          (or error (issue-summary issues))))
+                                   blockers)
+                             [(str "refused all-profile adoption; " (count blockers)
+                                   " of " (count entries) " profiles are not Kotoba-ready; no profiles changed")]))}
+        {:exit 0
+         :lines (vec (concat
+                      (mapv (fn [{:keys [name profile manifest already? issues error]}]
+                              (cond
+                                error (str "error   " name "  " error)
+                                already? (str "keep    " name "  already Kotoba-scheduled")
+                                (seq issues) (str "blocked " name "  " (issue-summary issues))
+                                dry-run? (do (swap! changed inc) (str "would   adopt " name))
+                                :else (let [home (str store "/profiles/" name)]
+                                        (bundle/write-manifest! home (assoc-in manifest [:runtime :scheduler] :itonami))
+                                        (set-parked! home true now-iso)
+                                        (bundle/refresh-bundle-cid home)
+                                        (swap! changed inc)
+                                        (str "adopted " name ": Kotoba ticks cron; Hermes is parked"))))
+                            entries)
+                      [(str @changed " profile(s) " (if dry-run? "would be " "") "adopted")]))}))))
+
+(defn- read-edn-opt
+  "A parsed EDN file, or nil when it is missing or malformed."
+  [path]
+  (try (when (hio/file? path) (hio/parse-edn (hio/slurp-utf8 path)))
+       (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil)))
+
+(defn- soul-lines
+  "The `profile soul` lines: render the world/unit/role blocks from the
+  registry and worlds files and splice them into SOUL.md, with a backup
+  and an EDN receipt. Verbatim from main.cljk (unit filter, limit and
+  body refusals, keep, dry-run shapes, exit 1 on refusal)."
+  [store targets reg-path worlds-path unit dry-run? now-iso]
+  (let [reg (when reg-path (read-edn-opt reg-path))
+        worlds (when worlds-path (read-edn-opt worlds-path))
+        by-id (into {} (map (juxt :agent/id identity)) (:agents reg))
+        live (vec (filter some? targets))]
+    (if-not (and (seq by-id) (map? (:worlds worlds)) (seq live))
+      {:exit 2 :lines ["usage: itonami-agent profile soul <p>|--all --registry <agent-registry.edn> --worlds <worlds.edn> [--unit U] [--dry-run]"]}
+      (let [stamp (str/replace (subs now-iso 0 19) #"[^0-9T]" "")
+            backup-dir (str store "/state/soul-blocks/" stamp)
+            written (atom [])
+            refused (atom 0)
+            lines (vec (mapcat
+                        (fn [t]
+                          (let [e (get by-id t)]
+                            (when (or (nil? unit) (= (str unit) (some-> (:org/unit e) name)))
+                              (let [home (str store "/profiles/" t)
+                                    path (str home "/SOUL.md")
+                                    text (when (hio/file? path) (hio/slurp-utf8 path))
+                                    m (read-edn-opt (str home "/itonami.edn"))
+                                    y (read-edn-opt (str home "/yakuwari.edn"))]
+                                (cond
+                                  (nil? e) [(str "skip    " t "  not in the registry")]
+                                  (nil? text) [(str "skip    " t "  no SOUL.md")]
+                                  :else
+                                  (let [blocks (soul/render e worlds (vec (:yakuwari/capabilities y)) (:authority m))
+                                        size (soul/generated-size blocks)
+                                        new (soul/splice text blocks)]
+                                    (cond
+                                      (> size soul/limit)
+                                      (do (swap! refused inc)
+                                          [(str "refuse  " t "  generated blocks are " size
+                                                " chars (limit " soul/limit ")")])
+                                      (not= (soul/strip new) (soul/strip text))
+                                      (do (swap! refused inc)
+                                          [(str "refuse  " t "  the body would change")])
+                                      (= new text) [(str "keep    " t)]
+                                      :else
+                                      (do (when-not dry-run?
+                                            (hio/mkdirs! (str backup-dir "/" t))
+                                            (hio/write-text! (str backup-dir "/" t "/SOUL.md") text)
+                                            (hio/replace-file! path new))
+                                          (swap! written conj {:profile t
+                                                               :before (hio/sha256-utf8 text)
+                                                               :after (hio/sha256-utf8 new)
+                                                               :generated-chars size})
+                                          [(str (if dry-run? "would  " "wrote   ") t "  " size " chars")]))))))))
+                        live))]
+        (when (and (seq @written) (not dry-run?))
+          (hio/write-text! (str backup-dir "/receipt.edn")
+                           (pr-str {:at now-iso :registry reg-path :worlds worlds-path :written @written})))
+        {:exit (if (pos? @refused) 1 0)
+         :soul-written @written
+         :lines (conj lines (str (count @written) " SOUL(s) " (if dry-run? "would be " "")
+                                 "rewritten, " @refused " refused"
+                                 (when (and (seq @written) (not dry-run?))
+                                   (str "; backups and receipt in " backup-dir))))}))))
+
+(defn- organize-line
+  "One `profile organize` line for a target home. The manifest rewrite
+  and counter bump live here so the shape stays small enough to verify."
+  [home t m e dry-run? changed]
+  (let [m' (when (and m e)
+             (manifest/with-org m e {:yakuwari? (hio/file? (str home "/yakuwari.edn"))}))
+        bad (some-> m' manifest/errors first)]
+    (cond
+      (nil? m) (str "skip    " t "  no itonami.edn")
+      (nil? e) (str "skip    " t "  not in the registry")
+      bad (str "refuse  " t "  " (pr-str (:path bad)) " " (:message bad))
+      (= m m') (str "keep    " t)
+      :else (do (when-not dry-run? (bundle/write-manifest! home m'))
+                (swap! changed inc)
+                (str (if dry-run? "would  " "wrote   ") t "  "
+                     (str/join " > " (map name (:org/path m' [:host])))
+                     " (" (some-> (:agent/kind m') name) ")")))))
+
+(defn- organize-lines
+  "The `profile organize` lines: project a registry entry onto each
+  manifest (organisation keys replaced as a set, schema marked v2).
+  Verbatim from main.cljk (skip/keep/refuse/would shapes, exit 0)."
+  [store targets reg-path dry-run?]
+  (let [reg (when reg-path (read-edn-opt reg-path))
+        by-id (into {} (map (juxt :agent/id identity)) (:agents reg))
+        live (vec (filter some? targets))]
+    (if-not (and (seq by-id) (seq live))
+      {:exit 2 :lines ["usage: itonami-agent profile organize <p>|--all --registry <agent-registry.edn> [--dry-run]"]}
+      (let [changed (atom 0)
+            lines (mapv (fn [t]
+                          (let [home (str store "/profiles/" t)
+                                m (read-edn-opt (str home "/itonami.edn"))
+                                e (get by-id t)]
+                            (organize-line home t m e dry-run? changed)))
+                        live)]
+        {:exit 0
+         :lines (conj lines (str @changed " profile(s) " (if dry-run? "would be " "") "organized"))}))))
+
+(defn- stage-profile-hy!
+  "Stage one profile's Hy migration payload: hash-check every record and
+  copy the new .hy sources into scripts/. Verbatim from main.cljk (the
+  payload lives under <artifact>/<profile>/scripts/)."
+  [store name artifact-root records dry-run?]
+  (let [home (str store "/profiles/" name)
+        scripts (str home "/scripts")
+        payload-scripts (str artifact-root "/" name "/scripts")
+        selected (filter #(= name (get % "profile")) records)
+        plan
+        (mapv (fn [rec]
+                (let [source (get rec "source")
+                      target (get rec "target")
+                      source-sha (get rec "source_sha256")
+                      target-sha (get rec "target_sha256")
+                      target-rel (some-> target (str/replace-first #"^scripts/" ""))
+                      source-path (str home "/" source)
+                      payload-path (str artifact-root "/" name "/" target)
+                      target-path (str home "/" target)
+                      scripts-real (try (hio/realpath scripts) (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil))
+                      source-real (try (hio/realpath source-path) (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil))
+                      source-safe? (and scripts-real source-real
+                                        (str/starts-with? source-real (str scripts-real "/")))]
+                  (when-not (and (string? source) (string? target)
+                                 (str/starts-with? source "scripts/")
+                                 (str/starts-with? target "scripts/")
+                                 (str/ends-with? source ".py")
+                                 (= target (str (subs source 0 (- (count source) 3)) ".hy"))
+                                 (re-matches #"^[0-9a-f]{64}$" (str source-sha))
+                                 (re-matches #"^[0-9a-f]{64}$" (str target-sha))
+                                 (exec/script-path-safe? scripts target-rel hio/symlink?)
+                                 (exec/script-path-safe? payload-scripts target-rel hio/symlink?)
+                                 (hio/file? source-path) source-safe?
+                                 (hio/file? payload-path) (not (hio/symlink? payload-path)))
+                    (throw (ex-info (str "invalid or missing Hy migration payload for " name ": " target) {})))
+                  (let [source-hash (cas/sha256-hex (hio/bytes-of (hio/read-latin1 source-path)))
+                        target-hash (cas/sha256-hex (hio/bytes-of (hio/read-latin1 payload-path)))
+                        existing-hash (when (hio/file? target-path)
+                                        (cas/sha256-hex (hio/bytes-of (hio/read-latin1 target-path))))]
+                    (when-not (= source-sha source-hash)
+                      (throw (ex-info (str "Python source drift for " name ": " source) {})))
+                    (when-not (= target-sha target-hash)
+                      (throw (ex-info (str "Hy payload hash mismatch for " name ": " target) {})))
+                    (when (and existing-hash (not= existing-hash target-sha))
+                      (throw (ex-info (str "refusing to replace different Hy source for " name ": " target) {})))
+                    {:target target-path :content (hio/slurp-utf8 payload-path) :existing? (some? existing-hash)})))
+              selected)
+        missing (remove :existing? plan)
+        _ (when (and (seq plan) (not (hio/dir? scripts)))
+            (throw (ex-info (str "profile scripts directory is missing: " name) {})))]
+    (when-not dry-run?
+      (doseq [{:keys [target content]} missing]
+        (hio/replace-file! target content))
+      (when (and (seq missing) (:manifest (load-home store name)))
+        (bundle/refresh-bundle-cid home)))
+    {:files (count plan) :staged (count missing) :existing (- (count plan) (count missing))
+     :written (if dry-run?
+                []
+                (mapv (fn [{:keys [target content]}]
+                        {:file (subs target (inc (count home))) :text content})
+                      missing))}))
+
+(defn- hy-stage-lines
+  "The `profile hy-stage` lines: stage every target's Hy payload, then
+  the totals. Verbatim from main.cljk (per-target skip, exit 0)."
+  [store targets artifact-dir dry-run?]
+  (let [manifest-path (when artifact-dir (str artifact-dir "/migration.json"))
+        manifest (when (and manifest-path (hio/file? manifest-path))
+                   (hio/parse-json (hio/slurp-utf8 manifest-path)))]
+    (if-not (= "kotoba-hermes-cron-hy-patch-v2" (get manifest "format"))
+      {:exit 2 :lines [(str "invalid Hy migration manifest: " manifest-path)]}
+      (let [records (get manifest "script_files" [])
+            staged-total (atom 0)
+            existing-total (atom 0)
+            skipped (atom 0)
+            written (atom {})
+            lines (mapv (fn [n]
+                          (try
+                            (let [{:keys [files staged existing] w :written}
+                                  (stage-profile-hy! store n artifact-dir records dry-run?)]
+                              (swap! staged-total + staged)
+                              (swap! existing-total + existing)
+                              (swap! written into (map (juxt :file :text)) w)
+                              (str (if dry-run? "would  " "staged ") n
+                                   "  files=" files " new=" staged " present=" existing))
+                            (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                              (swap! skipped inc)
+                              (str "skip    " n "  " (ex-message e)))))
+                        (filter some? targets))]
+        {:exit 0
+         :lines (conj lines (str @staged-total " Hy source file(s) " (if dry-run? "would be " "")
+                                 "staged; " @existing-total " already present; " @skipped " profile(s) skipped"))
+         :staged @written}))))
+
+(defn- hy-migrate-lines
+  "The `profile hy-migrate` lines: rewrite a Kotoba-owned profile's .py
+  refs to their .hy siblings under the tick lock. Verbatim from
+  main.cljk (skip/blocked/keep/would/converted shapes, tick-busy skip,
+  error catch-all, exit 0)."
+  [store targets env dry-run? micros]
+  (let [converted (atom 0)
+        skipped (atom 0)
+        lines (mapv (fn [n]
+                      (let [home (str store "/profiles/" n)]
+                        (if-not (hio/dir? home)
+                          (do (swap! skipped inc)
+                              (str "error   " n "  no such profile"))
+                          (try
+                            (let [prof (load-home store n)
+                                  scheduler (get-in prof [:manifest :runtime :scheduler])
+                                  parked? (hio/file? (str home "/gateway.parked"))
+                                  jobs (vec (cron/jobs-of (jobs-doc home)))
+                                  rewritten (rewrite-job-hy-refs home jobs)
+                                  counts (:counts rewritten)
+                                  runtime-issues (mapcat #(doctor/script-runtime-issues
+                                                          % home {:file? hio/file? :symlink? hio/symlink?}
+                                                          (hy-deps prof env))
+                                                        (filter map? (:jobs rewritten)))
+                                  issues (concat (:findings (profile-issues store n env)) runtime-issues)
+                                  nrefs (+ (get counts "script" 0) (get counts "monitor_script" 0))]
+                              (cond
+                                (or (not= :itonami scheduler) (not parked?))
+                                (do (swap! skipped inc)
+                                    (str "skip    " n "  scheduler is not Kotoba-owned"))
+                                (seq issues)
+                                (do (swap! skipped inc)
+                                    (str "blocked " n "  " (issue-summary issues)))
+                                (zero? nrefs)
+                                (str "keep    " n "  no .py refs with sibling .hy files")
+                                dry-run?
+                                (do (swap! converted + nrefs)
+                                    (str "would   convert " n "  script=" (get counts "script")
+                                         " monitor_script=" (get counts "monitor_script")))
+                                :else
+                                (let [tick-lock (str home "/cron/.itonami-tick.lock")]
+                                  (if-not (hio/acquire-lock! tick-lock)
+                                    (do (swap! skipped inc)
+                                        (str "skip    " n "  Kotoba tick is in progress"))
+                                    (try
+                                      (let [counts* (atom {"script" 0 "monitor_script" 0})]
+                                        (transform-jobs! home micros
+                                                         (fn [current]
+                                                           (let [{:keys [jobs counts]} (rewrite-job-hy-refs home current)
+                                                                 runtime-issues (mapcat #(doctor/script-runtime-issues
+                                                                                           % home {:file? hio/file? :symlink? hio/symlink?}
+                                                                                           (hy-deps prof env))
+                                                                                         (filter map? jobs))]
+                                                             (when (seq runtime-issues)
+                                                               (throw (ex-info (str "Hy runtime unavailable: "
+                                                                                     (issue-summary runtime-issues))
+                                                                               {:issues runtime-issues})))
+                                                             (reset! counts* counts)
+                                                             jobs)))
+                                        (let [counts @counts*
+                                              nrefs (+ (get counts "script" 0) (get counts "monitor_script" 0))]
+                                          (if (pos? nrefs)
+                                            (do (bundle/refresh-bundle-cid home)
+                                                (swap! converted + nrefs)
+                                                (str "converted " n "  script=" (get counts "script")
+                                                     " monitor_script=" (get counts "monitor_script")))
+                                            (str "keep    " n "  references already converted"))))
+                                      (finally (hio/release-lock! tick-lock)))))))
+                            (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                              (swap! skipped inc)
+                              (str "error   " n "  " (ex-message e)))))))
+                    (filter some? targets))]
+    {:exit 0
+     :lines (conj lines (str @converted " script ref(s) " (if dry-run? "would be " "")
+                             "converted; " @skipped " profile(s) skipped"))}))
+
 (defn- transfer-usage [sub]
   (str "usage: itonami-agent profile " sub " <p>|--all [--"
        (if (= sub "export") "to" "from") " DIR] [--force] [--dry-run]"))
@@ -1312,7 +1715,7 @@
               "list" {:exit 0 :lines (profile-list-lines dir)}
               "show" (profile-show-lines dir (or (:name req) "default"))
               "check" (check-lines dir targets (boolean (:summary req)))
-              "readiness" (readiness-lines dir targets env (:model req))
+              "readiness" (readiness-lines dir targets env)
               "refresh" (refresh-lines dir targets (boolean (:dry-run req)))
               "itonamify" (itonamify-lines dir targets (boolean (:force req)) (boolean (:dry-run req)))
               "rail" (rail-lines dir targets
@@ -1334,9 +1737,25 @@
                                    t
                                    (boolean (:dry-run req)) (boolean (:force req))
                                    "2026-11-08T00:00:00+09:00")))
+              "adopt" (adopt-lines dir (if (:all req) (listing-names dir) [(:name req)])
+                                   (:all req) env (boolean (:dry-run req)) "2026-11-08T00:00:00+09:00")
+              "soul" (soul-lines dir (if (:all req) (listing-names dir) [(:name req)])
+                                  (when (:registry req) (str dir "/" (:registry req)))
+                                  (when (:worlds req) (str dir "/" (:worlds req)))
+                                  (:unit req)
+                                  (boolean (:dry-run req)) "2026-11-08T00:00:00+09:00")
+              "organize" (organize-lines dir (if (:all req) (listing-names dir) [(:name req)])
+                                           (when (:registry req) (str dir "/" (:registry req)))
+                                           (boolean (:dry-run req)))
+              "hy-stage" (hy-stage-lines dir (if (:all req) (listing-names dir) [(:name req)])
+                                          (when (:artifact req) (str dir "/" (:artifact req)))
+                                          (boolean (:dry-run req)))
+              "hy-migrate" (hy-migrate-lines dir (if (:all req) (listing-names dir) [(:name req)])
+                                             env (boolean (:dry-run req)) "2026-11-08T00:00:00.000000+09:00")
               {:exit 2 :lines [(str "unknown profile command: " (:sub req))]})
           in-place? (and (not (:all req)) (:name req)
-                         (contains? #{"refresh" "itonamify" "rail" "refresh-bundle" "release"} sub))
+                         (contains? #{"refresh" "itonamify" "rail" "refresh-bundle" "release"
+                                       "adopt" "organize" "hy-migrate" "hy-stage"} sub))
           copied-here? (and (contains? #{"import" "export"} sub)
                             (not (:all req)) (:to req) (:name req))
           manifest-file
@@ -1348,14 +1767,29 @@
                   (when (hio/file? p) (hio/slurp-utf8 p)))
                 :else nil)
           parked?
-          (cond (and (= sub "release") in-place?)
+          (cond (and (contains? #{"release" "adopt"} sub) in-place?)
                 (hio/file? (str dir "/profiles/" (:name req) "/gateway.parked"))
                 copied-here?
                 (hio/file? (str dir "/" (:to req) "/profiles/" (:name req) "/gateway.parked"))
-                :else nil)]
+                :else nil)
+          jobs-doc
+          (when (and (= sub "hy-migrate") (not (:all req)) (:name req))
+            (let [p (str dir "/profiles/" (:name req) "/cron/jobs.json")]
+              (when (hio/file? p) (hio/slurp-utf8 p))))
+          staged (when (= sub "hy-stage") (:staged r))
+          soul-written (when (= sub "soul") (:soul-written r))
+          soul-backup
+          (when (and (= sub "soul") (not (:all req)) (:name req))
+            (let [stamp (str/replace (subs "2026-11-08T00:00:00+09:00" 0 19) #"[^0-9T]" "")
+                  p (str dir "/state/soul-blocks/" stamp "/" (:name req) "/SOUL.md")]
+              (when (hio/file? p) (hio/slurp-utf8 p))))]
       (assoc (cond-> r
                manifest-file (assoc :manifest-file manifest-file)
-               (some? parked?) (assoc :parked? parked?))
+               (some? parked?) (assoc :parked? parked?)
+               jobs-doc (assoc :jobs-doc jobs-doc)
+               staged (assoc :staged staged)
+               (some? soul-written) (assoc :soul-written soul-written)
+               soul-backup (assoc :soul-backup soul-backup))
              :messages (:lines r)))))
 
 (defn- ops-runs [c scratch]
@@ -1438,7 +1872,7 @@
           :else (recur (next as) (update m :pos conj (first as))))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] [--model M] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] <artifact> [--dry-run] | hy-migrate [<p>|--all] [--dry-run]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -1944,7 +2378,7 @@
                       (= sub "check")
                       (run (check-lines root targets (flag? "--summary")))
                       (= sub "readiness")
-                      (run (readiness-lines root targets (hio/all-env) (opt-val "--model")))
+                      (run (readiness-lines root targets (hio/all-env)))
                       (= sub "refresh")
                       (run (refresh-lines root targets (flag? "--dry-run")))
                       (= sub "itonamify")
@@ -1955,6 +2389,30 @@
                                        (flag? "--dry-run")))
                       (= sub "refresh-bundle")
                       (if-not b (usage) (run (refresh-bundle-lines root b)))
+                      (= sub "adopt")
+                      (run (adopt-lines root (if (flag? "--all") (listing-names root) [b])
+                                       (flag? "--all") (hio/all-env) (flag? "--dry-run") (:iso (host-now))))
+                      (= sub "soul")
+                      (run (soul-lines root (if (flag? "--all") (listing-names root) [b])
+                                           (some-> (opt-val "--registry") (exec/expand-home (hio/env "HOME")))
+                                           (some-> (opt-val "--worlds") (exec/expand-home (hio/env "HOME")))
+                                           (opt-val "--unit")
+                                           (flag? "--dry-run") (:iso (host-now))))
+                      (= sub "organize")
+                      (run (organize-lines root (if (flag? "--all") (listing-names root) [b])
+                                             (some-> (opt-val "--registry") (exec/expand-home (hio/env "HOME")))
+                                             (flag? "--dry-run")))
+                      (= sub "hy-stage")
+                      (let [pa (filterv #(not (str/starts-with? (str %) "--")) tail)
+                            art (some-> (or (opt-val "--artifact") (if (flag? "--all") (first pa) (second pa)))
+                                        (exec/expand-home (hio/env "HOME")))]
+                        (run (hy-stage-lines root (if (flag? "--all") (listing-names root) [b])
+                                              art (flag? "--dry-run"))))
+                      (= sub "hy-migrate")
+                      (let [now (host-now)]
+                        (run (hy-migrate-lines root (if (flag? "--all") (listing-names root) [b])
+                                                  (hio/all-env) (flag? "--dry-run")
+                                                  (exec/micros-of (:iso now) (:ms now)))))
                       (= sub "release")
                       (run (release-lines root (if (flag? "--all") (listing-names root) [b])
                                            (flag? "--dry-run") (:iso (host-now))))

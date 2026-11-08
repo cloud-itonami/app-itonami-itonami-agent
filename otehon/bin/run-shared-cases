@@ -6,6 +6,9 @@
 #   bin/run-shared-cases [runner...]           PROFILE_DIRS="dir ..." adds live checks
 set -u
 here=$(cd "$(dirname "$0")/.." && pwd)
+# Case seeds may name fixture paths relative to the otehon root (e.g. the
+# Hy deps fixture); run from there so every runner resolves them the same.
+cd "$here"
 run="$here/bin/itonami-otehon"
 runners=${*:-basilisp bb nbb}
 out=$(mktemp -d)

@@ -1237,15 +1237,17 @@
           "profiles/ph/cron/jobs.json" "{\"jobs\": []}\n"}
    :request {:sub "check" :all true}
    :expect {:exit 1 :messages-include ["rail/hermes-on-murakumo" "2 profile(s): 1 with errors, 0 with warnings"]}}
-  ;; S4b: profile readiness — a clean profile is ready (an empty state.db
-  ;; seed answers the state-db finding; :env {} keeps host env out)
+  ;; S4b/S4d: profile readiness — job issues only. No model default, no
+  ;; state.db, and a live pause marker: the legacy command reads active
+  ;; jobs and nothing else, so a jobless profile is ready regardless
+  ;; (:env {} keeps host env out)
   {:id :profile-readiness-ready :op :profile
    :seed {"profiles/pc/SOUL.md" "soul\n"
           "profiles/pc/profile.yaml" "name: pc\ndescription: Clean\n"
-          "profiles/pc/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/pc/config.yaml" "model:\n  provider: murakumo\n"
           "profiles/pc/cron/jobs.json" "{\"jobs\": []}\n"
           "profiles/pc/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"
-          "profiles/pc/state.db" ""}
+          "paused" "2026-11-08T00:00:00+09:00 (test)\n"}
    :request {:sub "readiness" :name "pc" :env {}}
    :expect {:exit 0 :lines ["ready   pc" "0 profile(s) blocked; 0 compatibility issue(s)"]}}
   ;; S4b: profile readiness — a foreign-lane job and a missing script
@@ -1255,8 +1257,7 @@
           "profiles/pr/profile.yaml" "name: pr\n"
           "profiles/pr/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
           "profiles/pr/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"deliver\": \"pigeon\", \"script\": \"a.py\"}]}\n"
-          "profiles/pr/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pr\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? true :org/world :kotoba}\n"
-          "profiles/pr/state.db" ""}
+          "profiles/pr/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pr\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? true :org/world :kotoba}\n"}
    :request {:sub "readiness" :name "pr" :env {}}
    :expect {:exit 0 :lines ["blocked pr  delivery_adapter=1[pigeon], script_not_found=1[script=a.py]" "1 profile(s) blocked; 2 compatibility issue(s)"]}}
   ;; S4b: profile readiness — a malformed jobs.json is an error line
@@ -1633,4 +1634,319 @@
           "hermes/profiles/p2/config.yaml" "model:\n  default: mishima\n"
           "hermes/profiles/p2/cron/jobs.json" "{\"jobs\": []}\n"}
    :request {:sub "import" :from "hermes" :to "store" :all true}
-   :expect {:exit 0 :messages-include ["copied  p1  4 file(s)" "copied  p2  4 file(s)" "2 profile(s) copied"]}}]}]
+   :expect {:exit 0 :messages-include ["copied  p1  4 file(s)" "copied  p2  4 file(s)" "2 profile(s) copied"]}}
+  ;; S4d: profile adopt hands a Hermes-scheduled profile to Kotoba (bytes
+  ;; probed live; the bundle CID is cross-checked by the Python oracle)
+  {:id :profile-adopt-wrote :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\ndescription: Hermes profile\n"
+          "profiles/p2/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"}
+   :request {:sub "adopt" :name "p2"}
+   :expect {:exit 0 :messages-include ["adopted p2: Kotoba ticks cron; Hermes is parked" "1 profile(s) adopted"]
+            :parked? true
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreifu3u6nzst4qwvyvq2p7qfpforgormpkt2fcpkk4o5rinqoz5ubzm\", :files 7, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"p2\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}}
+  ;; S4d: profile adopt keeps an already Kotoba-scheduled profile
+  {:id :profile-adopt-keep :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\ndescription: Hermes profile\n"
+          "profiles/p2/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"
+          "profiles/p2/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreifu3u6nzst4qwvyvq2p7qfpforgormpkt2fcpkk4o5rinqoz5ubzm\", :files 7, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"p2\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "profiles/p2/gateway.parked" "2026-11-08T00:00:00+09:00\n"}
+   :request {:sub "adopt" :name "p2"}
+   :expect {:exit 0 :lines ["keep    p2  already Kotoba-scheduled" "0 profile(s) adopted"]
+            :parked? true}}
+  ;; S4d: profile adopt blocks a profile whose job script is missing
+  {:id :profile-adopt-blocked :op :profile
+   :seed {"profiles/p3/SOUL.md" "soul p3\n"
+          "profiles/p3/profile.yaml" "name: p3\n"
+          "profiles/p3/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p3/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"* * * * *\", \"script\": \"missing.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"}
+   :request {:sub "adopt" :name "p3"}
+   :expect {:exit 0 :lines ["blocked p3  script_not_found=1[script=missing.py]" "0 profile(s) adopted"]}}
+  ;; S4d: profile adopt without a target refuses with usage
+  {:id :profile-adopt-usage :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"}
+   :request {:sub "adopt"}
+   :expect {:exit 2 :lines ["usage: itonami-agent profile adopt <p>|--all [--dry-run]"]}}
+  ;; S4d: profile adopt --dry-run reports without writing
+  {:id :profile-adopt-dry :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\ndescription: Hermes profile\n"
+          "profiles/p2/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"}
+   :request {:sub "adopt" :name "p2" :dry-run true}
+   :expect {:exit 0 :lines ["would   adopt p2" "1 profile(s) would be adopted"] :parked? false}}
+  ;; S4d: profile adopt --all refuses the whole batch when one entry blocks
+  {:id :profile-adopt-all-refused :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/p3/SOUL.md" "soul p3\n"
+          "profiles/p3/profile.yaml" "name: p3\n"
+          "profiles/p3/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p3/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"* * * * *\", \"script\": \"missing.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"}
+   :request {:sub "adopt" :all true}
+   :expect {:exit 0 :lines ["blocked p3  script_not_found=1[script=missing.py]" "refused all-profile adoption; 1 of 2 profiles are not Kotoba-ready; no profiles changed"]}}
+  ;; S4d: profile soul renders the registry/worlds blocks into SOUL.md with
+  ;; a backup and a receipt (bytes and SHAs probed live)
+  {:id :profile-soul-wrote :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\ndescription: Worker one\n"
+          "profiles/p1/yakuwari.edn" "{:yakuwari/capabilities [{:capability :digest :decision :autonomous} {:capability :summarize :decision :supervised}]}\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :agent/kind :worker :agent/capabilities [:digest :summarize]}]}\n"
+          "worlds.edn" "{:worlds {:default {:name \"Default\" :units {:u1 {:what \"unit one\"}}}} :soul/common [{:line \"common line\"}]}\n"}
+   :request {:sub "soul" :name "p1" :registry "registry.edn" :worlds "worlds.edn"}
+   :expect {:exit 0
+            :messages-include ["wrote   p1  581 chars" "1 SOUL(s) rewritten, 0 refused; backups and receipt in " "state/soul-blocks/20261108T000000"]
+            :soul-written [{:profile "p1" :before "8e4ee81c3a8c33a86b6ada1ddcdddb83e4c9f01f9e9f79d0b7a9d63518fb294b" :after "f2133684a7244051a1db87554737c75faa3b156a73cf2f378e29c8ef9fdfaad5" :generated-chars 581}]
+            :soul-backup "soul p1\n"}}
+  ;; S4d: profile soul keeps a SOUL whose generated blocks are current
+  {:id :profile-soul-keep :op :profile
+   :seed {"profiles/p1/SOUL.md" "<!-- itonami:world:v1 sha=786e5aee5d85 -->\n## 組織（manifest/worlds.edn から生成。手で直さない）\n\n- 系列: 組織の木の外（ホスト運用）\n- 共通: common line\n<!-- /itonami:world:v1 -->\n\n<!-- itonami:unit:v1 sha=0f179f3a8ea5 -->\n## 所属（manifest/agent-registry.edn から生成。手で直さない）\n\n- unit: u1 — unit one\n- kind: worker　／　上位の steward: なし（owner 直下）\n<!-- /itonami:unit:v1 -->\n\n<!-- itonami:role:v1 sha=fb80c9d8e8be -->\n## 権限（yakuwari.edn の要約。正本は yakuwari.edn。手で直さない）\n\n- 自律: digest\n- :supervised（yakuwari の語彙に無い。yakuwari は :blocked と読む）: summarize\n- yakuwari.edn に無い capability は禁止（yakuwari は :blocked と読む）\n<!-- /itonami:role:v1 -->\n\nsoul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\ndescription: Worker one\n"
+          "profiles/p1/yakuwari.edn" "{:yakuwari/capabilities [{:capability :digest :decision :autonomous} {:capability :summarize :decision :supervised}]}\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :agent/kind :worker :agent/capabilities [:digest :summarize]}]}\n"
+          "worlds.edn" "{:worlds {:default {:name \"Default\" :units {:u1 {:what \"unit one\"}}}} :soul/common [{:line \"common line\"}]}\n"}
+   :request {:sub "soul" :name "p1" :registry "registry.edn" :worlds "worlds.edn"}
+   :expect {:exit 0 :lines ["keep    p1" "0 SOUL(s) rewritten, 0 refused"] :soul-written []}}
+  ;; S4d: profile soul refuses blocks over the 1500-char limit
+  {:id :profile-soul-refuse-limit :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\ndescription: Worker one\n"
+          "profiles/p1/yakuwari.edn" "{:yakuwari/capabilities [{:capability :xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx :decision :autonomous}]}
+"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :agent/kind :worker :agent/capabilities [:digest]}]}\n"
+          "worlds.edn" "{:worlds {:default {:name \"Default\" :units {:u1 {:what \"unit one\"}}}} :soul/common [{:line \"common line\"}]}\n"}
+   :request {:sub "soul" :name "p1" :registry "registry.edn" :worlds "worlds.edn"}
+   :expect {:exit 1
+            :messages-include ["refuse  p1  generated blocks are " " chars (limit 1500)" "0 SOUL(s) rewritten, 1 refused"]
+            :soul-written []}}
+  ;; S4d: profile soul refuses a SOUL whose body would change (a forged
+  ;; opener with no closer: splicing fresh blocks after the workspace
+  ;; marker would let the block pattern span into them, so strip(new)
+  ;; no longer equals strip(text) and the guard fires)
+  {:id :profile-soul-refuse-body :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n\n<!-- itonami:world:v1 sha=000000000000 -->\n\n<!-- /managed-agent-workspace-locations -->\ntail\n"
+          "profiles/p1/profile.yaml" "name: p1\ndescription: Worker one\n"
+          "profiles/p1/yakuwari.edn" "{:yakuwari/capabilities [{:capability :digest :decision :autonomous} {:capability :summarize :decision :supervised}]}\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :agent/kind :worker :agent/capabilities [:digest :summarize]}]}\n"
+          "worlds.edn" "{:worlds {:default {:name \"Default\" :units {:u1 {:what \"unit one\"}}}} :soul/common [{:line \"common line\"}]}\n"}
+   :request {:sub "soul" :name "p1" :registry "registry.edn" :worlds "worlds.edn"}
+   :expect {:exit 1 :lines ["refuse  p1  the body would change" "0 SOUL(s) rewritten, 1 refused"]}}
+  ;; S4d: profile soul skips a profile missing from the registry
+  {:id :profile-soul-skip-registry :op :profile
+   :seed {"profiles/p9/SOUL.md" "soul p9\n"
+          "profiles/p9/profile.yaml" "name: p9\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :agent/kind :worker :agent/capabilities [:digest]}]}\n"
+          "worlds.edn" "{:worlds {:default {:name \"Default\" :units {:u1 {:what \"unit one\"}}}} :soul/common [{:line \"common line\"}]}\n"}
+   :request {:sub "soul" :name "p9" :registry "registry.edn" :worlds "worlds.edn"}
+   :expect {:exit 0 :lines ["skip    p9  not in the registry" "0 SOUL(s) rewritten, 0 refused"]}}
+  ;; S4d: profile soul without registry/worlds refuses with usage
+  {:id :profile-soul-usage :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"}
+   :request {:sub "soul" :name "p1"}
+   :expect {:exit 2 :lines ["usage: itonami-agent profile soul <p>|--all --registry <agent-registry.edn> --worlds <worlds.edn> [--unit U] [--dry-run]"]}}
+  ;; S4d: profile soul --dry-run reports without writing
+  {:id :profile-soul-dry :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\ndescription: Worker one\n"
+          "profiles/p1/yakuwari.edn" "{:yakuwari/capabilities [{:capability :digest :decision :autonomous} {:capability :summarize :decision :supervised}]}\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :agent/kind :worker :agent/capabilities [:digest :summarize]}]}\n"
+          "worlds.edn" "{:worlds {:default {:name \"Default\" :units {:u1 {:what \"unit one\"}}}} :soul/common [{:line \"common line\"}]}\n"}
+   :request {:sub "soul" :name "p1" :registry "registry.edn" :worlds "worlds.edn" :dry-run true}
+   :expect {:exit 0 :lines ["would  p1  581 chars" "1 SOUL(s) would be rewritten, 0 refused"]
+            :soul-written [{:profile "p1" :before "8e4ee81c3a8c33a86b6ada1ddcdddb83e4c9f01f9e9f79d0b7a9d63518fb294b" :after "f2133684a7244051a1db87554737c75faa3b156a73cf2f378e29c8ef9fdfaad5" :generated-chars 581}]}}
+  ;; S4d: profile soul --unit filters to another unit (no line, no change)
+  {:id :profile-soul-unit-filter :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\ndescription: Worker one\n"
+          "profiles/p1/yakuwari.edn" "{:yakuwari/capabilities [{:capability :digest :decision :autonomous} {:capability :summarize :decision :supervised}]}\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :agent/kind :worker :agent/capabilities [:digest :summarize]}]}\n"
+          "worlds.edn" "{:worlds {:default {:name \"Default\" :units {:u1 {:what \"unit one\"}}}} :soul/common [{:line \"common line\"}]}\n"}
+   :request {:sub "soul" :name "p1" :registry "registry.edn" :worlds "worlds.edn" :unit "u9"}
+   :expect {:exit 0 :lines ["0 SOUL(s) rewritten, 0 refused"]}}
+  ;; S4d: profile organize projects the registry entry onto the manifest
+  {:id :profile-organize-wrote :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v1\", :profile/id \"p1\", :runtime {:engine :itonami-agent, :scheduler :itonami}}\n"
+          "profiles/p1/yakuwari.edn" "{:yakuwari/capabilities [{:capability :digest :decision :autonomous}]}\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :org/path [:kotoba :backoffice] :org/layer :app :agent/kind :steward :agent/capabilities [:digest] :source {:repo \"kotoba-lang/itonami-agent\"} :yakuwari/id \"p1\"}]}\n"}
+   :request {:sub "organize" :name "p1" :registry "registry.edn"}
+   :expect {:exit 0
+            :messages-include ["wrote   p1  kotoba > backoffice (steward)" "1 profile(s) organized"]
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:agent/kind :steward, :authority {:default-decision :approval-required, :ref \"yakuwari.edn\", :source :yakuwari}, :ids {:repo \"kotoba-lang/itonami-agent\", :yakuwari/id \"p1\"}, :itonami/schema \"cloud.itonami.profile.v2\", :org/layer :app, :org/path [:kotoba :backoffice], :org/unit :u1, :org/world :default, :profile/id \"p1\", :runtime {:engine :itonami-agent, :scheduler :itonami}}\n"}}
+  ;; S4d: profile organize keeps a manifest that already matches
+  {:id :profile-organize-keep :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:agent/kind :steward, :authority {:default-decision :approval-required, :ref \"yakuwari.edn\", :source :yakuwari}, :ids {:repo \"kotoba-lang/itonami-agent\", :yakuwari/id \"p1\"}, :itonami/schema \"cloud.itonami.profile.v2\", :org/layer :app, :org/path [:kotoba :backoffice], :org/unit :u1, :org/world :default, :profile/id \"p1\", :runtime {:engine :itonami-agent, :scheduler :itonami}}\n"
+          "profiles/p1/yakuwari.edn" "{:yakuwari/capabilities [{:capability :digest :decision :autonomous}]}\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :org/path [:kotoba :backoffice] :org/layer :app :agent/kind :steward :agent/capabilities [:digest] :source {:repo \"kotoba-lang/itonami-agent\"} :yakuwari/id \"p1\"}]}\n"}
+   :request {:sub "organize" :name "p1" :registry "registry.edn"}
+   :expect {:exit 0 :lines ["keep    p1" "0 profile(s) organized"]}}
+  ;; S4d: profile organize skips a profile without itonami.edn
+  {:id :profile-organize-skip :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :org/path [:kotoba :backoffice] :org/layer :app :agent/kind :steward :agent/capabilities [:digest] :source {:repo \"kotoba-lang/itonami-agent\"} :yakuwari/id \"p1\"}]}\n"}
+   :request {:sub "organize" :name "p1" :registry "registry.edn"}
+   :expect {:exit 0 :lines ["skip    p1  no itonami.edn" "0 profile(s) organized"]}}
+  ;; S4d: profile organize without a registry refuses with usage
+  {:id :profile-organize-usage :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"}
+   :request {:sub "organize" :name "p1"}
+   :expect {:exit 2 :lines ["usage: itonami-agent profile organize <p>|--all --registry <agent-registry.edn> [--dry-run]"]}}
+  ;; S4d: profile organize --dry-run reports without writing
+  {:id :profile-organize-dry :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v1\", :profile/id \"p1\", :runtime {:engine :itonami-agent, :scheduler :itonami}}\n"
+          "profiles/p1/yakuwari.edn" "{:yakuwari/capabilities [{:capability :digest :decision :autonomous}]}\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :org/path [:kotoba :backoffice] :org/layer :app :agent/kind :steward :agent/capabilities [:digest] :source {:repo \"kotoba-lang/itonami-agent\"} :yakuwari/id \"p1\"}]}\n"}
+   :request {:sub "organize" :name "p1" :registry "registry.edn" :dry-run true}
+   :expect {:exit 0
+            :lines ["would  p1  kotoba > backoffice (steward)" "1 profile(s) would be organized"]
+            :manifest-file "{:itonami/schema \"cloud.itonami.profile.v1\", :profile/id \"p1\", :runtime {:engine :itonami-agent, :scheduler :itonami}}\n"}}
+  ;; S4d: profile hy-stage stages a hash-checked Hy payload
+  {:id :profile-hy-stage-staged :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "artifact/migration.json" "{\"format\": \"kotoba-hermes-cron-hy-patch-v2\", \"script_files\": [{\"profile\": \"p2\", \"source\": \"scripts/a.py\", \"target\": \"scripts/a.hy\", \"source_sha256\": \"cc42155088fca5730758db72b2a5bca33112a941dfaa2d43098ec422ce4ea213\", \"target_sha256\": \"67fb159b26750ff6047ee163578aaed927b0f9052775cb6e23f39761cd439256\"}]}"
+          "artifact/p2/scripts/a.hy" "(print 1)\n"}
+   :request {:sub "hy-stage" :name "p2" :artifact "artifact"}
+   :expect {:exit 0
+            :lines ["staged p2  files=1 new=1 present=0" "1 Hy source file(s) staged; 0 already present; 0 profile(s) skipped"]
+            :staged {"scripts/a.hy" "(print 1)\n"}}}
+  ;; S4d: profile hy-stage counts an already-present payload
+  {:id :profile-hy-stage-existing :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"
+          "artifact/migration.json" "{\"format\": \"kotoba-hermes-cron-hy-patch-v2\", \"script_files\": [{\"profile\": \"p2\", \"source\": \"scripts/a.py\", \"target\": \"scripts/a.hy\", \"source_sha256\": \"cc42155088fca5730758db72b2a5bca33112a941dfaa2d43098ec422ce4ea213\", \"target_sha256\": \"67fb159b26750ff6047ee163578aaed927b0f9052775cb6e23f39761cd439256\"}]}"
+          "artifact/p2/scripts/a.hy" "(print 1)\n"}
+   :request {:sub "hy-stage" :name "p2" :artifact "artifact"}
+   :expect {:exit 0
+            :lines ["staged p2  files=1 new=0 present=1" "0 Hy source file(s) staged; 1 already present; 0 profile(s) skipped"]
+            :staged {}}}
+  ;; S4d: profile hy-stage skips a payload whose hash drifts
+  {:id :profile-hy-stage-skip :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "artifact/migration.json" "{\"format\": \"kotoba-hermes-cron-hy-patch-v2\", \"script_files\": [{\"profile\": \"p2\", \"source\": \"scripts/a.py\", \"target\": \"scripts/a.hy\", \"source_sha256\": \"cc42155088fca5730758db72b2a5bca33112a941dfaa2d43098ec422ce4ea213\", \"target_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\"}]}"
+          "artifact/p2/scripts/a.hy" "(print 1)\n"}
+   :request {:sub "hy-stage" :name "p2" :artifact "artifact"}
+   :expect {:exit 0
+            :lines ["skip    p2  Hy payload hash mismatch for p2: scripts/a.hy" "0 Hy source file(s) staged; 0 already present; 1 profile(s) skipped"]}}
+  ;; S4d: profile hy-stage without an artifact refuses
+  {:id :profile-hy-stage-usage :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"}
+   :request {:sub "hy-stage" :name "p2"}
+   :expect {:exit 2 :messages-include ["invalid Hy migration manifest:"]}}
+  ;; S4d: profile hy-stage --dry-run reports without writing
+  {:id :profile-hy-stage-dry :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "artifact/migration.json" "{\"format\": \"kotoba-hermes-cron-hy-patch-v2\", \"script_files\": [{\"profile\": \"p2\", \"source\": \"scripts/a.py\", \"target\": \"scripts/a.hy\", \"source_sha256\": \"cc42155088fca5730758db72b2a5bca33112a941dfaa2d43098ec422ce4ea213\", \"target_sha256\": \"67fb159b26750ff6047ee163578aaed927b0f9052775cb6e23f39761cd439256\"}]}"
+          "artifact/p2/scripts/a.hy" "(print 1)\n"}
+   :request {:sub "hy-stage" :name "p2" :artifact "artifact" :dry-run true}
+   :expect {:exit 0
+            :lines ["would  p2  files=1 new=1 present=0" "1 Hy source file(s) would be staged; 0 already present; 0 profile(s) skipped"]
+            :staged {}}}
+  ;; S4d: profile hy-migrate rewrites .py refs to staged .hy siblings
+  {:id :profile-hy-migrate-converted :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\ndescription: Hermes profile\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"
+          "profiles/p2/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreifu3u6nzst4qwvyvq2p7qfpforgormpkt2fcpkk4o5rinqoz5ubzm\", :files 7, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"p2\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "profiles/p2/gateway.parked" "2026-11-08T00:00:00+09:00\n"}
+   :request {:sub "hy-migrate" :name "p2" :env {"KOTOBA_HY_DEPS" "test/fixtures/hydeps"}}
+   :expect {:exit 0
+            :lines ["converted p2  script=1 monitor_script=0" "1 script ref(s) converted; 0 profile(s) skipped"]
+            :jobs-doc "{\"jobs\":[{\"deliver\":\"local\",\"enabled\":true,\"id\":\"j1\",\"schedule\":\"*-*-* *:00:00\",\"script\":\"a.hy\"}],\"updated_at\":\"2026-11-08T00:00:00.000000+09:00\"}"
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreidbnyu2lkcbpggrsdxwsuqtbrf5kve3kbnbfzlpzeowzvmelopeou\", :files 6, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"p2\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}}
+  ;; S4d: profile hy-migrate blocks a profile with a missing script
+  {:id :profile-hy-migrate-blocked-script :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"* * * * *\", \"script\": \"missing.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreix\", :files 1, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"p2\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "profiles/p2/gateway.parked" "2026-11-08T00:00:00+09:00\n"}
+   :request {:sub "hy-migrate" :name "p2" :env {}}
+   :expect {:exit 0
+            :lines ["blocked p2  script_not_found=2[script=missing.py]" "0 script ref(s) converted; 1 profile(s) skipped"]}}
+  ;; S4d: profile hy-migrate blocks without a Hy runtime (the empty deps
+  ;; dir defeats a host KOTOBA_HY_DEPS; host ITONAMI_HERMES_ROOT must be
+  ;; unset for this control to hold)
+  {:id :profile-hy-migrate-blocked-hy :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"
+          "profiles/p2/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreix\", :files 1, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"p2\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "profiles/p2/gateway.parked" "2026-11-08T00:00:00+09:00\n"
+          "empty/.keep" ""}
+   :request {:sub "hy-migrate" :name "p2" :env {"KOTOBA_HY_DEPS" "test/scratch/profile-hy-migrate-blocked-hy/empty"}}
+   :expect {:exit 0
+            :lines ["blocked p2  hy_runtime_unavailable=1[Hy runtime not found for script=a.hy]" "0 script ref(s) converted; 1 profile(s) skipped"]}}
+  ;; S4d: profile hy-migrate keeps refs that are already converted
+  {:id :profile-hy-migrate-keep :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.hy\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"
+          "profiles/p2/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreix\", :files 1, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"p2\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "profiles/p2/gateway.parked" "2026-11-08T00:00:00+09:00\n"}
+   :request {:sub "hy-migrate" :name "p2" :env {"KOTOBA_HY_DEPS" "test/fixtures/hydeps"}}
+   :expect {:exit 0
+            :lines ["keep    p2  no .py refs with sibling .hy files" "0 script ref(s) converted; 0 profile(s) skipped"]}}
+  ;; S4d: profile hy-migrate skips a Hermes-scheduled profile
+  {:id :profile-hy-migrate-skip-hermes :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "hy-migrate" :name "p1" :env {"KOTOBA_HY_DEPS" "test/fixtures/hydeps"}}
+   :expect {:exit 0
+            :lines ["skip    p1  scheduler is not Kotoba-owned" "0 script ref(s) converted; 1 profile(s) skipped"]}}
+  ;; S4d: profile hy-migrate --dry-run reports without writing
+  {:id :profile-hy-migrate-dry :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\ndescription: Hermes profile\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"
+          "profiles/p2/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreifu3u6nzst4qwvyvq2p7qfpforgormpkt2fcpkk4o5rinqoz5ubzm\", :files 7, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"p2\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "profiles/p2/gateway.parked" "2026-11-08T00:00:00+09:00\n"}
+   :request {:sub "hy-migrate" :name "p2" :dry-run true :env {"KOTOBA_HY_DEPS" "test/fixtures/hydeps"}}
+   :expect {:exit 0
+            :lines ["would   convert p2  script=1 monitor_script=0" "1 script ref(s) would be converted; 0 profile(s) skipped"]
+            :jobs-doc "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"}}
+  ;; S4d: profile hy-migrate skips while the Kotoba tick holds the lock
+  {:id :profile-hy-migrate-skip-tick :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\ndescription: Hermes profile\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"
+          "profiles/p2/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreix\", :files 1, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"p2\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "profiles/p2/gateway.parked" "2026-11-08T00:00:00+09:00\n"
+          "profiles/p2/cron/.itonami-tick.lock/.keep" ""}
+   :request {:sub "hy-migrate" :name "p2" :env {"KOTOBA_HY_DEPS" "test/fixtures/hydeps"}}
+   :expect {:exit 0
+            :lines ["skip    p2  Kotoba tick is in progress" "0 script ref(s) converted; 1 profile(s) skipped"]}}]}]

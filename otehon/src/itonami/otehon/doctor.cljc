@@ -88,6 +88,26 @@
           (script-findings home job probes)
           (hy-findings job hy-deps)))
 
+(defn script-runtime-issues
+  "Readiness issues for one job's script paths and Hy entry points.
+  Verbatim from cron.cljk (path issues plus Hy issues, no delivery
+  lane — the lane lives in job-findings)."
+  [job home probes hy-deps]
+  (concat (script-findings home job probes)
+          (hy-findings job hy-deps)))
+
+(defn readiness-issues
+  "Job-level readiness issues for a profile: what `profile readiness`,
+  `adopt` and `hy-migrate` refuse on. Verbatim from main.cljk
+  profile-readiness-issues minus the S6-owned kotoba-job-issues kinds
+  (toolsets/tools, browser backends, oauth cache)."
+  [jobs home probes hy-deps]
+  (vec (mapcat (fn [job]
+                 (when (and (map? job) (active-job? job))
+                   (map #(assoc % :job (get job "id" "(unknown)"))
+                        (job-findings job home probes hy-deps))))
+               (or jobs []))))
+
 (defn profile-findings
   "All doctor findings for a profile. `inputs`: :config, :home, :jobs,
   :env (host env map for token checks), :model-override (CLI --model),
@@ -95,11 +115,7 @@
   exists), :hy-deps (nil or string), :probes {:file? :symlink?}."
   [{:keys [config home jobs]} {:keys [env model-override paused-record
                                       state-db? hy-deps probes]}]
-  (let [readiness (mapcat (fn [job]
-                            (when (and (map? job) (active-job? job))
-                              (map #(assoc % :job (get job "id" "(unknown)"))
-                                   (job-findings job home probes hy-deps))))
-                          (or jobs []))
+  (let [readiness (readiness-issues jobs home probes hy-deps)
         model-issue (when (and (str/blank? (str (get-in config ["model" "default"])))
                                (str/blank? (str (get-in config ["cron" "model"])))
                                (str/blank? (str model-override)))

@@ -97,4 +97,42 @@
           "hermes/profiles/p1/config.yaml" "model:\n  default: mishima\n"
           "hermes/profiles/p1/cron/jobs.json" "{\"jobs\": []}\n"}
    :request {:sub "import" :from "hermes" :to "store" :name "p1"}
-   :expect {:exit 0 :lines ["WRONG"]}}]}]
+   :expect {:exit 0 :lines ["WRONG"]}}
+  ;; a wrong adopt line (proves adopt lines are asserted)
+  {:id :must-fail/profile-adopt-wrong-line :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "adopt" :name "p2"}
+   :expect {:exit 0 :lines ["WRONG"]}}
+  ;; a wrong soul size (proves soul-written is asserted)
+  {:id :must-fail/profile-soul-wrong-size :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul p1\n"
+          "profiles/p1/profile.yaml" "name: p1\n"
+          "profiles/p1/yakuwari.edn" "{:yakuwari/capabilities [{:capability :digest :decision :autonomous}]}\n"
+          "registry.edn" "{:agents [{:agent/id \"p1\" :org/unit :u1 :org/world :default :agent/kind :worker :agent/capabilities [:digest]}]}\n"
+          "worlds.edn" "{:worlds {:default {:name \"Default\" :units {:u1 {:what \"unit one\"}}}} :soul/common [{:line \"common line\"}]}\n"}
+   :request {:sub "soul" :name "p1" :registry "registry.edn" :worlds "worlds.edn"}
+   :expect {:exit 0 :soul-written [{:generated-chars 999}] :soul-backup "WRONG"}}
+  ;; a wrong stage count (proves staged counts are asserted)
+  {:id :must-fail/profile-stage-wrong-count :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "artifact/migration.json" "{\"format\": \"kotoba-hermes-cron-hy-patch-v2\", \"script_files\": [{\"profile\": \"p2\", \"source\": \"scripts/a.py\", \"target\": \"scripts/a.hy\", \"source_sha256\": \"cc42155088fca5730758db72b2a5bca33112a941dfaa2d43098ec422ce4ea213\", \"target_sha256\": \"67fb159b26750ff6047ee163578aaed927b0f9052775cb6e23f39761cd439256\"}]}"
+          "artifact/p2/scripts/a.hy" "(print 1)\n"}
+   :request {:sub "hy-stage" :name "p2" :artifact "artifact"}
+   :expect {:exit 0 :messages-include ["staged p2  files=9"]}}
+  ;; a wrong migrate jobs doc (proves jobs-doc is asserted)
+  {:id :must-fail/profile-migrate-wrong-jobs :op :profile
+   :seed {"profiles/p2/SOUL.md" "soul p2\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/p2/scripts/a.py" "print(1)\n"
+          "profiles/p2/scripts/a.hy" "(print 1)\n"
+          "profiles/p2/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"p2\" :profile/hermes-compatible true :runtime {:engine :itonami-agent, :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}\n"
+          "profiles/p2/gateway.parked" "2026-11-08T00:00:00+09:00\n"}
+   :request {:sub "hy-migrate" :name "p2" :env {"KOTOBA_HY_DEPS" "test/fixtures/hydeps"}}
+   :expect {:exit 0 :jobs-doc "WRONG"}}]}]

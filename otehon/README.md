@@ -30,7 +30,7 @@ otehon/bin/itonami-otehon <basilisp|bb|nbb> run-exec   <profile-dir> <job-id-or-
 otehon/bin/itonami-otehon <basilisp|bb|nbb> doctor     [--profile P]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> sessions   [list|show <id>|resume] [--profile P] [--limit N]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> notepad    <profile-dir> <job> <verb> [key] [value]
-otehon/bin/itonami-otehon <basilisp|bb|nbb> profile    [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] [--model M] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run]]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> profile    [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] [--model M] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] [ARTIFACT] [--dry-run] | hy-migrate [<p>|--all] [--dry-run]]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> runs       <store> <profile> [--limit N]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> incidents  <store> <profile> [ack <id>]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> fallback   <dir> [-m M] [--provider P]
@@ -65,6 +65,7 @@ the owner, 64 usage.
 | `src/itonami/otehon/cron.cljc` | jobs.json, cron hint, toolsets, plan | `src/itonami/agent/cron.cljk` |
 | `src/itonami/otehon/profile.cljc` | load, check, dry-run (pure) | `profile.cljk` |
 | `src/itonami/otehon/bundle.cljc` | profile bundle files/CID, manifest lifecycle itonamify/refresh/rail, definition copy (pure + `io` file copy) | `profile.cljk` (bundle-files/manifest/cid, default-manifest, with-inference-rail, write-manifest!, with-bundle, refresh-bundle-cid, copy-profile!), `host.cljk` (sha/base32/json) |
+| `src/itonami/otehon/soul.cljc` | SOUL world/unit/role block render + splice (pure + `io` sha) | `src/itonami/agent/soul.cljk` |
 | `src/itonami/otehon/io.cljc` | files, JSON, EDN, exit, clock, listing, utf8 writes, pid liveness, atomic replace: the only host code | — |
 | `src/itonami/otehon/pause.cljc` | emergency-stop marker paths, record, messages (pure) | `src/itonami/agent/pause.cljk`, `main.cljk` pause/resume-cmd |
 | `src/itonami/otehon/status.cljc` | store status lines (pure) | `main.cljk` status-cmd |

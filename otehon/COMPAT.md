@@ -24,7 +24,7 @@ covered by shared cases on all three runners.
 | `mcp` | `mcp-cmd` | — | S6 |
 | `dapps` | `dapps-cmd` | — | S6 |
 | `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor), `notepad` (KV verbatim), `runs`/`incidents` (ledger reads: rows list, ack) | done run/tick-exec + notepad + ledger reads (JUN-1036 S2a/S2b/S4a/S4b; ledger/queue writes S5) |
-| `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check`, `store-plan` (import/export copy plan), `profile list/show/check/readiness/refresh/itonamify/rail/refresh-bundle/release/import/export` (import/export executes the plan: definition byte copy + Hermes-side park on export) | S4 remaining verbs (adopt/soul/did/organize/hy-*; S6-owned check/readiness finding kinds deferred, recorded below) |
+| `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check` (job-level readiness: the legacy command reads active jobs only; model/state.db/pause findings stay doctor-only), `store-plan` (import/export copy plan), `profile list/show/check/readiness/refresh/itonamify/rail/refresh-bundle/release/import/export/adopt/soul/organize/hy-stage/hy-migrate` (import/export executes the plan: definition byte copy + Hermes-side park on export; adopt flips scheduler + parks + refreshes CID; soul renders registry/worlds blocks with backup+receipt; organize projects the registry entry; hy-stage checks and stages the Hy payload; hy-migrate rewrites `.py` refs under the tick lock) | S4 remaining verb: `did` (identity crypto; S6-owned check/readiness finding kinds deferred, recorded below) |
 | `doctor` | `doctor-cmd` | `doctor` (store verbs; S6-owned finding kinds deferred, recorded below) | done (JUN-1036 S3b) |
 | `sessions [list]/show/resume` | `sessions-cmd` | `sessions` (reads state.db read-only; resume refuses verbatim) | done (JUN-1036 S3b) |
 | `model [NAME] [--provider]` | `model-cmd` | `model` (positional dir, otehon convention) | done (JUN-1036 S3b) |
@@ -65,6 +65,15 @@ reading the store root); the parked stamp text is never asserted;
 import/export dry-run reports 0 copied, verbatim (the count lives in
 the real-copy branch only — itonamify/refresh/rail/release count
 their would-lines instead).
+S4d divergences: `cron/jobs.json` and run/audit log bytes are
+port-canonical (compact, keys sorted at every level — Basilisp's
+`py->lisp` build does not preserve JSON document order, so the
+legacy file order cannot be reproduced portably; parsed content is
+identical, and the legacy indent-2 layout is not reproduced
+either); the soul backup path in messages keeps the scratch root
+(absolute, runner-independent — only the `state/soul-blocks/` tail
+is asserted); the soul receipt and the parked stamp text are
+host-clocked and never asserted, only presence.
 
 ## Module checklist
 
@@ -104,12 +113,12 @@ from source, the rest follow the module name until their slice lands.
 | `platform_adapters.cljk` *lane adapters* | — | planned S5 |
 | `process.cljk` | — | planned S2 |
 | `profile.cljk` *store layout* | `profile.cljc`, `status.cljc` (names), `store.cljc` | partial (verbs S4) |
-| `profile.cljk` *bundle/manifest lifecycle* | `bundle.cljc` (bundle-files/manifest/cid, default-manifest, with-inference-rail, write-manifest!, with-bundle, refresh-bundle-cid, copy-profile!) + `cli.cljc` (set-parked!, release/transfer lines) | done itonamify/refresh/rail/refresh-bundle/release/import/export (JUN-1036 S4b/S4c; did/soul/organize/adopt/hy-* stay later) |
+| `profile.cljk` *bundle/manifest lifecycle* | `bundle.cljc` (bundle-files/manifest/cid, default-manifest, with-inference-rail, write-manifest!, with-bundle, refresh-bundle-cid, copy-profile!) + `manifest.cljc` (with-org) + `cli.cljc` (set-parked!, release/transfer/adopt/organize/hy lines) | done itonamify/refresh/rail/refresh-bundle/release/import/export/adopt/organize/hy-stage/hy-migrate (JUN-1036 S4b/S4c/S4d; `did` stays later) |
 | `provider.cljk` *chain/resolution* | `rail.cljc` (job target), `model.cljc` (display chain) | partial (live calls S2) |
 | `profile.cljk` *set-model-text* | `model.cljc` (verbatim port, throws as ex-info) | done for model/provider keys (JUN-1036 S3b) |
 | `quiet.cljk` | — | planned S2 |
 | `rails.cljk` | — | planned S3b |
-| `soul.cljk` | — | planned S4 |
+| `soul.cljk` | `soul.cljc` (world/unit/role render + splice, limit, body guard) | done (JUN-1036 S4d) |
 | `tools.cljk` *tool registry* | — | planned S6 |
 | `tts.cljk` | — | planned S6 |
 | `vault.cljk` | — | planned S6 |
@@ -138,7 +147,8 @@ from source, the rest follow the module name until their slice lands.
   set/get/delete/list with caps verbatim, job section wired into
   run prompts; `profile list`/`show` reads).
 - S4b store verbs part 2 — done (JUN-1036: `profile check` (+`--summary`,
-  `--all`), `readiness` (doctor findings + issue summary), `refresh`,
+  `--all`), `readiness` (job-level findings + issue summary, corrected
+  in S4d from a full-findings port), `refresh`,
   `itonamify` (+`--force`), `rail` (all verbatim incl. keep/skip/usage
   lines); `cron runs`/`history` rows with receipt join, `cron incidents`
   list/ack; 32 cases + 3 must-fail. Toolset/browser/oauth finding kinds
@@ -147,6 +157,14 @@ from source, the rest follow the module name until their slice lands.
   `release` (manifest flip + marker lift, +`--all`), `import`/`export`
   (definition byte copy + Hermes-side park on export, +`--force`);
   21 cases + 3 must-fail. `did` waits on identity crypto (S5+)).
-- S4 remaining: adopt/soul/organize/hy-* (registry + Hy-conversion cluster).
+- S4d store verbs part 4 — done (JUN-1036: `profile adopt`
+  (scheduler flip + Hermes park + bundle CID, `--all` batch refusal),
+  `profile soul` (registry/worlds render with backup + receipt, limit
+  and body-guard refusals), `profile organize` (registry projection
+  via `with-org`), `profile hy-stage` (hash-checked payload staging),
+  `profile hy-migrate` (`.py`→`.hy` rewrite under the tick lock +
+  bundle refresh); 31 cases + 4 must-fail. `readiness` corrected to
+  job-level only (model/state.db/pause stay doctor-only).
+- S4 remaining: `did` (waits on identity crypto).
 - S5 messaging: gateway/send/deliver/ledger/peers/chat.
 - S6 tools: backends + bridge/chat/vault/mcp/dapps CLIs.
