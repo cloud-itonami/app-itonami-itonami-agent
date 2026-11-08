@@ -16,9 +16,13 @@ selfhost-only rule for the Native route (`AGENTS.md`) is unchanged.
 ## What the first slice does
 
 ```
-otehon/bin/itonami-otehon <basilisp|bb|nbb> check   <profile-dir>
-otehon/bin/itonami-otehon <basilisp|bb|nbb> dry-run <profile-dir> <job-id-or-name> [--capability c]...
-otehon/bin/itonami-otehon <basilisp|bb|nbb> test    otehon/test/cases.edn
+otehon/bin/itonami-otehon <basilisp|bb|nbb> check      <profile-dir>
+otehon/bin/itonami-otehon <basilisp|bb|nbb> dry-run    <profile-dir> <job-id-or-name> [--capability c]...
+otehon/bin/itonami-otehon <basilisp|bb|nbb> tick       <profile-dir>
+otehon/bin/itonami-otehon <basilisp|bb|nbb> turn-gate  <profile-dir> <prompt> [--capability c]...
+otehon/bin/itonami-otehon <basilisp|bb|nbb> run-plan   <profile-dir> <job-id-or-name> [--capability c]...
+otehon/bin/itonami-otehon <basilisp|bb|nbb> store-plan --direction import|export --from <dir> --to <dir> [--force]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> test       otehon/test/cases.edn
 otehon/bin/run-shared-cases [basilisp bb nbb]
 ```
 
@@ -48,12 +52,27 @@ the owner, 64 usage.
 | `src/itonami/otehon/rail.cljc` | Hermes / itonami rail verdicts, inference target | `kotoba/itonami/rail.kotoba`, Hermes `cron/scheduler.py` order |
 | `src/itonami/otehon/cron.cljc` | jobs.json, cron hint, toolsets, plan | `src/itonami/agent/cron.cljk` |
 | `src/itonami/otehon/profile.cljc` | load, check, dry-run (pure) | `profile.cljk` |
-| `src/itonami/otehon/io.cljc` | files, JSON, EDN, exit: the only host code | — |
+| `src/itonami/otehon/io.cljc` | files, JSON, EDN, exit, clock, listing: the only host code | — |
 | `src/itonami/otehon/cli.cljc` | commands, canonical print, shared-case runner | — |
+| `src/itonami/otehon/tick.cljc` | due jobs, next fire times (pure cron math) | `src/itonami/agent/cron.cljk` `parse-cron`, `next-run`, `due?` |
+| `src/itonami/otehon/store.cljc` | import/export copy plan (pure) | `src/itonami/agent/profile.cljk` `copy-profile!` |
+| `src/itonami/otehon/turn.cljc` | one-turn `-z` gate (pure) | `main.cljk` `oneshot` gating, `loop.cljk` toolset rule |
+| `src/itonami/otehon/run.cljc` | real-run plan: prompt, output doc, record (pure) | `src/itonami/agent/cron.cljk` `build-prompt`, `output-doc`, `record-run-state!` |
+| `src/itonami/otehon/text.cljc` | portable string ops, JVM whitespace pinned | `kotoba.lang.text` (the `.cljk` reference nbb cannot load) |
 
-Everything except `io.cljc` is pure and host-independent; `io.cljc` is the
+Everything except `io.cljc` and the two host-leaf branches in `text.cljc`
+(`lower-case` case-folding) is pure and host-independent; `io.cljc` is the
 one namespace with `#?(:lpy … :clj … :cljs …)` branches. `#?@` is not used
-(the Kotoba reader does not accept it).
+(the Kotoba reader does not accept it). The second slice (2026-11-08, owner
+choice: expand the host surface) adds clock and directory listing to `io.cljc`
+only — no other namespace carries `#?`, so every host difference stays
+visible in this one file. `text.cljc` pins `trim`/`blank?` to JVM
+`Character/isWhitespace` (NBSP kept) and `split` trailing empties to Java
+semantics; regex matching itself stays host regex, as in `kotoba.lang.text`.
+No `#?@`, no `.charAt`, no `str/trimr`, no `array-map`, no `\\\\` in regex
+literals (Basilisp folds it); `\\x5c` is used for a literal backslash, and no
+`\\u` escapes appear anywhere (Basilisp rejects them — whitespace is built
+from code points via `char`).
 
 ## Compatibility kept
 
@@ -100,10 +119,11 @@ one namespace with `#?(:lpy … :clj … :cljs …)` branches. `#?@` is not used
 
 `bin/run-shared-cases` runs on each runner:
 
-- `test/cases.edn` — 40 cases, 24 of them negative controls. Each negative
-  control with an edit is also run on the unedited fixture and must then
-  *not* match, so the edit causes the rejection.
-- `test/must-fail.edn` — four deliberately wrong cases (one a no-op edit).
+- `test/cases.edn` — 78 cases (18 `:text` oracle cases), 27 of them
+  negative controls. Each negative control with an edit is also run on the
+  unedited fixture and must then *not* match, so the edit causes the
+  rejection.
+- `test/must-fail.edn` — five deliberately wrong cases (one a no-op edit).
   Every runner must report all four as FAIL; otherwise the harness could not
   tell a broken core from a working one.
 - the canonical output of `check` / `dry-run` on the fixtures and the case
@@ -112,15 +132,24 @@ one namespace with `#?(:lpy … :clj … :cljs …)` branches. `#?@` is not used
 CI: `.github/workflows/oracle-otehon-cljc.yml`, an oracle-only job with
 pinned runners. It is not a required check.
 
-Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`.
+Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
+`docs/evidence/otehon-cljc-20261108.md`,
+`docs/evidence/otehon-text-oracle-20261108.md`.
 
 ## Next slices
 
-1. Run a job for real on the Otehon path: execute the pre-run script in the
-   profile's `scripts/`, call the murakumo rail, save `cron/output/`, append
-   the run record. Same files as the legacy route.
-2. `cron tick` (due jobs, `next_run_at`, the 5-field cron parser) and
-   `profile import/export` between the Hermes and itonami stores.
-3. One turn (`-z`) with the toolset gate.
-4. Use these outputs as reference values for the Native route (AWAI-60,
+1. ~~Run a job for real on the Otehon path~~ — planned 2026-11-08
+   (`run-plan`: prompt assembly, output doc, jobs.json record as data;
+   `tick`: due jobs, `next_run_at`, the 5-field cron parser;
+   `store-plan`: `profile import/export` copy plan). What stays host-side
+   and unwritten: pre-run script spawn, the murakumo rail call, saving
+   `cron/output/`, applying the jobs.json record, monitor sources,
+   delivery lanes, the executions ledger.
+2. ~~`cron tick` and `profile import/export`~~ — planned as above.
+3. ~~One turn (`-z`) with the toolset gate~~ — gated as above (`turn-gate`).
+4. Execute the plans on the host (script spawn, rail call, save, apply).
+5. Use these outputs as reference values for the Native route (AWAI-60,
    AWAI-131), recorded per the oracle rule, never as its fallback.
+
+Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
+`docs/evidence/otehon-cljc-20261108.md`.

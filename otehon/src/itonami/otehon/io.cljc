@@ -1,6 +1,8 @@
 (ns itonami.otehon.io
-  "The only host-specific namespace: files, JSON, EDN, env, exit.
-  Each branch is one runner: :lpy Basilisp (Python), :clj Babashka, :cljs nbb."
+  "The only host-specific namespace: files, JSON, EDN, env, exit, clock and
+  directory listing. Each branch is one runner: :lpy Basilisp (Python),
+  :clj Babashka, :cljs nbb. Pure namespaces stay branch-free and call in
+  here, so every host difference is visible in this one file."
   (:require [clojure.string :as str]
             #?(:clj [cheshire.core :as json])
             #?(:clj [clojure.edn :as edn])
@@ -43,6 +45,47 @@
   #?(:lpy (edn/read-string s)
      :clj (edn/read-string s)
      :cljs (reader/read-string s)))
+
+(defn dir? [path]
+  #?(:lpy (.isdir os/path path)
+     :clj (.isDirectory (java.io.File. ^String path))
+     :cljs (and (.existsSync fs path) (.isDirectory (.statSync fs path)))))
+
+(defn read-dir-names
+  "Single-level names under `dir`, [] when it is missing."
+  [dir]
+  #?(:lpy (if (.isdir os/path dir) (vec (.listdir os dir)) [])
+     :clj (vec (or (seq (.list (java.io.File. ^String dir))) []))
+     :cljs (try (vec (.readdirSync fs dir)) (catch :default _ []))))
+
+(defn now-parts
+  "Now in the host zone: {:iso \"YYYY-MM-DDTHH:MM:SS+HH:MM\" (the same shape
+  the legacy route writes to next_run_at) :parts {:year :month :day :hour
+  :minute}}. The pure tick namespace compares and advances from this."
+  []
+  #?(:lpy (let [dt (python/__import__ "datetime")
+                now (.astimezone (.now (.-datetime dt)))
+                off (.strftime now "%z")
+                iso (str (.strftime now "%Y-%m-%dT%H:%M:%S") (subs off 0 3) ":" (subs off 3 5))]
+            {:iso iso
+             :parts {:year (.-year now) :month (.-month now) :day (.-day now)
+                     :hour (.-hour now) :minute (.-minute now)}})
+     :clj (let [z (java.time.ZonedDateTime/now)
+                fmt (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd'T'HH:mm:ssxxx")]
+            {:iso (.format z fmt)
+             :parts {:year (.getYear z) :month (.getMonthValue z) :day (.getDayOfMonth z)
+                     :hour (.getHour z) :minute (.getMinute z)}})
+     :cljs (let [d (js/Date.)
+                 pad (fn [n w] (.padStart (str n) w "0"))
+                 m (- (.getTimezoneOffset d))
+                 s (if (neg? m) "-" "+")
+                 a (js/Math.abs m)
+                 off (str s (pad (quot a 60) 2) ":" (pad (mod a 60) 2))]
+             {:iso (str (.getFullYear d) "-" (pad (inc (.getMonth d)) 2) "-" (pad (.getDate d) 2)
+                        "T" (pad (.getHours d) 2) ":" (pad (.getMinutes d) 2) ":" (pad (.getSeconds d) 2)
+                        off)
+              :parts {:year (.getFullYear d) :month (inc (.getMonth d)) :day (.getDate d)
+                      :hour (.getHours d) :minute (.getMinutes d)}})))
 
 (defn basename [path] (last (str/split (str/replace path #"/+$" "") #"/")))
 
