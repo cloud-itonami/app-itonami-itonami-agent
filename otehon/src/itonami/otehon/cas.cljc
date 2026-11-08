@@ -180,6 +180,72 @@
              (sort (keys by-sha))))
      :conflicted)))
 
+(def ^:private digit-val
+  "Explicit 1-char strings (never seq elements: bb yields chars where
+  nbb yields strings, so only `subs` slices are portable keys)."
+  (zipmap ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9"] (range 10)))
+
+(defn parse-int
+  "Non-negative integer from a digit string, nil on any other input.
+  Pure and portable, so the CLI parses counts without host interop."
+  [s]
+  (when (and (string? s) (pos? (count s)))
+    (reduce (fn [a i]
+              (if (nil? a)
+                nil
+                (if-let [d (get digit-val (subs s i (inc i)))]
+                  (+ (* a 10) d)
+                  nil)))
+            0 (range (count s)))))
+
+(defn- ymd->days
+  "Days since 1970-01-01 for a YYYY-MM-DD string (Hinnant days_from_civil,
+  pure quot arithmetic). nil unless the shape is exactly digits+2 dashes."
+  [s]
+  (when (and (string? s) (= 10 (count s))
+             (= "-" (subs s 4 5)) (= "-" (subs s 7 8)))
+    (let [y (parse-int (subs s 0 4)) m (parse-int (subs s 5 7)) d (parse-int (subs s 8 10))]
+      (when (and y m d (<= 1 m 12) (<= 1 d 31))
+        (let [y (- y (if (<= m 2) 1 0))
+              era (quot (if (neg? y) (- y 399) y) 400)
+              yoe (- y (* era 400))
+              doy (+ (quot (+ (* 153 (+ m (if (> m 2) -3 9))) 2) 5) (dec d))
+              doe (+ (* yoe 365) (quot yoe 4) (- (quot yoe 100)) doy)]
+          (+ (* era 146097) doe -719468))))))
+
+(defn retention-plan
+  "Time-boxed gc. `tombs` {sha {:deleted-at YYYY-MM-DD :size}} marks when
+  each unreferenced object left the manifest; `days` is the grace period.
+  Returns :drop (grace expired — delete now), :hold (still graced),
+  :mark (newly unreferenced — stamp today), :revived (tombstoned but
+  referenced again — clear the mark), plus :bytes (freed by this drop).
+  Malformed tomb dates are re-marked, never dropped on bad math. A
+  grace of 0 (or below) drops untombstoned objects at once — no grace
+  to wait out — while malformed tombs still re-stamp first.
+  Deterministic."
+  [manifest inventory tombs today days]
+  (let [live (manifest-shas manifest)
+        revived (vec (sort (filter live (keys tombs))))
+        unref (sort (remove live (keys inventory)))
+        t1 (ymd->days today)
+        age (fn [sha]
+              (if-not (contains? tombs sha)
+                ::missing
+                (let [d (get-in tombs [sha :deleted-at])]
+                  (when (and t1 d)
+                    (let [t0 (ymd->days d)] (when t0 (- t1 t0)))))))
+        stepped (reduce (fn [acc sha]
+                          (let [a (age sha)]
+                            (cond (= a ::missing)
+                                  (update acc (if (<= days 0) :drop :mark) conj sha)
+                                  (nil? a) (update acc :mark conj sha)
+                                  (>= a days) (update acc :drop conj sha)
+                                  :else (update acc :hold conj sha))))
+                        {:drop [] :hold [] :mark []} unref)
+        drops (:drop stepped)]
+    (assoc stepped :revived revived
+           :bytes (reduce + 0 (map inventory drops)))))
+
 (defn gc-plan
   "Which stored objects no manifest references. `inventory` {sha size}
   is the physical objects/ content (the caller lists it); the manifest

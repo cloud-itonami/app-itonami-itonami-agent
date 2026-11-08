@@ -402,6 +402,31 @@
    :remotes [{:peer "p1" :manifest {"r1" {:sha "aa" :size 10}}}]
    :expect {:adopted [] :conflicts [] :unmatched ["zz"]}}
 
+  ;; ------------------------------------------------------------ retention
+  {:id :retention-basic :op :retention-plan
+   :manifest {"a.txt" {:sha "aa" :size 1}} :today "2026-01-10" :days 7
+   :inventory {"aa" 1 "xx" 10 "yy" 20 "zz" 30}
+   :tombs {"aa" {:deleted-at "2026-01-01" :size 1}
+           "xx" {:deleted-at "2026-01-01" :size 10}
+           "yy" {:deleted-at "2026-01-08" :size 20}}
+   :expect {:drop ["xx"] :hold ["yy"] :mark ["zz"] :revived ["aa"] :bytes 10}}
+  {:id :retention-zero-days :op :retention-plan
+   :manifest {} :today "2026-01-10" :days 0
+   :inventory {"q" 5} :tombs {}
+   :expect {:drop ["q"] :hold [] :mark [] :revived [] :bytes 5}}
+  {:id :retention-boundary :op :retention-plan
+   :manifest {} :today "2026-01-10" :days 7
+   :inventory {"q" 5} :tombs {"q" {:deleted-at "2026-01-03" :size 5}}
+   :expect {:drop ["q"] :hold [] :mark [] :revived [] :bytes 5}}
+  {:id :retention-bad-date :op :retention-plan
+   :manifest {} :today "2026-01-10" :days 7
+   :inventory {"q" 5} :tombs {"q" {:deleted-at "not-a-date" :size 5}}
+   :expect {:drop [] :hold [] :mark ["q"] :revived [] :bytes 0}}
+  {:id :cas-parse-int-valid :op :cas-parse-int :text "30"
+   :expect {:value 30}}
+  {:id :cas-parse-int-invalid :op :cas-parse-int :text "3x"
+   :expect {:value nil}}
+
   ;; ------------------------------------------------------------ peer
   {:id :peer-plan-fetch :op :peer-plan
    :local {"a" {:sha "aa" :size 1}}
