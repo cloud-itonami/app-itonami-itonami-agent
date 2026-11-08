@@ -359,6 +359,17 @@
    :expect {:checked 2 :mismatch [] :missing ["b.bin"]}}
   {:id :cas-manifest-empty :op :cas-manifest :files {}
    :expect {:checked 0 :mismatch [] :missing []}}
+  {:id :cas-gc-basic :op :cas-gc-plan
+   :manifest {"a.txt" {:sha "aa" :size 10} "b.txt" {:sha "bb" :size 20}}
+   :inventory {"aa" 10 "bb" 20 "dd" 5}
+   :expect {:drop ["dd"] :keep 2 :bytes 5}}
+  {:id :cas-gc-clean :op :cas-gc-plan
+   :manifest {"a.txt" {:sha "aa" :size 10}}
+   :inventory {"aa" 10}
+   :expect {:drop [] :keep 1 :bytes 0}}
+  {:id :cas-gc-empty :op :cas-gc-plan
+   :manifest {} :inventory {}
+   :expect {:drop [] :keep 0 :bytes 0}}
 
   ;; ------------------------------------------------------------ peer
   {:id :peer-plan-fetch :op :peer-plan

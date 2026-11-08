@@ -141,6 +141,22 @@
      :clj (.mkdirs (java.io.File. ^String dir))
      :cljs (.mkdirSync fs dir #js {:recursive true})))
 
+(defn file-size
+  "Size of `path` in bytes, nil when missing."
+  [path]
+  (when (file? path)
+    #?(:lpy (.getsize os/path path)
+       :clj (.length (java.io.File. ^String path))
+       :cljs (.-size (.statSync fs path)))))
+
+(defn delete-file!
+  "Delete one file. True when it is gone afterwards, false when it was
+  already missing (no throw); a failed delete reads false on :clj."
+  [path]
+  #?(:lpy (if (.isfile os/path path) (do (.remove os path) true) false)
+     :clj (.delete (java.io.File. ^String path))
+     :cljs (try (.unlinkSync fs path) true (catch :default _ false))))
+
 ;; ---------------------------------------------------------------- exec plans
 ;; Declarative requests for the two host executions (JUN-1020, owner choice
 ;; io.cljc extension). Pure constructors: no process spawns, no model is

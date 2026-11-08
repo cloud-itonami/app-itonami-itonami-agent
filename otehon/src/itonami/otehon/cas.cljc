@@ -141,6 +141,20 @@
   [manifest]
   (set (map (comp :sha val) manifest)))
 
+(defn gc-plan
+  "Which stored objects no manifest references. `inventory` {sha size}
+  is the physical objects/ content (the caller lists it); the manifest
+  decides liveness. Returns sorted :drop [sha] plus :keep (live digest
+  count) and :bytes (freed). Deterministic. Dropping is always safe:
+  nothing in the manifest points at a dropped digest, and the manifest
+  itself is never rewritten here."
+  [manifest inventory]
+  (let [live (manifest-shas manifest)
+        drop (vec (sort (remove live (keys inventory))))]
+    {:drop drop
+     :keep (count live)
+     :bytes (reduce + 0 (map inventory drop))}))
+
 (defn verify-manifest
   "Re-hash every file through `read-bytes` (rel -> bytes or nil).
   Pure: the caller injects the reader, so the shared cases run
