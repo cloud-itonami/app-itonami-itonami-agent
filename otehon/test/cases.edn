@@ -389,23 +389,41 @@
   ;; ------------------------------------------------------------ peer repair
   {:id :peer-repair-basic :op :peer-repair-plan
    :mismatch ["b"] :missing ["c"]
-   :remote {"b" {:sha "bb" :size 2} "d" {:sha "dd" :size 4}}
-   :expect {:repair [{:rel "b" :sha "bb" :size 2}] :unrepairable ["c"]}}
+   :remotes [{:peer "p" :manifest {"b" {:sha "bb" :size 2} "d" {:sha "dd" :size 4}}}]
+   :expect {:repair [{:rel "b" :sha "bb" :size 2 :from "p"}] :unrepairable ["c"]}}
   {:id :peer-repair-none :op :peer-repair-plan
    :mismatch [] :missing []
-   :remote {"a" {:sha "aa" :size 1}}
+   :remotes [{:peer "p" :manifest {"a" {:sha "aa" :size 1}}}]
    :expect {:repair [] :unrepairable []}}
   {:id :peer-repair-unrepairable :op :peer-repair-plan
    :mismatch ["x"] :missing []
-   :remote {}
+   :remotes [{:peer "p" :manifest {}}]
    :expect {:repair [] :unrepairable ["x"]}}
   {:id :peer-repair-sorted :op :peer-repair-plan
    :mismatch ["z" "a"] :missing ["m"]
-   :remote {"z" {:sha "zz" :size 26} "a" {:sha "aa" :size 1} "m" {:sha "mm" :size 13}}
-   :expect {:repair [{:rel "a" :sha "aa" :size 1}
-                      {:rel "m" :sha "mm" :size 13}
-                      {:rel "z" :sha "zz" :size 26}]
+   :remotes [{:peer "p" :manifest {"z" {:sha "zz" :size 26} "a" {:sha "aa" :size 1} "m" {:sha "mm" :size 13}}}]
+   :expect {:repair [{:rel "a" :sha "aa" :size 1 :from "p"}
+                      {:rel "m" :sha "mm" :size 13 :from "p"}
+                      {:rel "z" :sha "zz" :size 26 :from "p"}]
             :unrepairable []}}
+  {:id :peer-repair-multi-split :op :peer-repair-plan
+   :mismatch ["x"] :missing ["y"]
+   :remotes [{:peer "p1" :manifest {"x" {:sha "x1" :size 1}}}
+             {:peer "p2" :manifest {"x" {:sha "x1" :size 1} "y" {:sha "y2" :size 2}}}]
+   :expect {:repair [{:rel "x" :sha "x1" :size 1 :from "p1"}
+                      {:rel "y" :sha "y2" :size 2 :from "p2"}]
+            :unrepairable []}}
+  {:id :peer-repair-multi-first-wins :op :peer-repair-plan
+   :mismatch ["x"] :missing []
+   :remotes [{:peer "p1" :manifest {"x" {:sha "x1" :size 1}}}
+             {:peer "p2" :manifest {"x" {:sha "x9" :size 9}}}]
+   :expect {:repair [{:rel "x" :sha "x1" :size 1 :from "p1"}]
+            :unrepairable []}}
+  {:id :peer-repair-multi-unrepairable :op :peer-repair-plan
+   :mismatch ["z"] :missing []
+   :remotes [{:peer "p1" :manifest {"a" {:sha "aa" :size 1}}}
+             {:peer "p2" :manifest {"b" {:sha "bb" :size 2}}}]
+   :expect {:repair [] :unrepairable ["z"]}}
 
   ;; ------------------------------------------------------------ market
   {:id :market-match-basic :op :market-match

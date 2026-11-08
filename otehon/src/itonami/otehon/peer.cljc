@@ -53,17 +53,21 @@
   {:sha sha :direction direction :size size :verified (boolean verified?)})
 
 (defn repair-plan
-  "Which bad rels a peer manifest can heal. `bad` is a verify-manifest
-  result; `remote` the peer's manifest {rel {:sha :size}}. Returns
-  sorted :repair [{:rel :sha :size}] (copy these objects from the peer
-  and re-hash on receipt) and sorted :unrepairable [rel] (the peer
-  lacks them, so the caller must refuse or escalate). Deterministic:
+  "Which bad rels a list of peers can heal. `bad` is a verify-manifest
+  result; `remotes` is [{:peer :manifest}] in try-order, one entry per
+  admitted peer dir. Returns sorted :repair [{:rel :sha :size :from}]
+  (copy each object from :from and re-hash on receipt) and sorted
+  :unrepairable [rel] (no peer lists them, so the caller must refuse
+  or escalate). The first peer listing a rel wins. Deterministic:
   rels are deduplicated and every list is sorted."
-  [bad remote]
+  [bad remotes]
   (let [rels (sort (distinct (concat (:mismatch bad []) (:missing bad []))))]
     (reduce (fn [acc rel]
-              (if-let [{:keys [sha size]} (get remote rel)]
-                (update acc :repair conj {:rel rel :sha sha :size size})
+              (if-let [hit (some (fn [{:keys [peer manifest]}]
+                                   (when-let [{:keys [sha size]} (get manifest rel)]
+                                     {:sha sha :size size :from peer}))
+                                 remotes)]
+                (update acc :repair conj (assoc hit :rel rel))
                 (update acc :unrepairable conj rel)))
             {:repair [] :unrepairable []}
             rels)))
