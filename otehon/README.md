@@ -59,6 +59,9 @@ the owner, 64 usage.
 | `src/itonami/otehon/turn.cljc` | one-turn `-z` gate (pure) | `main.cljk` `oneshot` gating, `loop.cljk` toolset rule |
 | `src/itonami/otehon/run.cljc` | real-run plan: prompt, output doc, record (pure) | `src/itonami/agent/cron.cljk` `build-prompt`, `output-doc`, `record-run-state!` |
 | `src/itonami/otehon/text.cljc` | portable string ops, JVM whitespace pinned | `kotoba.lang.text` (the `.cljk` reference nbb cannot load) |
+| `src/itonami/otehon/cas.cljc` | pure SHA-256, object sharding, manifests | AWAI-232 (decentralized storage slice 1) |
+| `src/itonami/otehon/peer.cljc` | permissioned node registry, sync plans | AWAI-232 (slice 2) |
+| `src/itonami/otehon/market.cljc` | capacity attestations, ask/bid match, escrow | AWAI-232 (slice 3) |
 
 Everything except `io.cljc` and the two host-leaf branches in `text.cljc`
 (`lower-case` case-folding) is pure and host-independent; `io.cljc` is the
@@ -66,7 +69,9 @@ one namespace with `#?(:lpy … :clj … :cljs …)` branches. `#?@` is not used
 (the Kotoba reader does not accept it). The second slice (2026-11-08, owner
 choice: expand the host surface) adds clock and directory listing to `io.cljc`
 only — no other namespace carries `#?`, so every host difference stays
-visible in this one file. `text.cljc` pins `trim`/`blank?` to JVM
+visible in this one file. The third slice (same day, AWAI-232) adds
+latin-1 byte read/write and recursive mkdir to `io.cljc` under the same
+rule; hashing itself stays pure so digests agree on every runner. `text.cljc` pins `trim`/`blank?` to JVM
 `Character/isWhitespace` (NBSP kept) and `split` trailing empties to Java
 semantics; regex matching itself stays host regex, as in `kotoba.lang.text`.
 No `#?@`, no `.charAt`, no `str/trimr`, no `array-map`, no `\\\\` in regex
@@ -150,6 +155,14 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
 4. Execute the plans on the host (script spawn, rail call, save, apply).
 5. Use these outputs as reference values for the Native route (AWAI-60,
    AWAI-131), recorded per the oracle rule, never as its fallback.
+6. ~~Decentralized storage slice~~ — done 2026-11-08 (AWAI-232):
+   `cas-put/get/verify` (content-addressed store, pure SHA-256),
+   `peer-push/pull` (permissioned node sync with registry gate),
+   `market-match` (capacity asks/bids, attestation expiry).
+   Bytes travel latin-1; hashing stays pure. What stays open: native
+   POSIX access, peer repair of tampered objects, signature crypto,
+   fleet metadata, retention/GC (the awai fs gap list).
 
 Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
-`docs/evidence/otehon-cljc-20261108.md`.
+`docs/evidence/otehon-cljc-20261108.md`,
+`docs/evidence/otehon-cas12.md`.

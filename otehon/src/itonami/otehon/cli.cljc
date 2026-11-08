@@ -9,6 +9,12 @@
     run-plan   <profile-dir> <job-id-or-name> [--capability <name>]...
                [--script-file <path> | --script-error <text>] [--script-no-wake]
     store-plan --direction import|export --from <dir> --to <dir> [--force]
+    cas-put    <store> <file>...
+    cas-get    <store> <sha> <out>
+    cas-verify <store>
+    peer-push  <store> <peerdir> [--as <node> --registry <reg.edn>]
+    peer-pull  <store> <peerdir> [--as <node> --registry <reg.edn>]
+    market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD]
     test       <cases.edn>
 
   tick, turn-gate and run-plan decide without doing: no script runs, no
@@ -26,7 +32,10 @@
             [itonami.otehon.tick :as tick]
             [itonami.otehon.store :as store]
             [itonami.otehon.turn :as turn]
-            [itonami.otehon.run :as run]))
+            [itonami.otehon.run :as run]
+            [itonami.otehon.cas :as cas]
+            [itonami.otehon.peer :as peer]
+            [itonami.otehon.market :as market]))
 
 ;; ---------------------------------------------------------------- canonical print
 
@@ -117,6 +126,15 @@
     :store (store/plan-copy {:from (:source c {}) :to (:target c {})
                              :force? (:force? c) :direction (:direction c :export)
                              :from-name (:from-name c) :to-name (:to-name c)})
+    :cas-sha {:sha (cas/sha256-hex (:bytes c []))}
+    :cas-manifest (let [files (:files c {})
+                        tamper (:tamper c {})
+                        absent (set (:absent c []))
+                        m (reduce (fn [mm [rel bs]] (cas/manifest-add mm rel bs)) {} files)]
+                    (cas/verify-manifest m (fn [rel] (if (contains? absent rel) nil (get (merge files tamper) rel)))))
+    :peer-plan (peer/sync-plan (:local c {}) (:remote c {}))
+    :market-match (market/match-orders (:asks c []) (:bids c []))
+    :market-attest {:valid (market/valid-attestation? (:att c) (:today c ""))}
     :decide (let [p (load-dir dir read-text)]
               (yakuwari/decide (:yakuwari p) (get-in p [:manifest :authority]) (:capability c)))
     :additive (let [full (load-dir dir read-text)
@@ -190,7 +208,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -231,6 +249,128 @@
           (= "--to" (first as)) (recur (nnext as) (assoc m :to (second as)))
           (= "--force" (first as)) (recur (next as) (assoc m :force? true))
           :else (recur (next as) m))))
+
+;; ---------------------------------------------------------------- cas store on disk
+
+(defn- cas-manifest-path [store] (str store "/manifest.edn"))
+
+(defn- read-edn-file [path]
+  (when (hio/file? path) (hio/parse-edn (hio/slurp-utf8 path))))
+
+(defn- kw-keys
+  "Keywordize a map's string keys (hand-written EDN); keywords pass
+  through. Applied at the CLI boundary so pure namespaces always see
+  keyword keys while files stay hand-writable."
+  [m]
+  (into {} (map (fn [[k v]] [(if (string? k) (keyword k) k) v]) m)))
+
+(defn- cas-read-manifest [store]
+  (let [m (or (read-edn-file (cas-manifest-path store)) {})]
+    (into {} (map (fn [[rel e]] [rel (if (map? e) (kw-keys e) e)]) m))))
+
+(defn- cas-write-manifest! [store m]
+  (hio/mkdirs! store)
+  (hio/write-latin1! (cas-manifest-path store) (canon m)))
+
+(defn- cas-object-path [store sha]
+  (str store "/objects/" (cas/object-rel sha)))
+
+(defn- cas-rel-name [path]
+  (last (str/split path #"/")))
+
+(defn- cas-put [store files]
+  (let [inputs (mapv (fn [f] [f (hio/read-latin1 f)]) files)
+        missing (vec (sort (map first (filter #(nil? (second %)) inputs))))
+        names (mapv (comp cas-rel-name first) inputs)
+        dupes (vec (sort (for [[n c] (frequencies names) :when (< 1 c)] n)))]
+    (cond (seq missing)
+          {:status :refused :reason "cas/file-missing" :missing missing}
+          (seq dupes)
+          {:status :refused :reason "cas/duplicate-name" :names dupes}
+          :else
+          (let [items (mapv (fn [[f s]] (assoc (cas/ingest (cas-rel-name f) (hio/bytes-of s)) :text s)) inputs)]
+            (doseq [{:keys [sha text]} items]
+              (hio/mkdirs! (str store "/objects/" (subs sha 0 2)))
+              (hio/write-latin1! (cas-object-path store sha) text))
+            (let [m (reduce (fn [m {:keys [rel sha size]}] (assoc m rel {:sha sha :size size}))
+                            (cas-read-manifest store) items)]
+              (cas-write-manifest! store m)
+              {:status :ok :store store :stored (count items) :manifest (count m)})))))
+
+(defn- cas-get [store sha out]
+  (let [s (hio/read-latin1 (cas-object-path store sha))]
+    (cond (nil? s)
+          {:status :refused :reason "cas/object-missing" :sha sha}
+          (not= sha (cas/sha256-hex (hio/bytes-of s)))
+          {:status :refused :reason "cas/object-corrupt" :sha sha}
+          :else
+          (do (hio/write-latin1! out s)
+              {:status :ok :sha sha :size (count (hio/bytes-of s))}))))
+
+(defn- cas-verify [store]
+  (let [m (cas-read-manifest store)
+        r (cas/verify-manifest m (fn [rel] (when-let [e (get m rel)]
+                                             (when-let [s (hio/read-latin1 (cas-object-path store (:sha e)))]
+                                               (hio/bytes-of s)))))
+        ok? (and (empty? (:mismatch r)) (empty? (:missing r)))]
+    (assoc r :status (if ok? :ok :refused)
+           :reason (when-not ok? "cas/verify-failed"))))
+
+(defn- peer-apply-one [src dst sha size]
+  (let [s (hio/read-latin1 (cas-object-path src sha))]
+    (if (or (nil? s) (not= sha (cas/sha256-hex (hio/bytes-of s))))
+      {:sha sha :size size :ok false}
+      (do (hio/mkdirs! (str dst "/objects/" (subs sha 0 2)))
+          (hio/write-latin1! (cas-object-path dst sha) s)
+          (let [back (hio/read-latin1 (cas-object-path dst sha))]
+            {:sha sha :size size
+             :ok (and (some? back) (= sha (cas/sha256-hex (hio/bytes-of back))))})))))
+
+(defn- peer-merge-manifest [dst-manifest src-manifest shas]
+  (let [by-sha (into {} (map (fn [[rel e]] [(:sha e) [rel e]]) src-manifest))]
+    (reduce (fn [m sha] (if-let [[rel e] (get by-sha sha)] (assoc m rel e) m))
+            dst-manifest shas)))
+
+(defn- peer-args [args]
+  (loop [as (seq args) m {}]
+    (cond (nil? as) m
+          (= "--as" (first as)) (recur (nnext as) (assoc m :as (second as)))
+          (= "--registry" (first as)) (recur (nnext as) (assoc m :registry (second as)))
+          :else (recur (next as) m))))
+
+(defn- peer-gate [registry as peerdir today]
+  (cond (nil? registry) {:ok true}
+        (nil? as) {:ok false :reason "peer/node-required"}
+        (not (peer/member? registry as today)) {:ok false :reason "peer/not-member" :node as}
+        (not= (peer/node-prefix registry as) (cas-rel-name peerdir))
+        {:ok false :reason "peer/prefix-mismatch" :node as}
+        :else {:ok true}))
+
+(defn- peer-sync [store peerdir direction opts today]
+  (let [raw (when (:registry opts) (read-edn-file (:registry opts)))
+        registry (when raw (into {} (map (fn [[n e]] [n (if (map? e) (kw-keys e) e)]) raw)))
+        gate (peer-gate registry (:as opts) peerdir today)]
+    (if-not (:ok gate)
+      {:status :refused :gate (dissoc gate :ok)}
+      (let [lm (cas-read-manifest store)
+            rm (cas-read-manifest peerdir)
+            plan (peer/sync-plan lm rm)
+            jobs (if (= direction :send) (:send plan) (:fetch plan))
+            src (if (= direction :send) store peerdir)
+            dst (if (= direction :send) peerdir store)
+            srcm (if (= direction :send) lm rm)
+            dstm (if (= direction :send) rm lm)
+            applied (mapv (fn [{:keys [sha size]}] (peer-apply-one src dst sha size)) jobs)]
+        (if (some (complement :ok) applied)
+          {:status :refused :reason "peer/copy-failed" :plan plan :applied applied}
+          (do (cas-write-manifest! dst (peer-merge-manifest dstm srcm (map :sha jobs)))
+              {:status :ok :direction direction :plan plan :applied (count applied)}))))))
+
+(defn- market-today [more]
+  (loop [as (seq more) today nil]
+    (cond (nil? as) today
+          (= "--today" (first as)) (recur (nnext as) (second as))
+          :else (recur (next as) today))))
 
 (defn main* [args]
   (let [[cmd a b & more] args]
@@ -283,6 +423,43 @@
                                                  :from-name from :to-name to})]
                          (println (canon r))
                          (if (= :ok (:status r)) 0 1))))
+      "cas-put" (let [files (if b (cons b more) [])]
+                  (if (or (nil? a) (empty? files))
+                    (usage)
+                    (let [r (cas-put a files)]
+                      (println (canon r))
+                      (if (= :ok (:status r)) 0 1))))
+      "cas-get" (if-not (and a b (first more))
+                  (usage)
+                  (let [r (cas-get a b (first more))]
+                    (println (canon r))
+                    (if (= :ok (:status r)) 0 1)))
+      "cas-verify" (if-not a
+                     (usage)
+                     (let [r (cas-verify a)]
+                       (println (canon r))
+                       (if (= :ok (:status r)) 0 1)))
+      "peer-push" (if-not (and a b)
+                    (usage)
+                    (let [r (peer-sync a b :send (peer-args more) (subs (:iso (hio/now-parts)) 0 10))]
+                      (println (canon r))
+                      (if (= :ok (:status r)) 0 1)))
+      "peer-pull" (if-not (and a b)
+                    (usage)
+                    (let [r (peer-sync a b :fetch (peer-args more) (subs (:iso (hio/now-parts)) 0 10))]
+                      (println (canon r))
+                      (if (= :ok (:status r)) 0 1)))
+      "market-match" (if-not (and a b)
+                       (usage)
+                       (let [asks (mapv (fn [x] (if (map? x) (kw-keys x) x)) (or (read-edn-file a) []))
+                             bids (mapv (fn [x] (if (map? x) (kw-keys x) x)) (or (read-edn-file b) []))
+                             today (or (market-today more) (subs (:iso (hio/now-parts)) 0 10))
+                             bad (vec (sort (map :node (filter #(not (market/valid-attestation? % today)) asks))))]
+                         (if (seq bad)
+                           (do (println (canon {:status :refused :reason "market/attestation-invalid" :nodes bad})) 1)
+                           (let [r (market/match-orders asks bids)]
+                             (println (canon (assoc r :status :ok)))
+                             0))))
       "test" (if-not a
                (usage)
                (let [r (run-cases a)]

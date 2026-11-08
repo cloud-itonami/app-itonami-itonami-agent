@@ -281,4 +281,74 @@
    :source {"SOUL.md" "soul" "scripts/.hidden" "x" "skills/ok/SKILL.md" "y"}
    :target {}
    :expect {:status :ok :copied ["SOUL.md" "skills/ok/SKILL.md"]
-            :skipped-dotfiles ["scripts/.hidden"]}}]}
+            :skipped-dotfiles ["scripts/.hidden"]}}
+
+  ;; ------------------------------------------------------------ cas
+  {:id :cas-sha-empty :op :cas-sha :bytes []
+   :expect {:sha "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+  {:id :cas-sha-abc :op :cas-sha :bytes [97 98 99]
+   :expect {:sha "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}}
+  {:id :cas-sha-binary :op :cas-sha :bytes [0 255 128 1 254]
+   :expect {:sha "05072bf80187da645524adfe3817f8e4d0a35ec52b587e7efa2503f5ee278351"}}
+  {:id :cas-sha-full-block :op :cas-sha
+   :bytes [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63]
+   :expect {:sha "fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108"}}
+  {:id :cas-manifest-ok :op :cas-manifest
+   :files {"a.txt" [97] "b.bin" [98 99]}
+   :expect {:checked 2 :mismatch [] :missing []}}
+  {:id :cas-manifest-tamper :op :cas-manifest
+   :files {"a.txt" [97] "b.bin" [98 99]} :tamper {"b.bin" [120]}
+   :expect {:checked 2 :mismatch ["b.bin"] :missing []}}
+  {:id :cas-manifest-missing :op :cas-manifest
+   :files {"a.txt" [97] "b.bin" [98 99]} :absent ["b.bin"]
+   :expect {:checked 2 :mismatch [] :missing ["b.bin"]}}
+  {:id :cas-manifest-empty :op :cas-manifest :files {}
+   :expect {:checked 0 :mismatch [] :missing []}}
+
+  ;; ------------------------------------------------------------ peer
+  {:id :peer-plan-fetch :op :peer-plan
+   :local {"a" {:sha "aa" :size 1}}
+   :remote {"a" {:sha "aa" :size 1} "b" {:sha "bb" :size 2}}
+   :expect {:fetch [{:sha "bb" :size 2}] :send [] :same 1}}
+  {:id :peer-plan-send :op :peer-plan
+   :local {"a" {:sha "aa" :size 1} "b" {:sha "bb" :size 2}}
+   :remote {"a" {:sha "aa" :size 1}}
+   :expect {:fetch [] :send [{:sha "bb" :size 2}] :same 1}}
+  {:id :peer-plan-equal :op :peer-plan
+   :local {"a" {:sha "aa" :size 1}} :remote {"a" {:sha "aa" :size 1}}
+   :expect {:fetch [] :send [] :same 1}}
+  {:id :peer-plan-empty :op :peer-plan :local {} :remote {}
+   :expect {:fetch [] :send [] :same 0}}
+
+  ;; ------------------------------------------------------------ market
+  {:id :market-match-basic :op :market-match
+   :asks [{:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5}
+          {:node "n2" :cpu 8 :mem-gib 16 :disk-gib 200 :price 9}]
+   :bids [{:id "b1" :cpu 2 :mem-gib 4 :disk-gib 50 :max-price 6}
+          {:id "b2" :cpu 8 :mem-gib 16 :disk-gib 200 :max-price 10}]
+   :expect {:matches [{:bid "b1" :ask "n1" :price 5}
+                      {:bid "b2" :ask "n2" :price 9}]
+            :unmatched []}}
+  {:id :market-match-cheapest :op :market-match
+   :asks [{:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 9}
+          {:node "n2" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5}]
+   :bids [{:id "b1" :cpu 2 :mem-gib 4 :disk-gib 50 :max-price 10}]
+   :expect {:matches [{:bid "b1" :ask "n2" :price 5}] :unmatched []}}
+  {:id :market-match-nofit :op :market-match
+   :asks [{:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5}]
+   :bids [{:id "b1" :cpu 99 :mem-gib 4 :disk-gib 50 :max-price 100}]
+   :expect {:matches [] :unmatched ["b1"]}}
+  {:id :market-match-tie :op :market-match
+   :asks [{:node "n2" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5}
+          {:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5}]
+   :bids [{:id "b1" :cpu 2 :mem-gib 4 :disk-gib 50 :max-price 10}]
+   :expect {:matches [{:bid "b1" :ask "n1" :price 5}] :unmatched []}}
+  {:id :market-attest-valid :op :market-attest :today "2026-11-08"
+   :att {:node "n1" :cpu 2 :mem-gib 4 :disk-gib 50 :expires "2026-12-31" :issuer "k" :sig "s"}
+   :expect {:valid true}}
+  {:id :market-attest-expired :op :market-attest :today "2026-11-08"
+   :att {:node "n1" :cpu 2 :mem-gib 4 :disk-gib 50 :expires "2026-11-01" :issuer "k" :sig "s"}
+   :expect {:valid false}}
+  {:id :market-attest-unsigned :op :market-attest :today "2026-11-08"
+   :att {:node "n1" :cpu 2 :mem-gib 4 :disk-gib 50 :expires "2026-12-31" :issuer "k"}
+   :expect {:valid false}}]}

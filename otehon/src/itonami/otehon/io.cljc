@@ -102,3 +102,41 @@
   #?(:lpy (.exit sys code)
      :clj (System/exit code)
      :cljs (.exit js/process code)))
+
+;; ---------------------------------------------------------------- bytes
+;; latin-1 is a byte<->char bijection on every runner, so the same .cljc
+;; hashing sees the same bytes everywhere. Binary content travels as text
+;; through these two functions; sha and manifests stay pure.
+
+(defn read-latin1
+  "File text decoded latin-1 (one char per byte), nil when missing."
+  [path]
+  (when (file? path)
+    #?(:lpy (with-open [f (python/open path ** :mode "r" :encoding "latin-1")] (.read f))
+       :clj (slurp path :encoding "ISO-8859-1")
+       :cljs (.readFileSync fs path "latin1"))))
+
+(defn write-latin1!
+  "Write latin-1 text (one byte per char)."
+  [path s]
+  #?(:lpy (with-open [f (python/open path ** :mode "w" :encoding "latin-1")] (.write f s))
+     :clj (spit path s :encoding "ISO-8859-1")
+     :cljs (.writeFileSync fs path s "latin1")))
+
+(defn bytes-of
+  "latin-1 string -> vector of 0-255 ints. Exact on every runner because
+  the input chars are already confined to one byte."
+  [s]
+  #?(:lpy (vec (.encode s "latin-1"))
+     :clj (mapv int s)
+     :cljs (let [n (.-length s)]
+             (loop [i 0 v []]
+               (if (= i n) v (recur (inc i) (conj v (.charCodeAt s i))))))))
+
+(defn mkdirs!
+  "Create `dir` and parents. The return value differs per runner and is
+  not part of any contract."
+  [dir]
+  #?(:lpy (.makedirs os dir ** :exist_ok true)
+     :clj (.mkdirs (java.io.File. ^String dir))
+     :cljs (.mkdirSync fs dir #js {:recursive true})))
