@@ -22,6 +22,7 @@
             [itonami.otehon.profile :as profile]
             [itonami.otehon.yakuwari :as yakuwari]
             [itonami.otehon.yaml :as yaml]
+            [itonami.otehon.text :as text]
             [itonami.otehon.tick :as tick]
             [itonami.otehon.store :as store]
             [itonami.otehon.turn :as turn]
@@ -126,7 +127,23 @@
                  :runtime-bare (:runtime bare)})
     :yaml (try {:value (yaml/parse (:text c))}
                (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
-                 {:refused (or (:yaml/refused (ex-data e)) :error)}))))
+                 {:refused (or (:yaml/refused (ex-data e)) :error)}))
+    :text (let [[f & args] (:call c)]
+            {:value (case f
+                      "trim" (text/trim (first args))
+                      "triml" (text/triml (first args))
+                      "trimr" (text/trimr (first args))
+                      "blank?" (text/blank? (first args))
+                      "starts-with?" (text/starts-with? (first args) (second args))
+                      "ends-with?" (text/ends-with? (first args) (second args))
+                      "includes?" (text/includes? (first args) (second args))
+                      "index-of" (text/index-of (first args) (second args))
+                      "lower-case" (text/lower-case (first args))
+                      "join" (text/join (first args) (second args))
+                      "split" (text/split (first args) (second args))
+                      "split-lines" (text/split-lines (first args))
+                      "replace" (text/replace (first args) (second args) (nth args 2))
+                      (throw (ex-info (str "text: unknown fn " f) {:fn f})))})))
 
 (defn- satisfied? [c got]
   (let [want (:expect c)]

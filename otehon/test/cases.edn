@@ -2,7 +2,8 @@
 ;; nbb) reads this file and must pass every case.
 ;;
 ;; A case: {:id :op :profile :edit :expect}. :op is :check, :dry-run,
-;; :decide, :additive or :yaml. :edit changes fixture text in memory only:
+;; :decide, :additive, :yaml, :text, :tick, :turn-gate, :run-plan or :store.
+;; :edit changes fixture text in memory only:
 ;; [file from to] replaces the first `from`, [file :delete], [file :set text].
 ;; :expect is a subset of the result; :messages-include lists substrings of
 ;; error messages; :reason-in is a set of accepted :reason values.
@@ -59,6 +60,47 @@
   {:id :yaml/quoted-multiline :op :yaml
    :text "p: 'it''s\n  long'\nq: \"a\\nb\"\n"
    :expect {:value {"p" "it's long" "q" "a\nb"}}}
+
+  ;; ------------------------------------------------------------ text oracle
+  ;; Portable string ops (itonami.otehon.text), pinned to JVM whitespace.
+  ;; NBSP (U+00A0) is NOT trimmed — JS `\\s` would trim it, Java does not,
+  ;; and the oracle answers Java on every runner.
+  {:id :text/trim-basic :op :text :call ["trim" "  hello  "]
+   :expect {:value "hello"}}
+  {:id :text/trim-tabs-newlines :op :text :call ["trim" "\t\n hello \r\n"]
+   :expect {:value "hello"}}
+  {:id :text/trim-keeps-nbsp :op :text :call ["trim" " hello "]
+   :expect {:value " hello "}}
+  {:id :text/triml :op :text :call ["triml" "  hello  "]
+   :expect {:value "hello  "}}
+  {:id :text/trimr :op :text :call ["trimr" "  hello  "]
+   :expect {:value "  hello"}}
+  {:id :text/blank-true :op :text :call ["blank?" "  \t\n "]
+   :expect {:value true}}
+  {:id :text/blank-nbsp-false :op :text :call ["blank?" " "]
+   :expect {:value false}}
+  {:id :text/starts-with :op :text :call ["starts-with?" "hello" "he"]
+   :expect {:value true}}
+  {:id :text/ends-with :op :text :call ["ends-with?" "hello" "lo"]
+   :expect {:value true}}
+  {:id :text/includes :op :text :call ["includes?" "hello" "ell"]
+   :expect {:value true}}
+  {:id :text/index-of :op :text :call ["index-of" "hello" "l"]
+   :expect {:value 2}}
+  {:id :text/index-of-missing :op :text :call ["index-of" "hello" "z"]
+   :expect {:value nil}}
+  {:id :text/lower-case :op :text :call ["lower-case" "HeLLo"]
+   :expect {:value "hello"}}
+  {:id :text/join :op :text :call ["join" "," ["a" "b" "c"]]
+   :expect {:value "a,b,c"}}
+  {:id :text/split-trailing-dropped :op :text :call ["split" "a,b," ","]
+   :expect {:value ["a" "b"]}}
+  {:id :text/split-no-match :op :text :call ["split" "abc" ","]
+   :expect {:value ["abc"]}}
+  {:id :text/split-lines-crlf :op :text :call ["split-lines" "a\r\nb\nc"]
+   :expect {:value ["a" "b" "c"]}}
+  {:id :text/replace-literal-dollar :op :text :call ["replace" "a,b" "," "$1"]
+   :expect {:value "a$1b"}}
 
   ;; ------------------------------------------------------------ negative controls
   {:id :neg/deny-hosts-without-openrouter :negative true :op :check :profile "itonami-ok"

@@ -58,13 +58,21 @@ the owner, 64 usage.
 | `src/itonami/otehon/store.cljc` | import/export copy plan (pure) | `src/itonami/agent/profile.cljk` `copy-profile!` |
 | `src/itonami/otehon/turn.cljc` | one-turn `-z` gate (pure) | `main.cljk` `oneshot` gating, `loop.cljk` toolset rule |
 | `src/itonami/otehon/run.cljc` | real-run plan: prompt, output doc, record (pure) | `src/itonami/agent/cron.cljk` `build-prompt`, `output-doc`, `record-run-state!` |
+| `src/itonami/otehon/text.cljc` | portable string ops, JVM whitespace pinned | `kotoba.lang.text` (the `.cljk` reference nbb cannot load) |
 
-Everything except `io.cljc` is pure and host-independent; `io.cljc` is the
+Everything except `io.cljc` and the two host-leaf branches in `text.cljc`
+(`lower-case` case-folding) is pure and host-independent; `io.cljc` is the
 one namespace with `#?(:lpy … :clj … :cljs …)` branches. `#?@` is not used
 (the Kotoba reader does not accept it). The second slice (2026-11-08, owner
 choice: expand the host surface) adds clock and directory listing to `io.cljc`
 only — no other namespace carries `#?`, so every host difference stays
-visible in this one file.
+visible in this one file. `text.cljc` pins `trim`/`blank?` to JVM
+`Character/isWhitespace` (NBSP kept) and `split` trailing empties to Java
+semantics; regex matching itself stays host regex, as in `kotoba.lang.text`.
+No `#?@`, no `.charAt`, no `str/trimr`, no `array-map`, no `\\\\` in regex
+literals (Basilisp folds it); `\\x5c` is used for a literal backslash, and no
+`\\u` escapes appear anywhere (Basilisp rejects them — whitespace is built
+from code points via `char`).
 
 ## Compatibility kept
 
@@ -111,9 +119,10 @@ visible in this one file.
 
 `bin/run-shared-cases` runs on each runner:
 
-- `test/cases.edn` — 60 cases, 27 of them negative controls. Each negative
-  control with an edit is also run on the unedited fixture and must then
-  *not* match, so the edit causes the rejection.
+- `test/cases.edn` — 78 cases (18 `:text` oracle cases), 27 of them
+  negative controls. Each negative control with an edit is also run on the
+  unedited fixture and must then *not* match, so the edit causes the
+  rejection.
 - `test/must-fail.edn` — five deliberately wrong cases (one a no-op edit).
   Every runner must report all four as FAIL; otherwise the harness could not
   tell a broken core from a working one.
@@ -123,7 +132,9 @@ visible in this one file.
 CI: `.github/workflows/oracle-otehon-cljc.yml`, an oracle-only job with
 pinned runners. It is not a required check.
 
-Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`.
+Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
+`docs/evidence/otehon-cljc-20261108.md`,
+`docs/evidence/otehon-text-oracle-20261108.md`.
 
 ## Next slices
 
