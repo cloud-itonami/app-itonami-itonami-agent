@@ -14,6 +14,7 @@
     cas-verify <store>
     cas-gc     <store> [--apply] [--retain-days N]
     cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>]
+    fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N]
     peer-push  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-pull  <store> <peerdir> [--as <node> --registry <reg.edn>]
     peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>]
@@ -142,6 +143,10 @@
     :cas-sha {:sha (cas/sha256-hex (:bytes c []))}
     :cas-gc-plan (cas/gc-plan (:manifest c {}) (:inventory c {}))
     :manifest-rebuild (cas/manifest-rebuild (:local c {}) (:objects c []) (:remotes c []))
+    :fleet-copies (peer/fleet-copies (:remotes c []))
+    :fleet-plan (let [fc (peer/fleet-copies (:remotes c []))
+                      plan (peer/replication-plan (:copies fc) (:desired c 2))]
+                  (assoc plan :peers (:peers fc) :objects (:objects fc)))
     :retention-plan (cas/retention-plan (:manifest c {}) (:inventory c {})
                                       (:tombs c {}) (:today c "") (:days c 0))
     :cas-parse-int {:value (cas/parse-int (:text c ""))}
@@ -232,7 +237,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -418,13 +423,15 @@
             dst-manifest shas)))
 
 (defn- peer-args [args]
-  "Parses --as/--registry; every other arg is a peer dir, collected in
-  :peers in order. push/pull ignore :peers; repair heals across them."
+  "Parses --as/--registry/--copies (a flag consumes its value); every
+  other arg is a peer dir, collected in :peers in order. push/pull
+  ignore :peers; repair heals across them, fleet-status censuses them."
   [args]
   (loop [as (seq args) m {:peers []}]
     (cond (nil? as) m
           (= "--as" (first as)) (recur (nnext as) (assoc m :as (second as)))
           (= "--registry" (first as)) (recur (nnext as) (assoc m :registry (second as)))
+          (= "--copies" (first as)) (recur (nnext as) m)
           :else (recur (next as) (update m :peers conj (first as))))))
 
 (defn- peer-gate [registry as peerdir today]
@@ -523,6 +530,20 @@
                                                     (:adopted plan)))))
                   {:status :ok :adopted (count (:adopted plan)) :entries (:adopted plan)
                    :unmatched (:unmatched plan) :skipped skipped :local-damaged damaged}))))))
+
+(defn- fleet-status
+  "Fleet-wide copy census over admitted peers: who holds what, and what
+  falls below `desired` copies. Read-only; skipped peers are reported,
+  never read. No admitted peer refuses the whole status."
+  [opts today desired]
+  (let [{:keys [admitted skipped]} (admitted-peers opts today)]
+    (if (empty? admitted)
+      {:status :refused :reason "fleet/no-peer" :skipped skipped}
+      (let [fc (peer/fleet-copies admitted)
+            plan (peer/replication-plan (:copies fc) desired)]
+        {:status :ok :peers (:peers fc) :objects (:objects fc)
+         :desired desired :under (:under plan) :healthy (:healthy plan)
+         :skipped skipped}))))
 
 (defn- repair-one
   "Copy one bad object from the first candidate peer whose manifest
@@ -672,6 +693,16 @@
                         (let [r (cas-reconcile a (peer-args (cons b more)) (subs (:iso (hio/now-parts)) 0 10))]
                           (println (canon r))
                           (if (= :ok (:status r)) 0 1)))
+      "fleet-status" (if-not a
+                       (usage)
+                       (let [tail (filterv some? (cons a (cons b more)))
+                             copies-str (market-flag tail "--copies")
+                             copies (if (nil? copies-str) 2 (cas/parse-int copies-str))]
+                         (if (or (nil? copies) (< copies 1))
+                           (do (println (canon {:status :refused :reason "fleet/bad-copies"})) 1)
+                           (let [r (fleet-status (peer-args tail) (subs (:iso (hio/now-parts)) 0 10) copies)]
+                             (println (canon r))
+                             (if (= :ok (:status r)) 0 1)))))
       "peer-push" (if-not (and a b)
                     (usage)
                     (let [r (peer-sync a b :send (peer-args more) (subs (:iso (hio/now-parts)) 0 10))]

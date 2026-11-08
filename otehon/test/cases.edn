@@ -547,4 +547,24 @@
    :asks [{:node "n1" :cpu 4 :mem-gib 8 :disk-gib 100 :price 5 :expires "2026-12-31" :issuer "k" :sig "5291e3ab009432768e0df01deb37a538b4690c7e28fb6245ba668468f84a9efb"}
           {:node "n2" :cpu 8 :mem-gib 16 :disk-gib 200 :price 9 :expires "2026-12-31" :issuer "k" :sig "0000000000000000000000000000000000000000000000000000000000000000"}]
    :bids [{:id "b1" :cpu 2 :mem-gib 4 :disk-gib 50 :max-price 6}]
-   :expect {:status :refused :reason "market/signature-invalid" :nodes ["n2"]}}]}
+   :expect {:status :refused :reason "market/signature-invalid" :nodes ["n2"]}}
+
+  ;; ------------------------------------------------------------ fleet
+  {:id :fleet-copies-basic :op :fleet-copies
+   :remotes [{:peer "p1" :manifest {"r1" {:sha "aa" :size 1} "r2" {:sha "bb" :size 2}}}
+             {:peer "p2" :manifest {"r2" {:sha "bb" :size 2} "r3" {:sha "cc" :size 3}}}]
+   :expect {:copies {"aa" {:peers ["p1"] :count 1}
+                      "bb" {:peers ["p1" "p2"] :count 2}
+                      "cc" {:peers ["p2"] :count 1}}
+            :peers ["p1" "p2"] :objects 3}}
+  {:id :fleet-plan-under :op :fleet-plan :desired 2
+   :remotes [{:peer "p1" :manifest {"r1" {:sha "aa" :size 1} "r2" {:sha "bb" :size 2}}}
+             {:peer "p2" :manifest {"r2" {:sha "bb" :size 2} "r3" {:sha "cc" :size 3}}}]
+   :expect {:under [{:sha "aa" :have 1 :want 2} {:sha "cc" :have 1 :want 2}]
+            :healthy 1 :peers ["p1" "p2"] :objects 3}}
+  {:id :fleet-plan-healthy :op :fleet-plan :desired 1
+   :remotes [{:peer "p1" :manifest {"r1" {:sha "aa" :size 1}}}
+             {:peer "p2" :manifest {"r1" {:sha "aa" :size 1}}}]
+   :expect {:under [] :healthy 1 :peers ["p1" "p2"] :objects 1}}
+  {:id :fleet-plan-empty :op :fleet-plan :desired 2 :remotes []
+   :expect {:under [] :healthy 0 :peers [] :objects 0}}]}
