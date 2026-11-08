@@ -24,7 +24,7 @@ covered by shared cases on all three runners.
 | `mcp` | `mcp-cmd` | — | S6 |
 | `dapps` | `dapps-cmd` | — | S6 |
 | `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor), `notepad` (KV verbatim), `runs`/`incidents` (ledger reads: rows list, ack) | done run/tick-exec + notepad + ledger reads (JUN-1036 S2a/S2b/S4a/S4b; ledger/queue writes S5) |
-| `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check` (job-level readiness: the legacy command reads active jobs only; model/state.db/pause findings stay doctor-only), `store-plan` (import/export copy plan), `profile list/show/check/readiness/refresh/itonamify/rail/refresh-bundle/release/import/export/adopt/soul/organize/hy-stage/hy-migrate` (import/export executes the plan: definition byte copy + Hermes-side park on export; adopt flips scheduler + parks + refreshes CID; soul renders registry/worlds blocks with backup+receipt; organize projects the registry entry; hy-stage checks and stages the Hy payload; hy-migrate rewrites `.py` refs under the tick lock) | S4 remaining verb: `did` (identity crypto; S6-owned check/readiness finding kinds deferred, recorded below) |
+| `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check` (job-level readiness: the legacy command reads active jobs only; model/state.db/pause findings stay doctor-only), `store-plan` (import/export copy plan), `profile list/show/check/readiness/refresh/itonamify/rail/bundle/refresh-bundle/release/import/export/adopt/soul/organize/hy-stage/hy-migrate/did` (import/export executes the plan: definition byte copy + Hermes-side park on export; adopt flips scheduler + parks + refreshes CID; soul renders registry/worlds blocks with backup+receipt; organize projects the registry entry; hy-stage checks and stages the Hy payload; hy-migrate rewrites `.py` refs under the tick lock; did derives the fleet did:key; bundle prints CID + manifest) | S4 verbs complete (S6-owned check/readiness finding kinds deferred, recorded below) |
 | `doctor` | `doctor-cmd` | `doctor` (store verbs; S6-owned finding kinds deferred, recorded below) | done (JUN-1036 S3b) |
 | `sessions [list]/show/resume` | `sessions-cmd` | `sessions` (reads state.db read-only; resume refuses verbatim) | done (JUN-1036 S3b) |
 | `model [NAME] [--provider]` | `model-cmd` | `model` (positional dir, otehon convention) | done (JUN-1036 S3b) |
@@ -101,7 +101,7 @@ from source, the rest follow the module name until their slice lands.
 | `gateway.cljk` | `gateway` (watcher egress surface) | partial (delivery loop S5) |
 | `homeassistant.cljk` | — | planned S6 |
 | `host.cljk` *node/file/env/process* | `io.cljc` | partial (files/env/clock/listing/pids/spawn done, JUN-1036 S2a) |
-| `identity.cljk` | `market.cljc` (attestations) | partial (node identity S5) |
+| `identity.cljk` ( FleetSeed/KDF/derive-key/did-of/parse-seed/key-id ) | `ed25519.cljc` (KDF + RFC 8032 expansion + clamped base-point multiply + did:key:z; host SHA-512/UTF-8 in `io.cljc` ) | done (JUN-1036 S4e; node `createPrivateKey` expansion reproduced exactly, oracle-checked) |
 | `loop.cljk` *agent turn loop* | `turn.cljc` (gate) | partial (turn execution S2) |
 | `main.cljk` *CLI dispatch* | `cli.cljc` | partial (this table) |
 | `manifest.cljk` | `manifest.cljc` | done |
@@ -113,7 +113,7 @@ from source, the rest follow the module name until their slice lands.
 | `platform_adapters.cljk` *lane adapters* | — | planned S5 |
 | `process.cljk` | — | planned S2 |
 | `profile.cljk` *store layout* | `profile.cljc`, `status.cljc` (names), `store.cljc` | partial (verbs S4) |
-| `profile.cljk` *bundle/manifest lifecycle* | `bundle.cljc` (bundle-files/manifest/cid, default-manifest, with-inference-rail, write-manifest!, with-bundle, refresh-bundle-cid, copy-profile!) + `manifest.cljc` (with-org) + `cli.cljc` (set-parked!, release/transfer/adopt/organize/hy lines) | done itonamify/refresh/rail/refresh-bundle/release/import/export/adopt/organize/hy-stage/hy-migrate (JUN-1036 S4b/S4c/S4d; `did` stays later) |
+| `profile.cljk` *bundle/manifest lifecycle* | `bundle.cljc` (bundle-files/manifest/cid, default-manifest, with-inference-rail, write-manifest!, with-bundle, refresh-bundle-cid, copy-profile!) + `manifest.cljc` (with-org) + `cli.cljc` (set-parked!, release/transfer/adopt/organize/hy lines) | done itonamify/refresh/rail/bundle/refresh-bundle/release/import/export/adopt/organize/hy-stage/hy-migrate/did (JUN-1036 S4b/S4c/S4d/S4e) |
 | `provider.cljk` *chain/resolution* | `rail.cljc` (job target), `model.cljc` (display chain) | partial (live calls S2) |
 | `profile.cljk` *set-model-text* | `model.cljc` (verbatim port, throws as ex-info) | done for model/provider keys (JUN-1036 S3b) |
 | `quiet.cljk` | — | planned S2 |
@@ -165,6 +165,11 @@ from source, the rest follow the module name until their slice lands.
   `profile hy-migrate` (`.py`→`.hy` rewrite under the tick lock +
   bundle refresh); 31 cases + 4 must-fail. `readiness` corrected to
   job-level only (model/state.db/pause stay doctor-only).
-- S4 remaining: `did` (waits on identity crypto).
+- S4e store verbs part 5 — done (JUN-1036: `profile did`
+  (fleet-seed did:key with registry epochs, `--registry`/`--out`,
+  REFUSED without the seed; pure-cljc Ed25519 verified against
+  node:crypto); `profile bundle` (read-only CID + manifest print,
+  missed in the S4c denominator). 11 cases + 2 must-fail.
+  S4 profile verbs complete; S5 messaging writes next.
 - S5 messaging: gateway/send/deliver/ledger/peers/chat.
 - S6 tools: backends + bridge/chat/vault/mcp/dapps CLIs.

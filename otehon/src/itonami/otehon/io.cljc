@@ -350,6 +350,26 @@
                   :else (throw (ex-info "json-str: unsupported value" {}))))]
     (emit x)))
 
+(defn utf8-encode
+  "A string to its UTF-8 bytes as a vector of 0-255 ints. Host branch:
+  code-point iteration differs per runner (UTF-16 units vs code points),
+  so the encoding lives here with the other host differences."
+  [s]
+  #?(:lpy (vec (.encode (str s) "utf-8"))
+     :clj (mapv #(bit-and (int %) 0xff) (.getBytes (str s) "UTF-8"))
+     :cljs (let [arr (.encode (js/TextEncoder.) (str s))]
+             (mapv #(aget arr %) (range (.-length arr))))))
+
+(defn sha512-digest
+  "Raw SHA-512 digest: 64 ints in 0-255. Host branch: the three
+  runners' standard libraries all provide it; a pure 64-bit port
+  would lose exactness on doubles."
+  [bs]
+  #?(:lpy (vec (.digest (.sha512 (python/__import__ "hashlib") (python/bytes bs))))
+     :clj (mapv #(bit-and (int %) 0xff) (.digest (doto (java.security.MessageDigest/getInstance "SHA-512") (.update (byte-array bs)))))
+     :cljs (let [d (.digest (.update (.createHash (js/require "crypto") "sha512") (js/Buffer.from (clj->js bs))))]
+             (mapv #(aget d %) (range (.-length d))))))
+
 (defn sha256-utf8
   "The sha256 hex of the utf8 bytes of `s`."
   [s]
