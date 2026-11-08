@@ -60,6 +60,42 @@
                                (filter string? agent-disabled)))]
     (vec (remove #(contains? disabled %) requested))))
 
+(defn execution-disabled
+  "Port of tools/execution-disabled-toolsets: the profile denylist
+  (agent.disabled_toolsets, a string or a seq) plus the platform \"cron\"
+  denies (messaging, clarify, and cronjob unless cron.allow_agent_scheduling)."
+  [config platform]
+  (let [configured (get-in config ["agent" "disabled_toolsets"])
+        configured (if (string? configured) [configured] configured)]
+    (vec (distinct
+          (concat (filter string? configured)
+                  (when (= platform "cron")
+                    (concat ["messaging" "clarify"]
+                            (when-not (true? (get-in config ["cron" "allow_agent_scheduling"]))
+                              ["cronjob"]))))))))
+
+(defn select-toolsets
+  "The native loop's toolset gating as data (JUN-1020, turn-gate extension).
+  `requested` defaults to [\"hermes-cli\"] (a -t / toolsets opt overrides it);
+  a profile denylist can never be re-added, so :denied always wins. `known`
+  is the host-supplied tool catalog; names outside it (with the native
+  mcp-<base> rule: mcp-foo counts when foo is known) land in :unknown, which
+  the caller refuses. Without `known` no unknown detection runs."
+  [{:keys [requested disabled known platform]}]
+  (let [requested (vec (or (seq requested) ["hermes-cli"]))
+        denied-set (set (or (seq disabled) []))
+        denied (filterv #(contains? denied-set %) requested)
+        known? (fn [n]
+                 (or (contains? (set known) n)
+                     (and (string? n) (str/starts-with? n "mcp-")
+                          (contains? (set known) (subs n 4)))))
+        unknown (if (some? known) (filterv #(not (known? %)) requested) [])
+        selected (filterv #(and (not (contains? denied-set %))
+                                (not (contains? (set unknown) %)))
+                          requested)]
+    {:requested requested :selected selected :denied denied :unknown unknown
+     :platform platform}))
+
 (def reasoning-efforts #{"none" "minimal" "low" "medium" "high" "xhigh" "max" "ultra"})
 
 (defn effective-reasoning-effort [config job]

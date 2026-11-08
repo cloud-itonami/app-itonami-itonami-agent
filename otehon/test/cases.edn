@@ -227,12 +227,37 @@
   {:id :neg/turn-gate-without-manifest :negative true :op :turn-gate :profile "itonami-ok" :prompt "hello"
    :edit [["itonami.edn" :delete]]
    :expect {:status :refused :reason "rail/itonami-without-manifest"}}
+  {:id :turn-gate/selection-exec :op :turn-gate :profile "itonami-ok" :prompt "hello"
+   :capabilities [:read_source]
+   :expect {:status :ok
+            :selection {:requested ["hermes-cli"] :selected ["hermes-cli"]
+                        :denied [] :unknown [] :platform "cli"}
+            :exec [{:id "inference"
+                    :request {:kind :inference :prompt "hello" :toolsets ["hermes-cli"]
+                              :reasoning-effort "low"
+                              :decisions [{:capability :read_source :decision :autonomous :source :yakuwari}]
+                              :target {:provider "murakumo" :model "mishima" :host "api.murakumo.cloud"
+                                       :base-url "https://api.murakumo.cloud/v1"
+                                       :pinned? false :verdict "rail/ok"}}}]}}
+  {:id :turn-gate/denied-messaging-cron :op :turn-gate :profile "itonami-ok" :prompt "hello"
+   :capabilities [:read_source] :platform "cron"
+   :toolsets ["messaging" "hermes-cli"] :known-catalog #{"messaging" "hermes-cli" "hermes-cron"}
+   :expect {:status :ok
+            :selection {:requested ["messaging" "hermes-cli"] :selected ["hermes-cli"]
+                        :denied ["messaging"] :unknown [] :platform "cron"}}}
+  {:id :turn-gate/unknown-toolset :op :turn-gate :profile "itonami-ok" :prompt "hello"
+   :capabilities [:read_source] :tool-names ["hermes-cli" "nope-x"]
+   :known-catalog #{"hermes-cli" "hermes-cron"}
+   :expect {:status :refused :reason "toolset/unknown" :unknown ["nope-x"]}}
 
   ;; ------------------------------------------------------------ run-plan
   {:id :run-plan/pending-script :op :run-plan :profile "itonami-ok" :job "digest-tick"
    :capabilities [:read_source]
    :expect {:status :planned :reason "script/pending" :needs [:script]
-            :job {:id "a1b2c3d4e5f6"}}}
+            :job {:id "a1b2c3d4e5f6"}
+            :exec [{:id "script"
+                    :request {:kind :script :ref "collect.py" :timeout-ms 180000
+                              :workdir nil :env {}}}]}}
   {:id :run-plan/with-script :op :run-plan :profile "itonami-ok" :job "digest-tick"
    :capabilities [:read_source]
    :script {:ok? true :output "rows: 3" :wake? true}
@@ -263,6 +288,36 @@
    :script {:ok? true :output "rows: 3" :wake? true}
    :edit [["yakuwari.edn" "{:capability :read_source :decision :autonomous}" "{:capability :read_source :decision :blocked}"]]
    :expect {:status :refused :reason "authority/blocked"}}
+
+  ;; ------------------------------------------------------------ apply-order
+  {:id :apply-order/basic :op :apply-order
+   :job-id "a1" :stamp "2026-11-08_00-00-00" :result-status "ok"
+   :output-path "cron/output/a1/2026-11-08_00-00-00.md"
+   :record {:repeat-completed 1} :deliver "local,line"
+   :expect {:idempotency-key "a1/2026-11-08_00-00-00/ok"
+            :order [:write-output :apply-record :append-ledger :deliver]
+            :steps [{:step :write-output :path "cron/output/a1/2026-11-08_00-00-00.md"
+                     :key "a1/2026-11-08_00-00-00/ok/output"}
+                    {:step :apply-record :record {:repeat-completed 1}
+                     :key "a1/2026-11-08_00-00-00/ok/record"}
+                    {:step :append-ledger :job "a1" :stamp "2026-11-08_00-00-00"
+                     :key "a1/2026-11-08_00-00-00/ok/ledger"}
+                    {:step :deliver :lanes ["local" "line"]
+                     :key "a1/2026-11-08_00-00-00/ok/deliver"}]}}
+  {:id :apply-order/default-lane :op :apply-order
+   :job-id "a1" :stamp "2026-11-08_00-00-00" :result-status "silent"
+   :output-path "cron/output/a1/2026-11-08_00-00-00.md"
+   :record {:repeat-completed 2 :terminal? false}
+   :expect {:idempotency-key "a1/2026-11-08_00-00-00/silent"
+            :order [:write-output :apply-record :append-ledger :deliver]
+            :steps [{:step :write-output :path "cron/output/a1/2026-11-08_00-00-00.md"
+                     :key "a1/2026-11-08_00-00-00/silent/output"}
+                    {:step :apply-record :record {:repeat-completed 2 :terminal? false}
+                     :key "a1/2026-11-08_00-00-00/silent/record"}
+                    {:step :append-ledger :job "a1" :stamp "2026-11-08_00-00-00"
+                     :key "a1/2026-11-08_00-00-00/silent/ledger"}
+                    {:step :deliver :lanes ["local"]
+                     :key "a1/2026-11-08_00-00-00/silent/deliver"}]}}
 
   ;; ------------------------------------------------------------ store
   {:id :store/export-plan :op :store :direction :export

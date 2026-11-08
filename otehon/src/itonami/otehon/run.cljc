@@ -17,11 +17,36 @@
   Nothing is executed, called or written here: :side-effects :none. Monitor
   sources, delivery lanes and the executions ledger stay a later slice."
   (:require [clojure.string :as str]
+            [itonami.otehon.io :as hio]
             [itonami.otehon.profile :as profile]
             [itonami.otehon.rail :as rail]
             [itonami.otehon.yakuwari :as yakuwari]
             [itonami.otehon.cron :as cron]
             [itonami.otehon.tick :as tick]))
+
+(defn deliver-lanes
+  "A job's deliver value as distinct lane names (port of delivery/normalize:
+  nil or blank means [\"local\"])."
+  [deliver]
+  (let [parts (if (str/blank? (str deliver)) ["local"] (str/split (str deliver) #","))]
+    (vec (distinct (remove str/blank? (map str/trim parts))))))
+
+(defn apply-order
+  "The order in which the host applies one finished run, with idempotency
+  keys (JUN-1021, owner choice: order-only contract). Bodies stay host-side:
+  the ledger append and the delivery lanes carry names and keys, not
+  payloads. The key pins job+stamp+status, so re-applying the same finished
+  run is a no-op for the host and a new stamp is a new run. These outputs
+  are reference values for the native route (AWAI-60, AWAI-131), never its
+  fallback."
+  [{:keys [job-id stamp status output-path record deliver]}]
+  (let [key (str job-id "/" stamp "/" status)]
+    {:idempotency-key key
+     :order [:write-output :apply-record :append-ledger :deliver]
+     :steps [{:step :write-output :path output-path :key (str key "/output")}
+             {:step :apply-record :record record :key (str key "/record")}
+             {:step :append-ledger :job job-id :stamp stamp :key (str key "/ledger")}
+             {:step :deliver :lanes (deliver-lanes deliver) :key (str key "/deliver")}]}))
 
 (def silent-token "[SILENT]")
 (def failure-token "[CRON_FAILURE]")
@@ -141,15 +166,18 @@
                                                         :monitor-context monitor-context})]
             (cond
               (= skip "script/pending")
-              (merge base {:status :planned :reason "script/pending" :needs [:script]})
-
+              (merge base {:status :planned :reason "script/pending" :needs [:script]
+                           :exec [{:id "script"
+                                   :request (hio/script-request (get job "script")
+                                                              {:workdir (get job "workdir")})}]})
               (some? skip)
               (let [doc (output-doc job {:prompt "" :response silent-token
                                          :status-line (str "**Status:** " skip)} run-at)]
                 (merge base {:status :silent :reason skip
                              :output-doc doc
                              :output-path (output-path job stamp)
-                             :record (record-update job now)}))
+                             :record (record-update job now)
+                             :exec []}))
 
               (true? (get job "no_agent"))
               (let [[ok? out] (if (some? (get job "script"))
@@ -163,8 +191,16 @@
                              :output-doc (output-doc job {:prompt prompt :response final
                                                           :failed? (not ok?)} run-at)
                              :output-path (output-path job stamp)
-                             :record (record-update job now)}))
+                             :record (record-update job now)
+                             :exec []}))
 
               :else
               (merge base {:status :planned :prompt prompt
-                           :record-next (tick/next-run job now)}))))))))
+                           :record-next (tick/next-run job now)
+                           :exec [{:id "inference"
+                                   :request (hio/inference-request
+                                             {:target (assoc target :verdict verdict)
+                                              :prompt prompt
+                                              :toolsets (:toolsets base)
+                                              :reasoning-effort (cron/effective-reasoning-effort config job)
+                                              :decisions decisions})}]}))))))))

@@ -140,3 +140,36 @@
   #?(:lpy (.makedirs os dir ** :exist_ok true)
      :clj (.mkdirs (java.io.File. ^String dir))
      :cljs (.mkdirSync fs dir #js {:recursive true})))
+
+;; ---------------------------------------------------------------- exec plans
+;; Declarative requests for the two host executions (JUN-1020, owner choice
+;; io.cljc extension). Pure constructors: no process spawns, no model is
+;; called, nothing is written here. The host executes the steps in the order
+;; the plan lists them and reports results back by step :id.
+
+(def script-timeout-ms
+  "Default script timeout: the native route waits 180s (process.cljk
+  wait-result default)."
+  180000)
+
+(defn script-request
+  "One host script execution, as data. `script-ref` names the script (a job's
+  \"script\" value); opts :timeout-ms (default 180000), :workdir, :env."
+  [script-ref {:keys [timeout-ms workdir env]}]
+  {:kind :script
+   :ref (str script-ref)
+   :timeout-ms (or timeout-ms script-timeout-ms)
+   :workdir workdir
+   :env (or env {})})
+
+(defn inference-request
+  "One host inference turn, as data. `target` is the rail target (with
+  :verdict), `prompt` the full prompt; the rest rides along so the host
+  needs nothing else."
+  [{:keys [target prompt toolsets reasoning-effort decisions]}]
+  {:kind :inference
+   :target target
+   :prompt (str prompt)
+   :toolsets (vec toolsets)
+   :reasoning-effort reasoning-effort
+   :decisions (vec decisions)})
