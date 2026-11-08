@@ -366,6 +366,81 @@
                     :stderr (str (or (.-stderr r) "") (when e (str (.-message e))))
                     :timed-out? (boolean (and e (= "ETIMEDOUT" (.-code e))))}))))))
 
+(defn- sqlite-literal
+  "One param as SQL literal text (bb sqlite3-CLI path only: integers
+  inline bare, strings single-quoted with the '' escape)."
+  [v]
+  (cond (nil? v) "NULL"
+        (integer? v) (str v)
+        :else (str "'" (str/replace (str v) "'" "''") "'")))
+
+(defn- sqlite-inline
+  "Substitute ? placeholders with literals in order (bb path only: our
+  queries carry no ? inside string literals)."
+  [sql params]
+  (loop [s sql ps (seq params)]
+    (if (nil? ps) s
+      (let [i (str/index-of s "?")]
+        (if (nil? i) s
+          (recur (str (subs s 0 i) (sqlite-literal (first ps)) (subs s (inc i)))
+                 (next ps)))))))
+
+(defn sqlite-rows
+  "Read-only SELECT rows as string-keyed maps. `params` bind ? in order
+  (bb inlines escaped literals through the sqlite3 CLI). Throws ex-info
+  on any failure; the caller names the error."
+  [db-path sql params]
+  #?(:lpy (let [sqlite (python/__import__ "sqlite3")
+                con (.connect sqlite (str "file:" db-path "?mode=ro") ** :uri true)]
+            (set! (.-row_factory con) (.-Row sqlite))
+            (try
+              (.execute con "PRAGMA query_only = ON")
+              (let [cur (.execute con sql (vec params))]
+                (mapv (fn [r] (py->lisp (python/dict r) :keywordize-keys false))
+                      (.fetchall cur)))
+              (finally (.close con))))
+     :cljs (let [sqlite (js/require "node:sqlite")
+                 db (new (.-DatabaseSync sqlite) db-path #js {:readOnly true})]
+             (try
+               (.exec db "PRAGMA query_only = ON")
+               (let [stmt (.prepare db sql)
+                     rows (.apply (.-all stmt) stmt (clj->js (vec params)))]
+                 (mapv (fn [r]
+                         (if (map? r) r
+                           (into {} (map (fn [k] [k (js->clj (aget r k))]))
+                                 (js->clj (.keys js/Object r)))))
+                       (js->clj rows)))
+               (finally (.close db))))
+     :clj (let [r (spawn-sync! ["sqlite3" "-json" "-readonly" (str db-path)
+                                (sqlite-inline sql params)]
+                               {:timeout-ms 30000})]
+            (if (zero? (:exit r))
+              (let [out (str/trim (:stdout r))]
+                (if (str/blank? out) [] (parse-json out)))
+              (throw (ex-info (str "sqlite3 failed: " (str/trim (:stderr r)))
+                              {:db db-path}))))))
+
+(defn sqlite-exec!
+  "Execute setup SQL (a ;-separated script) against `db-path`, creating
+  it. Test scaffolding for seeded state.db files; product reads never
+  write through this namespace."
+  [db-path script]
+  #?(:lpy (let [sqlite (python/__import__ "sqlite3")
+                con (.connect sqlite db-path)]
+            (try
+              (.executescript con script)
+              (.commit con)
+              (finally (.close con))))
+     :cljs (let [sqlite (js/require "node:sqlite")
+                 db (new (.-DatabaseSync sqlite) db-path)]
+             (try
+               (.exec db script)
+               (finally (.close db))))
+     :clj (let [r (spawn-sync! ["sqlite3" (str db-path) script] {:timeout-ms 30000})]
+            (when-not (zero? (:exit r))
+              (throw (ex-info (str "sqlite3 failed: " (str/trim (:stderr r)))
+                              {:db db-path}))))))
+
 (defn pid-alive?
   "Whether `s` names a live process: digits only, in 2..2^31-1 (0 and 1
   are never a gateway owner), and the host still sees the owner.

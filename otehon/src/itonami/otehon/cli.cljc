@@ -53,6 +53,8 @@
             [itonami.otehon.store :as store]
             [itonami.otehon.turn :as turn]
             [itonami.otehon.run :as run]
+            [itonami.otehon.doctor :as doctor]
+            [itonami.otehon.sessions :as sessions]
             [itonami.otehon.cas :as cas]
             [itonami.otehon.peer :as peer]
             [itonami.otehon.market :as market]))
@@ -116,7 +118,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -140,6 +142,8 @@
     :model (ops-model c scratch)
     :fallback (ops-fallback c scratch)
     :run (ops-run c scratch)
+    :doctor (ops-doctor c scratch)
+    :sessions (ops-sessions c scratch)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -781,6 +785,92 @@
               :doc-has (into {} (map (fn [n] [n (boolean (str/includes? doc (str n)))])
                                      (:needles (:expect c []))))}))))
 
+(defn- doctor-for
+  "Doctor findings for one profile: reads, checks, renders. `store` is
+  the store root (home = store/profiles/<name>); `env` is the host env
+  map for token checks. Shared by the :doctor op and the product command."
+  [store name env model-override]
+  (let [home (str store "/profiles/" name)
+        prof (assoc (profile/load-profile {:name name :read-text (hio/read-text-fn home)
+                                            :parse-edn hio/parse-edn :parse-json hio/parse-json})
+                    :home home)
+        jobs-path (str home "/cron/jobs.json")
+        raw (when (hio/file? jobs-path) (hio/slurp-utf8 jobs-path))
+        parsed (when (some? raw)
+                 (try (hio/parse-json raw)
+                      (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                        {:error (ex-message e)})))]
+    (if (:error parsed)
+      (let [msg (str (:error parsed))]
+        {:exit 1
+         :lines [(str "profile-load-failed: " (subs msg 0 (min 200 (count msg))))
+                 "1 finding(s)"]})
+      (let [marker (str store "/paused")
+            paused (when (hio/file? marker) (pause/since-of (hio/slurp-utf8 marker)))
+            findings (doctor/profile-findings
+                      {:config (:config prof) :home home :jobs (:jobs prof)}
+                      {:env env :model-override model-override
+                       :paused-record paused
+                       :state-db? (hio/file? (str home "/state.db"))
+                       :hy-deps (hy-deps prof env)
+                       :probes {:file? hio/file? :symlink? hio/symlink?}})]
+        (doctor/render findings)))))
+
+(defn- ops-doctor [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [req (:request c {})
+          r (doctor-for dir (or (:profile req) "default")
+                        (or (:env req) (hio/all-env))
+                        (:model req))]
+      (assoc r :messages (:lines r)))))
+
+(defn- sessions-for
+  "One `sessions` invocation against a store. `sub`/`id`/`limit-raw`
+  mirror the legacy CLI args. Shared by the :sessions op and the product
+  command."
+  [store name sub id limit-raw]
+  (let [home (str store "/profiles/" name)
+        db-path (str home "/state.db")
+        limit (sessions/bounded-limit limit-raw 200)]
+    (if (and (some? limit-raw) (nil? limit))
+      {:exit 2 :lines ["sessions: --limit must be a positive integer"]}
+      (let [limit (or limit 20)]
+        (case (str sub)
+          ("" "list")
+          (let [res (sessions/browse db-path limit)]
+            (if (:error res)
+              {:exit 1 :lines [(str "sessions: " (:error res))]}
+              {:exit 0 :lines (sessions/browse-lines (:rows res))}))
+          "show"
+          (if (nil? id)
+            {:exit 2 :lines ["sessions show: a session id is required"]}
+            (let [res (sessions/latest-messages db-path id (min limit 50))]
+              (if (:error res)
+                {:exit 1 :lines [(str "sessions show: " (:error res))]}
+                (if (seq (:rows res))
+                  {:exit 0 :lines (sessions/show-lines (:rows res))}
+                  {:exit 1 :lines [(str "session not found: " id)]}))))
+          "resume"
+          {:exit 2 :lines ["sessions resume: not implemented yet (lands with history re-entry)"]}
+          {:exit 2 :lines ["usage: itonami-agent sessions [list] [--limit N] | show <id> | resume <id>"]})))))
+
+(defn- ops-sessions [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [req (:request c {})
+          home (str dir "/profiles/" (or (:profile req) "default"))]
+      (when (seq (:setup-sql req))
+        (hio/sqlite-exec! (str home "/state.db")
+                          (str/join ";\n" (concat ["DROP TABLE IF EXISTS messages"
+                                                   "DROP TABLE IF EXISTS sessions"]
+                                                  (:setup-sql req)))))
+      (let [r (sessions-for dir (or (:profile req) "default")
+                            (:sub req) (:id req) (:limit req))]
+        (assoc r :messages (:lines r))))))
+
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
         base (if dir (hio/read-text-fn dir) (constantly nil))
@@ -821,8 +911,17 @@
           (recur (nnext as) (conj caps (keyword (second as))))
           :else (recur (next as) caps))))
 
+(defn- store-flags [args]
+  (loop [as (seq args) m {:pos []}]
+    (cond (nil? as) m
+          (= "--profile" (first as))
+          (if (second as) (recur (nnext as) (assoc m :profile (second as))) (recur (next as) m))
+          (= "--limit" (first as))
+          (if (second as) (recur (nnext as) (assoc m :limit (second as))) (recur (next as) m))
+          :else (recur (next as) (update m :pos conj (first as))))))
+
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -1298,6 +1397,16 @@
                          r (execute-run prof b (capabilities-arg more) (host-now) nil)]
                      (doseq [l (:lines r)] (println l))
                      (:exit r)))
+      "doctor" (let [{:keys [profile]} (store-flags (cons b more))
+                     r (doctor-for (pause/store-root hio/env) (or profile "default")
+                                   (hio/all-env) nil)]
+                 (doseq [l (:lines r)] (println l))
+                 (:exit r))
+      "sessions" (let [{:keys [profile limit pos]} (store-flags (cons b more))
+                       r (sessions-for (pause/store-root hio/env) (or profile "default")
+                                       (first pos) (second pos) limit)]
+                   (doseq [l (:lines r)] (println l))
+                   (:exit r))
       "cas-put" (let [files (if b (cons b more) [])]
                   (if (or (nil? a) (empty? files))
                     (usage)

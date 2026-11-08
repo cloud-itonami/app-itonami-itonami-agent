@@ -985,21 +985,129 @@
             :job-after {"last_status" "ok" "last_delivery_error" nil}
             :usage-row {"job_id" "agent12" "deliver_target" "telegram" "delivery_error" nil}
             :run-row {"job_id" "agent12" "status" "ok"}}}
+  {:id :doctor-ok :op :doctor
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"doc-ok\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": []}"
+          "profiles/p1/state.db" ""}
+   :request {:profile "p1"}
+   :expect {:exit 0 :lines ["ok"]}}
+  {:id :doctor-no-model :op :doctor
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"doc-no-model\"}"
+          "profiles/p1/config.yaml" "other: 1\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": []}"
+          "profiles/p1/state.db" ""}
+   :request {:profile "p1"}
+   :expect {:exit 1 :lines ["no-model: model.default is not set — resolution is unset" "1 finding(s)"]}}
+  {:id :doctor-missing-token :op :doctor
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"doc-missing-token\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\ndelivery:\n  telegram: {}\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": []}"
+          "profiles/p1/state.db" ""}
+   :request {:profile "p1" :env {}}
+   :expect {:exit 1 :lines ["missing-token: delivery.telegram needs env TELEGRAM_BOT_TOKEN (unset)" "1 finding(s)"]}}
+  {:id :doctor-token-set :op :doctor
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"doc-token-set\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\ndelivery:\n  telegram: {}\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": []}"
+          "profiles/p1/state.db" ""}
+   :request {:profile "p1" :env {"TELEGRAM_BOT_TOKEN" "x"}}
+   :expect {:exit 0 :lines ["ok"]}}
+  {:id :doctor-paused :op :doctor
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"doc-paused\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": []}"
+          "profiles/p1/state.db" ""
+          "paused" "2026-11-08T00:00:00+09:00|maintenance"}
+   :request {:profile "p1"}
+   :expect {:exit 1 :lines ["paused: emergency stop is set (2026-11-08T00:00:00+09:00|maintenance)" "1 finding(s)"]}}
+  {:id :doctor-script-issues :op :doctor
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"doc-script-issues\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"enabled\": true, \"state\": \"scheduled\", \"script\": \"missing.sh\", \"monitor_script\": \"../evil.sh\"}]}"
+          "profiles/p1/state.db" ""}
+   :request {:profile "p1"}
+   :expect {:exit 1 :lines ["script_not_found: script=missing.sh" "unsafe_script_path: monitor_script=../evil.sh" "2 finding(s)"]}}
+  {:id :doctor-delivery-adapter :op :doctor
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"doc-delivery-adapter\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"enabled\": true, \"state\": \"scheduled\", \"deliver\": \"telegram\"}]}"
+          "profiles/p1/state.db" ""}
+   :request {:profile "p1"}
+   :expect {:exit 1 :lines ["delivery_adapter: telegram" "1 finding(s)"]}}
+  {:id :doctor-profile-load-failed :op :doctor
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"doc-profile-load-failed\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p1/cron/jobs.json" "{bad json"}
+   :request {:profile "p1"}
+   :expect {:exit 1 :messages-include ["profile-load-failed:" "1 finding(s)"]}}
+  {:id :doctor-no-state-db :op :doctor
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"doc-no-state-db\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": []}"}
+   :request {:profile "p1"}
+   :expect {:exit 1 :lines ["no-state-db: state.db missing — sessions / session_search will be empty" "1 finding(s)"]}}
+  {:id :sessions-list :op :sessions
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"sess-list\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"}
+   :request {:profile "p1" :setup-sql ["CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, started_at TEXT, message_count INTEGER, last_activity_at TEXT, hidden INTEGER, source TEXT)" "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp TEXT)" "INSERT INTO sessions VALUES('s-one', 'First', '2026-11-07T10:00:00+09:00', 2, '2026-11-07T12:00:00+09:00', 0, '')" "INSERT INTO sessions VALUES('s-two', NULL, '2026-11-08T09:00:00+09:00', 1, NULL, 0, '')" "INSERT INTO sessions VALUES('s-hid', 'Hidden', '2026-11-08T10:00:00+09:00', 9, NULL, 1, '')" "INSERT INTO sessions VALUES('s-tool', 'Tool', '2026-11-08T10:00:00+09:00', 9, NULL, 0, 'tool')" "INSERT INTO messages VALUES(1, 's-one', 'user', 'hello', '2026-11-07T12:00:00+09:00')" "INSERT INTO messages VALUES(2, 's-one', 'assistant', 'hi there', '2026-11-07T12:01:00+09:00')"]}
+   :expect {:exit 0 :lines ["s-two                                   2026-11-08T09:00:00+09:001 msgs   " "s-one                                   2026-11-07T10:00:00+09:002 msgs   First"]}}
+  {:id :sessions-list-empty :op :sessions
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"sess-list-empty\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"}
+   :request {:profile "p1" :setup-sql ["CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, started_at TEXT, message_count INTEGER, last_activity_at TEXT, hidden INTEGER, source TEXT)" "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp TEXT)"]}
+   :expect {:exit 0 :lines ["no sessions"]}}
+  {:id :sessions-missing-db :op :sessions
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"sess-missing-db\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"}
+   :request {:profile "p1"}
+   :expect {:exit 1 :lines ["sessions: state.db missing"]}}
+  {:id :sessions-show :op :sessions
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"sess-show\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"}
+   :request {:profile "p1" :setup-sql ["CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, started_at TEXT, message_count INTEGER, last_activity_at TEXT, hidden INTEGER, source TEXT)" "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp TEXT)" "INSERT INTO sessions VALUES('s-one', 'First', '2026-11-07T10:00:00+09:00', 2, '2026-11-07T12:00:00+09:00', 0, '')" "INSERT INTO sessions VALUES('s-two', NULL, '2026-11-08T09:00:00+09:00', 1, NULL, 0, '')" "INSERT INTO sessions VALUES('s-hid', 'Hidden', '2026-11-08T10:00:00+09:00', 9, NULL, 1, '')" "INSERT INTO sessions VALUES('s-tool', 'Tool', '2026-11-08T10:00:00+09:00', 9, NULL, 0, 'tool')" "INSERT INTO messages VALUES(1, 's-one', 'user', 'hello', '2026-11-07T12:00:00+09:00')" "INSERT INTO messages VALUES(2, 's-one', 'assistant', 'hi there', '2026-11-07T12:01:00+09:00')"] :sub "show" :id "s-one"}
+   :expect {:exit 0 :lines ["[user] hello" "[assistant] hi there"]}}
+  {:id :sessions-show-unknown :op :sessions
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"sess-show-unknown\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"}
+   :request {:profile "p1" :setup-sql ["CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, started_at TEXT, message_count INTEGER, last_activity_at TEXT, hidden INTEGER, source TEXT)" "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp TEXT)"] :sub "show" :id "nope"}
+   :expect {:exit 1 :lines ["session not found: nope"]}}
+  {:id :sessions-show-no-id :op :sessions
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"sess-show-no-id\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"}
+   :request {:profile "p1" :setup-sql ["CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, started_at TEXT, message_count INTEGER, last_activity_at TEXT, hidden INTEGER, source TEXT)" "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp TEXT)"] :sub "show"}
+   :expect {:exit 2 :lines ["sessions show: a session id is required"]}}
+  {:id :sessions-bad-limit :op :sessions
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"sess-bad-limit\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"}
+   :request {:profile "p1" :setup-sql ["CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, started_at TEXT, message_count INTEGER, last_activity_at TEXT, hidden INTEGER, source TEXT)" "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp TEXT)"] :limit "abc"}
+   :expect {:exit 2 :lines ["sessions: --limit must be a positive integer"]}}
+  {:id :sessions-resume :op :sessions
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"sess-resume\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"}
+   :request {:profile "p1" :setup-sql ["CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, started_at TEXT, message_count INTEGER, last_activity_at TEXT, hidden INTEGER, source TEXT)" "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp TEXT)"] :sub "resume"}
+   :expect {:exit 2 :lines ["sessions resume: not implemented yet (lands with history re-entry)"]}}
+  {:id :sessions-corrupt-db :op :sessions
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"sess-corrupt-db\"}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"
+          "profiles/p1/state.db" "garbage-not-sqlite"}
+   :request {:profile "p1"}
+   :expect {:exit 1 :messages-include ["sessions: state.db unreadable:"]}}
   {:id :run/job-not-found :op :run
-   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
-          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-job-not-found\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
-          "cron/jobs.json" "{\"note\": \"keep me\", \"jobs\": []}"}
+   :seed {"profiles/p1/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "profiles/p1/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-job-not-found\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "profiles/p1/cron/jobs.json" "{\"note\": \"keep me\", \"jobs\": []}"}
    :request {:job "nope"}
    :expect {:exit 1 :status "refused" :reason "job/not-found"
             :jobs-doc {"note" "keep me"}}}
   {:id :run/monitor-url :op :run
-   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
-          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-monitor-url\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
-          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent9\", \"name\": \"agent9\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"monitor_url\": \"https://example.com/ping\", \"prompt\": \"watch\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :seed {"profiles/p1/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "profiles/p1/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-monitor-url\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": [{\"id\": \"agent9\", \"name\": \"agent9\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"monitor_url\": \"https://example.com/ping\", \"prompt\": \"watch\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
    :request {:job "agent9"}
    :expect {:exit 1 :status "refused" :reason "monitor/monitor-url-unavailable"}}
   {:id :run/profile-invalid :op :run
-   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
-          "cron/jobs.json" "{\"jobs\": []}"}
+   :seed {"profiles/p1/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": []}"}
    :request {:job "nightly"}
    :expect {:exit 1 :status "refused" :reason "rail/itonami-without-manifest"}}]}]
