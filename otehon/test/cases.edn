@@ -876,6 +876,115 @@
             :messages-include ["inference pending for agent3" ":status :planned" "## Script Output" "do the thing" "mishima"]
             :snapshot nil :snapshot-file nil :monitor-state nil
             :jobs-doc {"jobs" [{"id" "agent3" "name" "agent3" "enabled" true "state" "scheduled" "next_run_at" "2026-11-08T01:00:00+09:00" "script" "hello.sh" "prompt" "do the thing" "schedule" {"kind" "interval" "minutes" 60 "display" "every 60m"}}]}}}
+  {:id :run/turn-ok :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-turn-ok\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent4\", \"name\": \"agent4\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"script\": \"hello.sh\", \"prompt\": \"do the thing\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/hello.sh" "#!/bin/sh\necho hi\n"}
+   :request {:job "agent4"
+             :turn {:final "done did it" :exit-reason "completed"
+                    :turns 1 :provider "murakumo" :model "mishima"
+                    :usage {"prompt_tokens" 10 "completion_tokens" 20 "total_tokens" 30}
+                    :attempts [{:provider "murakumo" :model "mishima" :status "ok"}]}}
+   :expect {:exit 0 :status "ok" :lines ["ran agent4: ok"]
+            :needles ["done did it" "## Script Output" "hi" "do the thing"]
+            :doc-has {"done did it" true "## Script Output" true "hi" true "do the thing" true}
+            :job-after {"last_status" "ok" "last_error" nil "failure_streak" 0 "repeat" {"completed" 1}}
+            :usage-row {"job_id" "agent4" "response_silent" false "deliver_target" "local" "delivery_error" nil "model" "mishima" "prompt_tokens" 10 "completion_tokens" 20 "total_tokens" 30 "error" nil "engine" "itonami-agent" "ts" "2026-11-08T00:00:00.000000+09:00"}
+            :run-row {"job_id" "agent4" "manual" true "status" "ok" "exit_reason" "completed" "turns" 1 "provider" "murakumo" "model" "mishima" "ts" "2026-11-08T00:00:00.000000+09:00"}}}
+  {:id :run/turn-silent :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-turn-silent\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent5\", \"name\": \"agent5\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"prompt\": \"watch nightly\", \"deliver\": \"telegram\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "agent5"
+             :turn {:final "[SILENT]" :exit-reason "completed"
+                    :turns 1 :provider "murakumo" :model "mishima"
+                    :usage {"prompt_tokens" 1 "completion_tokens" 1 "total_tokens" 2}
+                    :attempts [{:provider "murakumo" :model "mishima" :status "ok"}]}}
+   :expect {:exit 0 :status "silent" :lines ["ran agent5: silent"]
+            :needles ["[SILENT]" "watch nightly"]
+            :doc-has {"[SILENT]" true "watch nightly" true}
+            :job-after {"last_status" "ok" "last_error" nil "failure_streak" 0 "last_delivery_error" nil}
+            :usage-row {"job_id" "agent5" "response_silent" true "deliver_target" "telegram" "delivery_error" nil}
+            :run-row {"job_id" "agent5" "status" "silent"}}}
+  {:id :run/turn-error :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-turn-error\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent6\", \"name\": \"agent6\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"prompt\": \"do it\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "agent6"
+             :turn {:final "[CRON_FAILURE] kaboom" :exit-reason "error" :error {:error "kaboom"}
+                    :turns 1 :provider "murakumo" :model "mishima"
+                    :usage {"prompt_tokens" 5 "completion_tokens" 5 "total_tokens" 10}
+                    :attempts [{:provider "murakumo" :model "mishima" :status "error" :error "kaboom"}]}}
+   :expect {:exit 1 :status "error" :lines ["ran agent6: error"]
+            :needles ["[CRON_FAILURE] kaboom" "## Error" "kaboom"]
+            :doc-has {"[CRON_FAILURE] kaboom" true "## Error" true "kaboom" true}
+            :job-after {"last_status" "error" "last_error" "kaboom" "failure_streak" 1}
+            :usage-row {"job_id" "agent6" "response_silent" false "error" "kaboom" "deliver_target" "local"}
+            :run-row {"job_id" "agent6" "status" "error" "exit_reason" "error"}}}
+  {:id :run/turn-peer-placement :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-turn-peer-placement\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent7\", \"name\": \"agent7\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"prompt\": \"coordinate\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "agent7"
+             :turn {:final "coordinated" :exit-reason "completed" :peer "helper"
+                    :placement [{"step" "fetch" "exit_reason" "completed"}]
+                    :turns 2 :provider "murakumo" :model "mishima"
+                    :usage {"prompt_tokens" 3 "completion_tokens" 4 "total_tokens" 7}
+                    :attempts [{:provider "murakumo" :model "mishima" :status "ok"}]}}
+   :expect {:exit 0 :status "ok" :lines ["ran agent7: ok"]
+            :needles ["coordinated" "**Peer:** helper" "**Placement:** fetch:completed"]
+            :doc-has {"coordinated" true "**Peer:** helper" true "**Placement:** fetch:completed" true}
+            :job-after {"last_status" "ok"}
+            :run-row {"job_id" "agent7" "status" "ok" "peer" "helper"}}}
+  {:id :run/monitor-changed-turn-ok :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-monitor-changed-turn-ok\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent10\", \"name\": \"agent10\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"monitor_script\": \"mon.sh\", \"prompt\": \"watch\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}, \"monitor_state\": {\"last_output_hash\": \"3bfc269594ef649228e9a74bab00f042efc91d5acc6fbee31a382e80d42388fe\", \"last_changed_at\": \"2026-01-01T00:00:00+09:00\"}}]}"
+          "scripts/mon.sh" "#!/bin/sh\nprintf 'v2'\n"
+          "cron/output/agent10/monitor_last_output.txt" "v1"}
+   :request {:job "agent10"
+             :turn {:final "noted the change" :exit-reason "completed"
+                    :turns 1 :provider "murakumo" :model "mishima"
+                    :usage {"prompt_tokens" 8 "completion_tokens" 9 "total_tokens" 17}
+                    :attempts [{:provider "murakumo" :model "mishima" :status "ok"}]}}
+   :expect {:exit 0 :status "ok" :lines ["ran agent10: ok"]
+            :needles ["MONITOR CHANGE DETECTED" "noted the change"]
+            :doc-has {"MONITOR CHANGE DETECTED" true "noted the change" true}
+            :snapshot "v2" :snapshot-file "v2"
+            :monitor-state {"last_output_hash" "fb04dcb6970e4c3d1873de51fd5a50d7bb46b3383113602665c350ec40b5f990"}
+            :job-after {"last_status" "ok"}
+            :run-row {"job_id" "agent10" "status" "ok"}}}
+  {:id :run/turn-delivery-unresolved :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-turn-delivery-unresolved\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent11\", \"name\": \"agent11\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"prompt\": \"send it\", \"deliver\": \"telegram\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "agent11"
+             :turn {:final "here is the report" :exit-reason "completed"
+                    :turns 1 :provider "murakumo" :model "mishima"
+                    :usage {"prompt_tokens" 2 "completion_tokens" 2 "total_tokens" 4}
+                    :attempts [{:provider "murakumo" :model "mishima" :status "ok"}]}}
+   :expect {:exit 0 :status "delivery_failed" :lines ["ran agent11: delivery_failed"]
+            :needles ["here is the report"]
+            :doc-has {"here is the report" true}
+            :job-after {"last_status" "delivery_failed" "last_error" nil "failure_streak" 0 "last_delivery_error" "delivery requested for 'telegram' but no Kotoba delivery adapter is configured"}
+            :usage-row {"job_id" "agent11" "deliver_target" "telegram" "delivery_error" "delivery requested for 'telegram' but no Kotoba delivery adapter is configured"}
+            :run-row {"job_id" "agent11" "status" "delivery_failed"}}}
+  {:id :run/turn-delivery-ok :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-turn-delivery-ok\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"agent12\", \"name\": \"agent12\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"prompt\": \"send it\", \"deliver\": \"telegram\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "agent12" :deliver "ok"
+             :turn {:final "delivered report" :exit-reason "completed"
+                    :turns 1 :provider "murakumo" :model "mishima"
+                    :usage {"prompt_tokens" 2 "completion_tokens" 2 "total_tokens" 4}
+                    :attempts [{:provider "murakumo" :model "mishima" :status "ok"}]}}
+   :expect {:exit 0 :status "ok" :lines ["ran agent12: ok"]
+            :needles ["delivered report"]
+            :doc-has {"delivered report" true}
+            :job-after {"last_status" "ok" "last_delivery_error" nil}
+            :usage-row {"job_id" "agent12" "deliver_target" "telegram" "delivery_error" nil}
+            :run-row {"job_id" "agent12" "status" "ok"}}}
   {:id :run/job-not-found :op :run
    :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
           "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-job-not-found\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"

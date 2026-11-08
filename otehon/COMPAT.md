@@ -23,7 +23,7 @@ covered by shared cases on all three runners.
 | `vault` | `vault-cmd` | — | S6 |
 | `mcp` | `mcp-cmd` | — | S6 |
 | `dapps` | `dapps-cmd` | — | S6 |
-| `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (one job's host side, stops at `:planned`) | done run/tick-exec (JUN-1036 S2a; rail call S2b), S4 notepad/status |
+| `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor) | done run/tick-exec (JUN-1036 S2a/S2b; ledger-backed runs/incidents S4/S5) |
 | `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check`, `store-plan` (import/export copy plan) | S4 remaining verbs |
 | `doctor` | `doctor-cmd` | — | S3b (needs readiness ports) |
 | `sessions [list]/show/resume` | `sessions-cmd` | — | S3b (sqlite host reads) |
@@ -61,7 +61,7 @@ from source, the rest follow the module name until their slice lands.
 | `computer_use.cljk` | — | planned S6 |
 | `confine.cljk` *OS sandbox* | — | planned S2 |
 | `connections.cljk` | — | planned S6 |
-| `cron.cljk` *jobs/schedules* | `cron.cljc`, `tick.cljc`, `run.cljc`, `exec.cljc` | partial (plans + `run-job` host side done, JUN-1036 S2a; executor/rail S2b) |
+| `cron.cljk` *jobs/schedules* | `cron.cljc`, `tick.cljc`, `run.cljc`, `exec.cljc` | partial (plans + `run-job` host side and finished-turn apply done, JUN-1036 S2a/S2b; live rail + ledger/queue rows S5) |
 | `dapps.cljk` | — | planned S6 |
 | `delivery.cljk`, `delivery_queue.cljk` | — | planned S5 |
 | `execution_ledger.cljk` | — | planned S5 |
@@ -97,7 +97,12 @@ from source, the rest follow the module name until their slice lands.
 - S1 profile ops — done (JUN-1008, JUN-1020/1021).
 - S2a host-side run — done (JUN-1036: `run-exec` script spawn, monitor
   sources, output-doc save, jobs.json apply; 13 cases + 2 must-fail).
-- S2b inference turn (rail call, delivery lanes, executions ledger).
+- S2b inference turn — done (JUN-1036: finished-turn apply —
+  ok/silent/error/`delivery_failed` statuses, peer/placement lines,
+  `## Error` appendix, usage/run audit rows, unresolved-lane message;
+  7 cases. The live rail call stays open; executions-ledger and
+  delivery-queue ROWS stay slice S5 — only their observable inputs,
+  statuses and messages are produced here).
 - S3a store verbs pause/status — done (this unit: 5 cases + 2 must-fail).
 - S3b read/show ops: model/fallback/doctor/sessions.
 - S4 store writes: adopt/release/refresh/notepad/profile verbs, soul.

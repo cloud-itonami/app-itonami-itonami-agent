@@ -9,7 +9,8 @@
   itself (complete-hop) stays slice S2b."
   (:require [clojure.string :as str]
             [itonami.otehon.text :as text]
-            [itonami.otehon.cron :as cron]))
+            [itonami.otehon.cron :as cron]
+            [itonami.otehon.run :as run]))
 
 ;; ---------------------------------------------------------------- scripts
 
@@ -218,3 +219,60 @@
    "model" model "peer" peer "receipt" receipt "placement" placement
    "attempts" (mapv #(select-keys % [:provider :model :status :error]) (or attempts []))
    "output" output-file})
+
+;; ---------------------------------------------------------------- agent turn (S2b)
+
+(defn turn-outcome
+  "An executor result -> {:final :failed? :silent? :err-text}.
+  Verbatim from run-job-core."
+  [{:keys [final exit-reason error]}]
+  (let [final (str final)
+        failed? (or (not= "completed" exit-reason)
+                    (str/starts-with? (str/trim final) (str run/failure-token)))
+        silent? (= (str run/silent-token) (str/trim final))]
+    {:final final
+     :failed? (boolean failed?)
+     :silent? silent?
+     :err-text (when failed? (or (get error :error) exit-reason))}))
+
+(defn turn-status-line
+  "Peer/Placement status lines for a turn result. Verbatim from run-job-core."
+  [{:keys [peer placement]}]
+  (str/join "\n" (remove nil? [(when peer (str "**Peer:** " peer))
+                               (when (seq placement)
+                                 (str "**Placement:** " (str/join " → " (map #(str (get % "step") ":" (get % "exit_reason")) placement))))])))
+
+(defn deliver-target
+  "The normalized deliver string for the audit row. Verbatim delivery-lane:
+  the failure lane when the run failed, \"local\" when falsy."
+  [job failed?]
+  (let [raw (if (and failed? (some? (get job "failure_deliver"))
+                     (not (str/blank? (str (get job "failure_deliver")))))
+              (get job "failure_deliver")
+              (get job "deliver"))]
+    (cond (or (nil? raw) (= raw "")) "local"
+          (sequential? raw) (let [parts (remove str/blank? (map #(str/trim (str %)) raw))]
+                              (if (seq parts) (str/join "," parts) "local"))
+          :else (str raw))))
+
+(defn deliver-lane-names
+  "A normalized deliver string as distinct lane names."
+  [target]
+  (vec (distinct (remove str/blank? (map str/trim (str/split (str target) #","))))))
+
+(defn turn-delivery-error
+  "delivery-error for a finished turn. Local lanes never send; a lane with
+  no adapter is the legacy unresolved message. The queue/ledger writes
+  behind delivery stay slice S5, so only the message is produced here."
+  [target deliver-result]
+  (let [targets (remove #(= "local" (str/lower-case (str %))) (deliver-lane-names target))]
+    (when (seq targets)
+      (if (nil? deliver-result)
+        (str/join "; " (map #(str "delivery requested for '" % "' but no Kotoba delivery adapter is configured") targets))
+        (let [errs (remove nil? (map (fn [_] (when-not (= "ok" (str deliver-result)) (str deliver-result))) targets))]
+          (when (seq errs) (str/join "; " errs)))))))
+
+(defn turn-status
+  "Run status word for a finished turn. Verbatim from run-job-core."
+  [failed? delivery-error silent?]
+  (cond failed? "error" delivery-error "delivery_failed" silent? "silent" :else "ok"))

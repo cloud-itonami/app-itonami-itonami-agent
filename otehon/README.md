@@ -137,7 +137,7 @@ placement standard live in [PORTABILITY.md](./PORTABILITY.md).
 
 `bin/run-shared-cases` runs on each runner:
 
-- `test/cases.edn` — 178 cases, 27 of them negative controls. Each
+- `test/cases.edn` — 185 cases, 27 of them negative controls. Each
   negative control with an edit is also run on the unedited fixture and
   must then *not* match, so the edit causes the rejection. The store
   cases (pause/status/model/fallback/run) touch a real scratch store
@@ -177,8 +177,10 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
    S2a): `run-exec` runs one job's host side (script spawn, monitor
    sources, output-doc save, jobs.json apply) verbatim from the legacy
    `run-job` path, stopping at `:planned` with exit 3 when an
-   inference turn is needed. What stays open: the live rail call
-   (S2b), delivery lanes, the executions ledger.
+   inference turn is needed — extended 2026-11-08 (JUN-1036 S2b) with
+   finished-turn apply (ok/silent/error/`delivery_failed`, peer/placement
+   lines, usage/run audit rows). What stays open: the live rail call;
+   executions-ledger and delivery-queue rows stay slice S5.
 5. Use these outputs as reference values for the Native route (AWAI-60,
    AWAI-131), recorded per the oracle rule, never as its fallback.
 6. ~~Decentralized storage slice~~ — done 2026-11-08 (AWAI-232):
@@ -230,4 +232,6 @@ API/command compat matrix in `otehon/COMPAT.md`),
 `docs/evidence/otehon-model-20261108.md` (165 shared cases;
 `model`/`fallback` verbatim, textual config edit with atomic replace),
 `docs/evidence/otehon-run-20261108.md` (178 shared cases; `run-exec`
-host side verbatim, stops at `:planned` with exit 3).
+host side verbatim, stops at `:planned` with exit 3),
+`docs/evidence/otehon-turn-20261108.md` (185 shared cases; finished-turn
+apply verbatim, unresolved-lane message, ledger/queue rows deferred).

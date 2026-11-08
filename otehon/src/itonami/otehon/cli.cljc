@@ -524,7 +524,7 @@
 (defn- apply-and-save!
   "Write the output doc, prune past 50, and apply the finished-run record
   to the CURRENT jobs.json row. Returns the output path."
-  [home job-id doc failed? error stamp micros]
+  [home job-id doc failed? error delivery-error stamp micros]
   (let [outdir (str home "/cron/output/" job-id)
         f (str outdir "/" stamp ".md")]
     (hio/mkdirs! outdir)
@@ -535,12 +535,12 @@
           cur (first (filter #(= job-id (get % "id")) jobs))]
       (when cur
         (update-jobs-doc! home micros
-          (fn [doc js] (assoc doc "jobs" (exec/jobs-with js (exec/apply-record cur micros failed? error nil)))))))
+          (fn [doc js] (assoc doc "jobs" (exec/jobs-with js (exec/apply-record cur micros failed? error delivery-error)))))))
     f))
 
 (defn- run-monitor!
-  "Evaluate a job's monitor_script (monitor_url refuses: fetching is slice
-  S2b). Applies the snapshot + monitor_state writes on change. Returns nil
+  "Evaluate a job's monitor_script (monitor_url refuses: fetching needs
+  the network). Applies the snapshot + monitor_state writes on change. Returns nil
   (no monitor), {:refused ...}, or the exec/monitor-decide verdict with
   the script result attached."
   [prof job micros]
@@ -575,11 +575,54 @@
                               :stamp stamp :run-at run-at
                               :notepad nil :linked nil :monitor-context monitor-context}))
 
+(defn- apply-turn!
+  "Apply a finished agent turn: doc, jobs.json record and audit rows.
+  Verbatim from run-job-core. `turn` is the executor result; `deliver`
+  emulates the delivery adapter (\"ok\" or an error string; nil means no
+  adapter is configured). The executions ledger and the delivery queue
+  stay slice S5, so only their observable inputs (status, messages, rows)
+  are produced here."
+  [home job prompt turn deliver micros stamp run-at]
+  (let [started (hio/now-ms)
+        {:keys [final failed? silent? err-text]} (exec/turn-outcome turn)
+        response (if failed?
+                   (str final (when err-text (str "\n\n## Error\n\n```\n" err-text "\n```")))
+                   final)
+        doc (run/output-doc job {:prompt prompt :response response :failed? failed?
+                                 :status-line (exec/turn-status-line turn)} run-at)
+        target (exec/deliver-target job failed?)
+        delivery-error (when-not silent? (exec/turn-delivery-error target deliver))
+        f (apply-and-save! home (get job "id") doc failed? err-text delivery-error stamp micros)
+        status (exec/turn-status failed? delivery-error silent?)
+        execution-id (hio/random-hex 16)
+        usage (exec/usage-entry {:ts micros :job-id (get job "id") :fire-id (hio/random-hex 8)
+                                 :prompt-tokens (get-in turn [:usage "prompt_tokens"])
+                                 :completion-tokens (get-in turn [:usage "completion_tokens"])
+                                 :total-tokens (get-in turn [:usage "total_tokens"])
+                                 :silent? silent? :deliver-target target
+                                 :delivery-error delivery-error :model (:model turn)
+                                 :duration-ms (- (hio/now-ms) started) :error err-text})
+        run-row (exec/run-entry {:ts micros :job-id (get job "id") :execution-id execution-id
+                                 :manual? true :status status :exit-reason (:exit-reason turn)
+                                 :turns (:turns turn) :provider (:provider turn) :model (:model turn)
+                                 :peer (:peer turn) :receipt (:receipt turn) :placement (:placement turn)
+                                 :attempts (:attempts turn) :output-file f})]
+    (hio/append-text! (str home "/cron/usage_audit.jsonl") (str (hio/json-str usage) "\n"))
+    (hio/append-text! (str home "/cron/itonami-runs.jsonl") (str (hio/json-str run-row) "\n"))
+    {:exit (if (= "error" status) 1 0)
+     :lines [(str "ran " (get job "id") ": " status)]
+     :detail {:status status :output-file f :output-doc doc
+              :job-after (current-row home (get job "id"))
+              :usage-row usage :run-row run-row}}))
+
 (defn- execute-run
-  "Run one job's host side now. `now-map` = {:iso :parts :ms}. Returns
-  {:exit :lines :detail}: detail carries :status plus the saved artifacts
-  (output-doc, job-after, snapshot, monitor-state) for the shared cases."
-  [prof job-ref capabilities now-map]
+  "Run one job's host side now. `now-map` = {:iso :parts :ms}; `opts`
+  carries the test-only turn injection {:turn :deliver} (the product
+  command has no executor yet, so a planned turn without one stays
+  pending). Returns {:exit :lines :detail}: detail carries :status plus
+  the saved artifacts (output-doc, job-after, snapshot, monitor-state,
+  audit rows) for the shared cases."
+  [prof job-ref capabilities now-map opts]
   (let [home (:home prof)
         iso (:iso now-map)
         now {:iso iso :parts (:parts now-map)}
@@ -595,7 +638,7 @@
       {:exit 2 :lines [(str "held: " (:reason plan))] :detail {:status "held" :reason (:reason plan)}}
 
       (contains? #{:silent :ok} (:status plan))
-      (let [f (apply-and-save! home (get-in plan [:job :id]) (:output-doc plan) false nil stamp micros)
+      (let [f (apply-and-save! home (get-in plan [:job :id]) (:output-doc plan) false nil nil stamp micros)
             id (get-in plan [:job :id])]
         {:exit 0
          :lines [(str "ran " id ": " (name (:status plan)))]
@@ -618,7 +661,7 @@
                                           :response (str "[CRON_FAILURE] " msg)
                                           :failed? true} run-at)
                      msg)
-                f (apply-and-save! home (get job "id") doc true msg stamp micros)]
+                f (apply-and-save! home (get job "id") doc true msg nil stamp micros)]
             {:exit 1
              :lines [(str "ran " (get job "id") ": error")]
              :detail {:status "error" :output-file f :output-doc doc
@@ -627,7 +670,7 @@
           (and (some? mon) (false? (:changed? mon)))
           (let [doc (run/output-doc job {:prompt "" :response "[SILENT]"
                                          :status-line "**Status:** monitor output unchanged"} run-at)
-                f (apply-and-save! home (get job "id") doc false nil stamp micros)]
+                f (apply-and-save! home (get job "id") doc false nil nil stamp micros)]
             {:exit 0
              :lines [(str "ran " (get job "id") ": silent")]
              :detail {:status "silent" :output-file f :output-doc doc
@@ -647,7 +690,7 @@
                     doc (if failed? (append-error-section (:output-doc plan2) err-text)
                             (:output-doc plan2))
                     f (apply-and-save! home (get-in plan2 [:job :id]) doc
-                                       failed? err-text stamp micros)
+                                       failed? err-text nil stamp micros)
                     id (get-in plan2 [:job :id])]
                 {:exit (if failed? 1 0)
                  :lines [(str "ran " id ": " (if failed? "error" (name (:status plan2))))]
@@ -670,7 +713,7 @@
                         doc (if failed? (append-error-section (:output-doc plan3) err-text)
                                 (:output-doc plan3))
                         f (apply-and-save! home (get-in plan3 [:job :id]) doc
-                                           failed? err-text stamp micros)
+                                           failed? err-text nil stamp micros)
                         id (get-in plan3 [:job :id])]
                     {:exit (if failed? 1 0)
                      :lines [(str "ran " id ": " (if failed? "error" (name (:status plan3))))]
@@ -680,10 +723,14 @@
                               :snapshot (:snapshot mon) :monitor-state (:state mon)}})
 
                   (= :planned (:status plan3))
-                  {:exit 3
-                   :lines [(str "inference pending for " (get-in plan3 [:job :id])) (canon plan3)]
-                   :detail {:status "pending" :plan (canon plan3)
-                            :snapshot (:snapshot mon) :monitor-state (:state mon)}}
+                  (if-let [turn (:turn opts)]
+                    (let [r (apply-turn! home job (:prompt plan3)
+                                         turn (:deliver opts) micros stamp run-at)]
+                      (update r :detail assoc :snapshot (:snapshot mon) :monitor-state (:state mon)))
+                    {:exit 3
+                     :lines [(str "inference pending for " (get-in plan3 [:job :id])) (canon plan3)]
+                     :detail {:status "pending" :plan (canon plan3)
+                              :snapshot (:snapshot mon) :monitor-state (:state mon)}})
 
                   :else
                   {:exit (if (= :held (:status plan3)) 2 1)
@@ -691,10 +738,14 @@
                    :detail {:status (name (:status plan3)) :reason (:reason plan3)}}))
 
               (= :planned (:status plan2))
-              {:exit 3
-               :lines [(str "inference pending for " (get-in plan2 [:job :id])) (canon plan2)]
-               :detail {:status "pending" :plan (canon plan2)
-                        :snapshot (:snapshot mon) :monitor-state (:state mon)}}
+              (if-let [turn (:turn opts)]
+                (let [r (apply-turn! home job (:prompt plan2)
+                                     turn (:deliver opts) micros stamp run-at)]
+                  (update r :detail assoc :snapshot (:snapshot mon) :monitor-state (:state mon)))
+                {:exit 3
+                 :lines [(str "inference pending for " (get-in plan2 [:job :id])) (canon plan2)]
+                 :detail {:status "pending" :plan (canon plan2)
+                          :snapshot (:snapshot mon) :monitor-state (:state mon)}})
 
               :else
               {:exit (if (= :held (:status plan2)) 2 1)
@@ -715,7 +766,8 @@
                          (merge {:iso "2026-11-08T00:00:00+09:00"
                                  :ms 0
                                  :parts {:year 2026 :month 11 :day 8 :hour 0 :minute 0}}
-                                (:now req)))
+                                (:now req))
+                         {:turn (:turn req) :deliver (:deliver req)})
           doc (or (:output-doc (:detail r)) "")
           jobs-doc (try (when (hio/file? (jobs-file dir))
                           (hio/parse-json (hio/slurp-utf8 (jobs-file dir))))
@@ -1243,7 +1295,7 @@
       "run-exec" (if (or (not a) (not b))
                    (usage)
                    (let [prof (load-dir a (hio/read-text-fn a))
-                         r (execute-run prof b (capabilities-arg more) (host-now))]
+                         r (execute-run prof b (capabilities-arg more) (host-now) nil)]
                      (doseq [l (:lines r)] (println l))
                      (:exit r)))
       "cas-put" (let [files (if b (cons b more) [])]
