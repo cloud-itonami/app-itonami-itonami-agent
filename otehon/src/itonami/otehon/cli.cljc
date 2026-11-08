@@ -56,6 +56,8 @@
             [itonami.otehon.doctor :as doctor]
             [itonami.otehon.sessions :as sessions]
             [itonami.otehon.notepad :as notepad]
+            [itonami.otehon.bundle :as bundle]
+            [itonami.otehon.manifest :as manifest]
             [itonami.otehon.cas :as cas]
             [itonami.otehon.peer :as peer]
             [itonami.otehon.market :as market]))
@@ -119,7 +121,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -147,6 +149,8 @@
     :sessions (ops-sessions c scratch)
     :notepad (ops-notepad c scratch)
     :profile (ops-profile c scratch)
+    :runs (ops-runs c scratch)
+    :incidents (ops-incidents c scratch)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -257,6 +261,11 @@
   (str scratch "/" (namespace (:id c)) "-" (name (:id c))))
 
 (defn- seed-files! [dir seeds]
+  ;; every store case starts from an empty directory: seeds overwrite,
+  ;; but a previous runner's created files (itonamify's manifest, a
+  ;; ledger ack) would otherwise leak into the next runner's case
+  (hio/wipe-dir! dir)
+  (hio/mkdirs! dir)
   (doseq [[rel text] seeds]
     (let [p (str dir "/" rel)]
       (hio/mkdirs! (hio/dirname p))
@@ -919,32 +928,38 @@
                            "2026-11-08T00:00:00+09:00")]
         (assoc r :messages (:lines r))))))
 
+(defn- load-home
+  "A store profile as the legacy load-profile callers see it (lite
+  loader, plus its home directory)."
+  [store name]
+  (assoc (profile/load-profile
+          {:name name :read-text (hio/read-text-fn (str store "/profiles/" name))
+           :parse-edn hio/parse-edn :parse-json hio/parse-json})
+         :home (str store "/profiles/" name)))
+
 (defn- profile-list-lines
   [store]
   (vec (concat [(str (text/pad-end "Profile" 34) (text/pad-end "Model" 34)
                      (text/pad-end "itonami" 9) "Scheduler")]
                (mapv (fn [n]
-                       (let [home (str store "/profiles/" n)
-                             prof (profile/load-profile
-                                   {:name n :read-text (hio/read-text-fn home)
-                                    :parse-edn hio/parse-edn :parse-json hio/parse-json})
+                       (let [prof (load-home store n)
                              cfg (:config prof)
                              m (:manifest prof)]
                          (str (text/pad-end n 34)
                               (text/pad-end (str (get-in cfg ["model" "default"])) 34)
                               (text/pad-end (if m "yes" "-") 9)
                               (if m (name (get-in m [:runtime :scheduler] :hermes)) "hermes"))))
-                     (cons "default" (listing-names store))))))
+                     ;; the legacy default row reads the store root; every
+                     ;; otehon profile (default included) lives under
+                     ;; profiles/, so the row reads profiles/default
+                     (vec (distinct (cons "default" (listing-names store))))))))
 
 (defn- profile-show-lines
   [store name]
   (let [home (str store "/profiles/" name)]
     (if-not (hio/dir? home)
       {:exit 1 :lines [(str "profile not found: " name)]}
-      (let [prof (assoc (profile/load-profile
-                         {:name name :read-text (hio/read-text-fn home)
-                          :parse-edn hio/parse-edn :parse-json hio/parse-json})
-                        :home home)
+      (let [prof (load-home store name)
             cfg (:config prof)]
         {:exit 0
          :lines [(str "profile: " name)
@@ -964,17 +979,292 @@
                                            "}"))
                                     "no"))]}))))
 
+(defn- check-lines
+  "The `profile check` lines for target profiles: one line per problem,
+  then the profile count with its error/warning counts. Otehon drift is
+  empty (soul-block tracking is a later slice), so the drift suffix the
+  legacy command appends never appears."
+  [store targets summary?]
+  (let [rs (mapv (fn [n]
+                   {:profile n :problems (profile/check (load-home store n))})
+                 targets)
+        level-count (fn [lvl]
+                      (count (filter (fn [r] (some #(= lvl (:level %)) (:problems r))) rs)))]
+    {:exit (if (pos? (level-count :error)) 1 0)
+     :lines (vec (concat (when-not summary?
+                           (mapcat (fn [{:keys [profile problems]}]
+                                     (mapv (fn [{:keys [level path message]}]
+                                             (str (text/pad-end (name level) 7) profile "  "
+                                                  (pr-str path) " " message))
+                                           problems))
+                                   rs))
+                         [(str (count rs) " profile(s): " (level-count :error) " with errors, "
+                               (level-count :warn) " with warnings")]))}))
+
+(defn- issue-summary
+  "One readiness line's issue counts by code, details in brackets.
+  Verbatim from main.cljk."
+  [issues]
+  (->> issues
+       (group-by :code)
+       (map (fn [[code rows]]
+              (let [details (->> rows (keep :detail) (mapcat #(str/split % #",\s*")) distinct sort)
+                    summary (str (name code) "=" (count rows))]
+                (if (seq details) (str summary "[" (str/join "," details) "]") summary))))
+       sort
+       (str/join ", ")))
+
+(defn- readiness-one
+  "Readiness for one profile: the doctor findings over its active jobs,
+  summarized the way the legacy command prints them. The malformed
+  jobs.json gate mirrors doctor-for (the legacy loader throws; the lite
+  loader records the problem, so the raw text is parsed again here)."
+  [store name env model-override]
+  (let [home (str store "/profiles/" name)
+        prof (load-home store name)
+        raw (when (hio/file? (str home "/cron/jobs.json"))
+              (hio/slurp-utf8 (str home "/cron/jobs.json")))
+        parsed (when (some? raw)
+                 (try (hio/parse-json raw)
+                      (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                        {:error (ex-message e)})))]
+    (if (:error parsed)
+      {:blocked 1 :issues 1
+       :lines [(str "error   " name "  " (str (:error parsed)))]}
+      (let [marker (str store "/paused")
+            paused (when (hio/file? marker) (pause/since-of (hio/slurp-utf8 marker)))
+            findings (doctor/profile-findings
+                      {:config (:config prof) :home home :jobs (:jobs prof)}
+                      {:env env :model-override model-override
+                       :paused-record paused
+                       :state-db? (hio/file? (str home "/state.db"))
+                       :hy-deps (hy-deps prof env)
+                       :probes {:file? hio/file? :symlink? hio/symlink?}})]
+        (if (seq findings)
+          {:blocked 1 :issues (count findings)
+           :lines [(str "blocked " name "  " (issue-summary findings))]}
+          {:blocked 0 :issues 0 :lines [(str "ready   " name)]})))))
+
+(defn- readiness-lines
+  [store targets env model-override]
+  (let [rs (mapv #(readiness-one store % env model-override) targets)
+        blocked (reduce + 0 (map :blocked rs))
+        issues (reduce + 0 (map :issues rs))]
+    {:exit 0
+     :lines (vec (concat (mapcat :lines rs)
+                         [(str blocked " profile(s) blocked; " issues " compatibility issue(s)")]))}))
+
+(defn- refresh-lines
+  "The `profile refresh` lines: recompute each itonami profile's bundle
+  CID and write it back. Verbatim from main.cljk; a missing home reads
+  as no itonami.edn because refresh never creates a profile."
+  [store targets dry-run?]
+  (if (empty? targets)
+    {:exit 2 :lines ["usage: itonami-agent profile refresh <p>|--all [--dry-run]"]}
+    (let [n (atom 0)
+          lines (mapv (fn [t]
+                        (let [home (str store "/profiles/" t)
+                              m (bundle/read-manifest home)
+                              m' (when (some? m) (bundle/with-bundle home m))]
+                          (cond
+                            (nil? m) (str "skip    " t "  no itonami.edn")
+                            (= m m') (str "keep    " t)
+                            :else (do (when-not dry-run? (bundle/write-manifest! home m'))
+                                      (swap! n inc)
+                                      (str (if dry-run? "would  " "wrote   ") t "  "
+                                           (get-in m [:bundle :cid]) " -> " (get-in m' [:bundle :cid]))))))
+                      targets)]
+      {:exit 0 :lines (conj lines (str @n " bundle CID(s) " (if dry-run? "would be " "") "refreshed"))})))
+
+(defn- itonamify-lines
+  "The `profile itonamify` lines. Verbatim from main.cljk; a missing
+  home is skipped (the legacy loader throws there; the lite loader
+  builds an empty profile, so the guard lives here)."
+  [store targets force? dry-run?]
+  (let [n (atom 0)
+        lines (mapv (fn [t]
+                      (let [home (str store "/profiles/" t)]
+                        (if-not (hio/dir? home)
+                          (str "skip    " t "  no such profile")
+                          (let [prof (load-home store t)
+                                m (:manifest prof)]
+                            (if (and (some? m) (not force?))
+                              (str "keep    " t "  " (get-in m [:bundle :cid]))
+                              (let [m' (merge (bundle/default-manifest prof)
+                                              (select-keys m (into [:runtime :placement :inference
+                                                                    :terminal :web]
+                                                                   manifest/org-keys)))]
+                                (when-not dry-run? (bundle/write-manifest! home m'))
+                                (swap! n inc)
+                                (str (if dry-run? "would  " "wrote   ") t "  "
+                                     (get-in m' [:bundle :cid]))))))))
+                    targets)]
+    {:exit 0 :lines (conj lines (str @n " profile(s) " (if dry-run? "would be " "") "itonamified"))}))
+
+(def valid-rails #{:murakumo :kotoba :itonami-p2p})
+
+(defn- rail-lines
+  "The `profile rail` lines: point itonami profiles at one inference
+  rail. Verbatim from main.cljk."
+  [store targets rail dry-run?]
+  (if (or (not (contains? valid-rails rail)) (empty? targets))
+    {:exit 2 :lines ["usage: itonami-agent profile rail <p>|--all --to murakumo|kotoba|itonami-p2p [--dry-run]"]}
+    (let [n (atom 0)
+          lines (mapv (fn [t]
+                        (let [home (str store "/profiles/" t)
+                              m (bundle/read-manifest home)
+                              m' (when (some? m) (bundle/with-inference-rail m rail))]
+                          (cond
+                            (nil? m) (str "skip    " t "  no itonami.edn")
+                            (= m m') (str "keep    " t)
+                            :else (do (when-not dry-run? (bundle/write-manifest! home m'))
+                                      (swap! n inc)
+                                      (str (if dry-run? "would  " "wrote   ") t "  "
+                                           (some-> (get-in m [:placement :inference-rail]) name)
+                                           " -> " (name rail))))))
+                      targets)]
+      {:exit 0 :lines (conj lines (str @n " profile(s) " (if dry-run? "would be " "") "pointed at " (name rail)))})))
+
+(defn- js-parse-int
+  "JS parseInt with radix 10: optional sign and leading digits, the
+  rest ignored; nil when the text starts with no digits."
+  [s]
+  (let [t (str/replace (str s) #"^\s+" "")
+        m (re-find #"^[+-]?\d+" t)]
+    (when m
+      (let [neg? (str/starts-with? m "-")
+            ds (str/replace m #"^[+-]" "")
+            n (reduce (fn [a ch] (+ (* a 10) (get bundle/hex-digit (str ch) 0))) 0 ds)]
+        (if neg? (- n) n)))))
+
+(defn- runs-for
+  "One `cron runs` invocation against a store: execution rows newest
+  first, the take-last limit verbatim (the legacy command keeps the
+  oldest rows of that order), joined with the run receipts in
+  cron/itonami-runs.jsonl. A missing ledger reads as no runs — the
+  legacy open-db creates the file there; otehon leaves reads
+  side-effect-free."
+  [store name limit-raw]
+  (let [home (str store "/profiles/" name)
+        db (str home "/cron/executions.db")
+        rows (if (hio/file? db)
+               (try (hio/sqlite-rows db "SELECT * FROM executions ORDER BY claimed_at DESC,id DESC" [])
+                    (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                      {:error (ex-message e)}))
+               [])]
+    (if (:error rows)
+      {:exit 1 :lines [(str "runs: " (:error rows))]}
+      (let [f (str home "/cron/itonami-runs.jsonl")
+            details (if (hio/file? f)
+                      (mapv hio/parse-json (remove str/blank? (str/split-lines (hio/slurp-utf8 f))))
+                      [])
+            by-id (into {} (keep (fn [r] (when-let [id (get r "execution_id")] [id r])) details))
+            n (or (js-parse-int (if (nil? limit-raw) "20" (str limit-raw))) 0)]
+        {:exit 0
+         :lines (mapv (fn [r]
+                        (let [detail (by-id (get r "id"))]
+                          (str (text/pad-end (str (get r "status")) 9)
+                               "  job=" (get r "job_id") "  " (get r "claimed_at")
+                               "  id=" (get r "id") "  source=" (get r "source")
+                               (when (get r "delivery_outcome")
+                                 (str "  delivery=" (get r "delivery_outcome")))
+                               (when detail
+                                 (str "  " (get detail "provider") "/" (get detail "model")))
+                               (when (and detail (get detail "peer"))
+                                 (str "  peer=" (get detail "peer"))))))
+                      (take-last n rows))}))))
+
+(defn- incidents-for
+  "One `cron incidents` invocation: list every incident newest first,
+  or close one signature. The ack UPDATE is fenced on the current
+  state, so closing an unknown or already-closed signature answers the
+  same way without a changes count."
+  [store name sub id]
+  (let [home (str store "/profiles/" name)
+        db (str home "/cron/executions.db")]
+    (if (= (str sub) "ack")
+      (let [rows (if (hio/file? db)
+                   (try (hio/sqlite-rows db "SELECT state FROM cron_incidents WHERE id=?" [(str id)])
+                        (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                          {:error (ex-message e)}))
+                   [])]
+        (cond
+          (:error rows) {:exit 1 :lines [(str "incidents: " (:error rows))]}
+          (and (seq rows) (not= "closed" (get (first rows) "state")))
+          (do (hio/sqlite-run! db "UPDATE cron_incidents SET state='closed',acked_at=?,closed_at=? WHERE id=? AND state!='closed'"
+                               ["2026-11-08T00:00:00+09:00" "2026-11-08T00:00:00+09:00" (str id)])
+              {:exit 0 :lines [(str "closed incident " id)]})
+          :else {:exit 2 :lines [(str "no such incident: " id)]}))
+      (let [rows (if (hio/file? db)
+                   (try (hio/sqlite-rows db "SELECT * FROM cron_incidents ORDER BY last_seen_at DESC,id DESC" [])
+                        (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                          {:error (ex-message e)}))
+                   [])]
+        (if (:error rows)
+          {:exit 1 :lines [(str "incidents: " (:error rows))]}
+          {:exit 0
+           :lines (mapv (fn [r]
+                          (str (text/pad-end (str (get r "state")) 9)
+                               " job=" (get r "job_id")
+                               " type=" (get r "failure_type")
+                               " id=" (get r "id")
+                               " last=" (get r "last_seen_at")))
+                        rows)})))))
+
 (defn- ops-profile [c scratch]
   (let [dir (scratch-case-dir scratch c)]
     (hio/mkdirs! dir)
     (seed-files! dir (:seed c {}))
     (let [req (:request c {})
-          r (case (str (:sub req "list"))
+          sub (str (:sub req "list"))
+          targets (if (:all req) (listing-names dir) [(or (:name req) "default")])
+          env (or (:env req) (hio/all-env))
+          r (case sub
               "list" {:exit 0 :lines (profile-list-lines dir)}
               "show" (profile-show-lines dir (or (:name req) "default"))
-              {:exit 2 :lines [(str "unknown profile command: " (:sub req))]}
-              )]
-      (assoc r :messages (:lines r)))))
+              "check" (check-lines dir targets (boolean (:summary req)))
+              "readiness" (readiness-lines dir targets env (:model req))
+              "refresh" (refresh-lines dir targets (boolean (:dry-run req)))
+              "itonamify" (itonamify-lines dir targets (boolean (:force req)) (boolean (:dry-run req)))
+              "rail" (rail-lines dir targets
+                                 (when (:to req) (keyword (str (:to req))))
+                                 (boolean (:dry-run req)))
+              {:exit 2 :lines [(str "unknown profile command: " (:sub req))]})
+          manifest-file (when (contains? #{"refresh" "itonamify" "rail"} sub)
+                          (let [p (str dir "/profiles/" (or (:name req) "default") "/itonami.edn")]
+                            (when (hio/file? p) (hio/slurp-utf8 p))))]
+      (assoc (cond-> r manifest-file (assoc :manifest-file manifest-file))
+             :messages (:lines r)))))
+
+(defn- ops-runs [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [req (:request c {})
+          home (str dir "/profiles/" (or (:profile req) "default"))]
+      (when (seq (:setup-sql req))
+        (hio/mkdirs! (str home "/cron"))
+        (hio/sqlite-exec! (str home "/cron/executions.db")
+                          (str/join ";\n" (concat ["DROP TABLE IF EXISTS executions"
+                                                   "DROP TABLE IF EXISTS cron_incidents"]
+                                                  (:setup-sql req)))))
+      (let [r (runs-for dir (or (:profile req) "default") (:limit req))]
+        (assoc r :messages (:lines r))))))
+
+(defn- ops-incidents [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [req (:request c {})
+          home (str dir "/profiles/" (or (:profile req) "default"))]
+      (when (seq (:setup-sql req))
+        (hio/mkdirs! (str home "/cron"))
+        (hio/sqlite-exec! (str home "/cron/executions.db")
+                          (str/join ";\n" (concat ["DROP TABLE IF EXISTS executions"
+                                                   "DROP TABLE IF EXISTS cron_incidents"]
+                                                  (:setup-sql req)))))
+      (let [r (incidents-for dir (or (:profile req) "default") (:sub req) (:id req))]
+        (assoc r :messages (:lines r))))))
 
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
@@ -1026,7 +1316,7 @@
           :else (recur (next as) (update m :pos conj (first as))))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list|show <name>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] [--model M] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -1518,16 +1808,43 @@
                         r (notepad-for (str a) b verb k v (:iso (host-now)))]
                     (doseq [l (:lines r)] (println l))
                     (:exit r)))
-      "profile" (let [sub (or a "list")]
-                  (cond (= sub "list")
-                        (let [r {:exit 0 :lines (profile-list-lines (pause/store-root hio/env))}]
-                          (doseq [l (:lines r)] (println l))
-                          (:exit r))
-                        (= sub "show")
-                        (let [r (profile-show-lines (pause/store-root hio/env) (or b "default"))]
-                          (doseq [l (:lines r)] (println l))
-                          (:exit r))
-                        :else (do (println (str "unknown profile command: " sub)) 2)))
+      "profile" (let [sub (or a "list")
+                    root (pause/store-root hio/env)
+                    tail (filterv some? (cons b more))
+                    flag? (fn [f] (boolean (some #{f} tail)))
+                    opt-val (fn [f] (second (drop-while #(not= % f) tail)))
+                    targets (if (flag? "--all") (listing-names root) [(or b "default")])
+                    run (fn [r] (doseq [l (:lines r)] (println l)) (:exit r))]
+                (cond (= sub "list")
+                      (run {:exit 0 :lines (profile-list-lines root)})
+                      (= sub "show")
+                      (run (profile-show-lines root (or b "default")))
+                      (= sub "check")
+                      (run (check-lines root targets (flag? "--summary")))
+                      (= sub "readiness")
+                      (run (readiness-lines root targets (hio/all-env) (opt-val "--model")))
+                      (= sub "refresh")
+                      (run (refresh-lines root targets (flag? "--dry-run")))
+                      (= sub "itonamify")
+                      (run (itonamify-lines root targets (flag? "--force") (flag? "--dry-run")))
+                      (= sub "rail")
+                      (run (rail-lines root targets
+                                       (when-let [t (opt-val "--to")] (keyword (str t)))
+                                       (flag? "--dry-run")))
+                      :else (do (println (str "unknown profile command: " sub)) 2)))
+      "runs" (if-not a
+               (usage)
+               (let [tail (filterv some? (cons b more))
+                     lim (second (drop-while #(not= % "--limit") tail))
+                     r (runs-for a (or b "default") lim)]
+                 (doseq [l (:lines r)] (println l))
+                 (:exit r)))
+      "incidents" (if-not a
+                    (usage)
+                    (let [[sub id] more
+                          r (incidents-for a (or b "default") sub id)]
+                      (doseq [l (:lines r)] (println l))
+                      (:exit r)))
       "cas-put" (let [files (if b (cons b more) [])]
                   (if (or (nil? a) (empty? files))
                     (usage)

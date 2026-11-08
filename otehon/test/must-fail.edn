@@ -56,4 +56,20 @@
    :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
           "cron/jobs.json" "{\"jobs\": []}"}
    :request {:job "nightly"}
-   :expect {:status "ok"}}]}]
+   :expect {:status "ok"}}
+  ;; a wrong profile list row (proves list rows are asserted)
+  {:id :must-fail/profile-wrong-row :op :profile
+   :seed {"profiles/p1/itonami.edn" "{:profile/id \"p1\" :runtime {:scheduler :itonami}}"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n"}
+   :request {}
+   :expect {:exit 0 :lines ["WRONG"]}}
+  ;; a wrong runs line (proves execution rows are asserted)
+  {:id :must-fail/runs-wrong-line :op :runs
+   :request {:profile "p1" :setup-sql ["CREATE TABLE executions (id TEXT PRIMARY KEY, job_id TEXT, source TEXT, status TEXT, claimed_at TEXT, delivery_outcome TEXT)"
+                                       "INSERT INTO executions (id, job_id, source, status, claimed_at, delivery_outcome) VALUES ('e1', 'j1', 'tick', 'completed', '2026-11-08T00:00:01+09:00', NULL)"]}
+   :expect {:exit 0 :lines ["WRONG"]}}
+  ;; a wrong incidents line (proves incident rows are asserted)
+  {:id :must-fail/incidents-wrong-line :op :incidents
+   :request {:profile "p1" :setup-sql ["CREATE TABLE cron_incidents (id TEXT PRIMARY KEY, job_id TEXT, state TEXT, failure_type TEXT, first_seen_at TEXT, last_seen_at TEXT)"
+                                       "INSERT INTO cron_incidents (id, job_id, state, failure_type, first_seen_at, last_seen_at) VALUES ('s1', 'j1', 'detected', 'timeout', '2026-11-08T00:00:01+09:00', '2026-11-08T00:00:01+09:00')"]}
+   :expect {:exit 0 :lines ["WRONG"]}}]}]

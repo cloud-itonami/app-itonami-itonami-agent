@@ -244,6 +244,26 @@
      :cljs (try (boolean (.isSymbolicLink (.lstatSync fs path)))
                 (catch :default _ false))))
 
+(defn remove-dir!
+  "Remove one EMPTY directory. False when it is missing or not empty."
+  [path]
+  #?(:lpy (try (do (.rmdir os path) true) (catch python/Exception _ false))
+     :clj (try (.delete (java.io.File. ^String path)) (catch Exception _ false))
+     :cljs (try (do (.rmdirSync fs path) true) (catch :default _ false))))
+
+(defn wipe-dir!
+  "Empty `dir` in place: every file and subdir goes, the dir itself
+  stays. Links are unlinked, never followed. A missing dir is a no-op."
+  [dir]
+  (letfn [(go [d]
+            (doseq [n (read-dir-names d)]
+              (let [p (str d "/" n)]
+                (cond (symlink? p) (delete-file! p)
+                      (dir? p) (do (go p) (remove-dir! p))
+                      (file? p) (delete-file! p)
+                      :else nil))))]
+    (when (dir? dir) (go dir))))
+
 (defn cwd
   "This process's working directory."
   []
@@ -309,6 +329,23 @@
   #?(:lpy (len (.encode (str s) "utf-8"))
      :clj (count (.getBytes (str s) "UTF-8"))
      :cljs (.-length (.encode (js/TextEncoder.) (str s)))))
+
+(defn walk-files!
+  "Relative paths of the regular files under dir, sorted; `skip?` drops
+  relative paths; symlinks never descend."
+  [dir skip?]
+  (letfn [(go [rel]
+            (let [names (read-dir-names (if (= rel "") dir (str dir "/" rel)))]
+              (mapcat (fn [n]
+                        (let [r (if (= rel "") n (str rel "/" n))
+                              a (str dir "/" r)]
+                          (cond (skip? r) []
+                                (symlink? a) []
+                                (dir? a) (go r)
+                                (file? a) [r]
+                                :else [])))
+                      (sort names))))]
+    (vec (sort (go "")))))
 
 (defn random-hex
   "N random bytes as lowercase hex."
