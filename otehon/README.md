@@ -25,6 +25,8 @@ otehon/bin/itonami-otehon <basilisp|bb|nbb> store-plan --direction import|export
 otehon/bin/itonami-otehon <basilisp|bb|nbb> pause      [reason words]...   (the store is ITONAMI_DIR, else ~/.itonami)
 otehon/bin/itonami-otehon <basilisp|bb|nbb> resume
 otehon/bin/itonami-otehon <basilisp|bb|nbb> status
+otehon/bin/itonami-otehon <basilisp|bb|nbb> model      <dir> [NAME] [--provider P] [--model M]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> fallback   <dir> [-m M] [--provider P]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> test       otehon/test/cases.edn
 otehon/bin/run-shared-cases [basilisp bb nbb]
 ```
@@ -55,9 +57,10 @@ the owner, 64 usage.
 | `src/itonami/otehon/rail.cljc` | Hermes / itonami rail verdicts, inference target | `kotoba/itonami/rail.kotoba`, Hermes `cron/scheduler.py` order |
 | `src/itonami/otehon/cron.cljc` | jobs.json, cron hint, toolsets, plan | `src/itonami/agent/cron.cljk` |
 | `src/itonami/otehon/profile.cljc` | load, check, dry-run (pure) | `profile.cljk` |
-| `src/itonami/otehon/io.cljc` | files, JSON, EDN, exit, clock, listing, utf8 writes, pid liveness: the only host code | — |
+| `src/itonami/otehon/io.cljc` | files, JSON, EDN, exit, clock, listing, utf8 writes, pid liveness, atomic replace: the only host code | — |
 | `src/itonami/otehon/pause.cljc` | emergency-stop marker paths, record, messages (pure) | `src/itonami/agent/pause.cljk`, `main.cljk` pause/resume-cmd |
 | `src/itonami/otehon/status.cljc` | store status lines (pure) | `main.cljk` status-cmd |
+| `src/itonami/otehon/model.cljc` | model/provider display, textual config edit (pure) | `provider.cljk` (chain/resolution display), `profile.cljk` (set-model-text, yaml-scalar) |
 | `src/itonami/otehon/cli.cljc` | commands, canonical print, shared-case runner | — |
 | `src/itonami/otehon/tick.cljc` | due jobs, next fire times (pure cron math) | `src/itonami/agent/cron.cljk` `parse-cron`, `next-run`, `due?` |
 | `src/itonami/otehon/store.cljc` | import/export copy plan (pure) | `src/itonami/agent/profile.cljk` `copy-profile!` |
@@ -133,21 +136,22 @@ placement standard live in [PORTABILITY.md](./PORTABILITY.md).
 
 `bin/run-shared-cases` runs on each runner:
 
-- `test/cases.edn` — 146 cases, 27 of them negative controls. Each
+- `test/cases.edn` — 165 cases, 27 of them negative controls. Each
   negative control with an edit is also run on the unedited fixture and
-  must then *not* match, so the edit causes the rejection. The five
-  pause/status cases touch a real scratch store (`test/scratch/`,
-  ignored) instead of fixture text: `:seed` writes files, `:at` pins the
-  marker timestamp, and adversarial seeds (garbage pid, unparsable peers,
-  unnamable profile dirs) are asserted as positive cases — the legacy
-  commands never refuse these paths, so there is nothing for a negative
-  control to catch.
-- `test/must-fail.edn` — seven deliberately wrong cases (one a no-op edit).
-  Every runner must report all seven as FAIL; otherwise the harness could not
+  must then *not* match, so the edit causes the rejection. The store
+  cases (pause/status/model/fallback) touch a real scratch store
+  (`test/scratch/`, ignored) instead of fixture text: `:seed` writes
+  files, `:at` pins the marker timestamp, and adversarial seeds (garbage
+  pid, unparsable peers, unnamable profile dirs, folded config text,
+  non-string provider values) are asserted as positive cases — paths the
+  legacy commands never refuse carry no negative control.
+- `test/must-fail.edn` — nine deliberately wrong cases (one a no-op edit).
+  Every runner must report all nine as FAIL; otherwise the harness could not
   tell a broken core from a working one.
 - the canonical output of `check` / `dry-run` on the fixtures, a
   pause → status → resume → resume CLI flow on a scratch store
-  (timestamps normalized), and the case summary, compared byte for byte
+  (timestamps normalized), a model show → fallback → set → show flow on
+  another scratch store, and the case summary, compared byte for byte
   across runners.
 
 CI: `.github/workflows/oracle-otehon-cljc.yml`, an oracle-only job with
@@ -185,6 +189,12 @@ Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
    API/command denominator and the remaining slices (S2 host execution,
    S3b model/fallback/doctor/sessions, S4 store writes, S5 messaging,
    S6 tool backends).
+8. ~~Model display and textual set~~ — done 2026-11-08 (JUN-1036 S3b):
+   `model`/`fallback` show the legacy lines; a set rewrites config.yaml
+   textually (comments and key order survive) through an atomic
+   sibling-rename that preserves the target mode (new files 0600),
+   following symlinks like the legacy writer. Nineteen shared cases plus
+   two must-fail controls. What stays open: the live inference calls.
 
 Measured runs and their versions: `docs/evidence/otehon-cljc-20261107.md`,
 `docs/evidence/otehon-cljc-20261108.md`,
@@ -210,4 +220,6 @@ copy census with `--copies N` threshold and per-peer gates),
 `verify-asymmetric` + `market-verify` demo suite; native handoff contract),
 `docs/evidence/otehon-pause-status-20261108.md` (146 shared cases;
 `pause`/`resume`/`status` verbatim with the legacy CLI, plus the
-API/command compat matrix in `otehon/COMPAT.md`).
+API/command compat matrix in `otehon/COMPAT.md`),
+`docs/evidence/otehon-model-20261108.md` (165 shared cases;
+`model`/`fallback` verbatim, textual config edit with atomic replace).

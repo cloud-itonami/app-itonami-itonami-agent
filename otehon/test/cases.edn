@@ -669,4 +669,106 @@
                     "  h1                              scheduler=hermes  jobs=0"
                     "gateway (cron tick): not running"
                     "gateway serve: not running"
-                    "peers: ? trusted"]}}]}
+                    "peers: ? trusted"]}}
+
+  ;; ------------------------------------------------------------ model / fallback (JUN-1036 S3b)
+  ;; :seed writes config.yaml text; :request carries CLI-shaped args
+  ;; ({:pos [...] :run-model ... :provider {:present :value}}).
+  {:id :model/show-defaults :op :model
+   :seed {"config.yaml" "# operator config — keep me\nmodel:\n  default: mishima\n  provider: murakumo\ncron:\n  model: digest\n  model_provider: openrouter\nfallback_providers:\n  - provider: murakumo\n    model: mishima\n  - provider: openai\n    model: gpt-5\nproviders:\n  murakumo:\n    base_url: https://api.murakumo.cloud/v1\n    key_env: MURAKUMO_API_TOKEN\n    models:\n      mishima:\n        timeout_seconds: 300\n"}
+   :expect {:lines ["model:     digest   (cron.model)"
+                    "provider:  openrouter   (cron.model_provider)"
+                    "chain:"
+                    "  1. openrouter/digest"
+                    "  2. murakumo/mishima"
+                    "  3. openai/gpt-5"]}}
+  {:id :model/show-override-pins :op :model
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"}
+   :request {:pos [] :run-model "k2" :provider {:present true :value "kotoba"}}
+   :expect {:lines ["model:     k2   (override (-m / job pin))"
+                    "provider:  kotoba   (override (--provider / job pin))"
+                    "chain:"
+                    "  1. kotoba/k2"]}}
+  {:id :model/set-keeps-comments :op :model
+   :seed {"config.yaml" "# keep me\nmodel:\n  default: mishima # main model\n  # provider comment\nother: 1\n"}
+   :request {:pos ["k2-pro"] :provider {:present true :value "murakumo"}}
+   :expect {:written "# keep me\nmodel:\n  default: k2-pro # main model\n  # provider comment\n  provider: murakumo\nother: 1\n"
+            :lines ["model:     k2-pro   (model.default)"
+                    "provider:  murakumo   (override (--provider / job pin))"
+                    "(written to config.yaml)"
+                    "chain:"
+                    "  1. murakumo/k2-pro"]}}
+  {:id :model/set-quotes-word :op :model
+   :seed {"config.yaml" "model:\n  default: x\n  provider: murakumo\n"}
+   :request {:pos ["hello world"] :provider {:present false}}
+   :expect {:written "model:\n  default: \"hello world\"\n  provider: murakumo\n"
+            :lines ["model:     hello world   (model.default)"
+                    "provider:  murakumo   (model.provider)"
+                    "(written to config.yaml)"
+                    "chain:"
+                    "  1. murakumo/hello world"]}}
+  {:id :model/set-quotes-coerced :op :model
+   :seed {"config.yaml" "model:\n  default: x\n"}
+   :request {:pos ["true"] :provider {:present false}}
+   :expect {:written "model:\n  default: \"true\"\n"
+            :lines ["model:     true   (model.default)"
+                    "provider:     (unset)"
+                    "(written to config.yaml)"
+                    "chain:"
+                    "  1. /true"]}}
+  {:id :model/set-refuses-folded-file :op :model
+   :seed {"config.yaml" "model:\n  default: \"abc\ncron: {}\n"}
+   :request {:pos ["k2"]}
+   :expect {:status :refused
+            :reason "refusing to edit a folded multi-line value (an unclosed quote swallows the file) — unwrap it by hand first"}}
+  {:id :model/set-refuses-sequence-block :op :model
+   :seed {"config.yaml" "model:\n  - a\n  - b\n"}
+   :request {:pos ["k2"]}
+   :expect {:status :refused
+            :reason "refusing to edit a model block that is a sequence, not a mapping"}}
+  {:id :model/arg-too-many :op :model
+   :request {:pos ["a" "b"] :provider {:present false}}
+   :expect {:error "usage: itonami-agent model [NAME] [--provider P] [--profile P]"}}
+  {:id :model/arg-combine :op :model
+   :request {:pos ["x"] :run-model "y" :provider {:present false}}
+   :expect {:error "model NAME and -m/--model cannot combine: NAME writes the default, -m overrides one run"}}
+  {:id :model/arg-provider-bare :op :model
+   :request {:pos [] :provider {:present true}}
+   :expect {:error "--provider must be a provider name"}}
+  {:id :model/arg-provider-dash :op :model
+   :request {:pos [] :provider {:present true :value "-x"}}
+   :expect {:error "--provider must be a provider name"}}
+  {:id :model/arg-provider-nonstr :op :model
+   :request {:pos [] :provider {:present true :value 42}}
+   :expect {:error "--provider must be a provider name"}}
+  {:id :model/arg-blank-name :op :model
+   :request {:pos ["   "] :provider {:present false}}
+   :expect {:error "model name must be non-empty"}}
+  {:id :fallback/show :op :fallback
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\ncron:\n  model: digest\n  model_provider: openrouter\nfallback_providers:\n  - provider: murakumo\n    model: mishima\n  - provider: openai\n    model: gpt-5\n"}
+   :expect {:lines ["fallback 1. murakumo/mishima"
+                    "fallback 2. openai/gpt-5"]}}
+  {:id :fallback/pinned-run :op :fallback
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"}
+   :request {:pos [] :run-model "k2" :provider {:present false}}
+   :expect {:lines ["no fallback hops in the effective chain"
+                    "(pinned run — fallback is disabled)"]}}
+  {:id :fallback/arg-usage :op :fallback
+   :request {:pos ["x"]}
+   :expect {:error "usage: itonami-agent fallback [--profile P] [-m model]"}}
+  {:id :model/args-flags :op :model
+   :seed {"config.yaml" "model:\n  default: mishima\n"}
+   :args ["--provider" "murakumo"]
+   :expect {:lines ["model:     mishima   (model.default)"
+                    "provider:  murakumo   (override (--provider / job pin))"
+                    "chain:"
+                    "  1. murakumo/mishima"]}}
+  {:id :model/args-bare-provider :op :model
+   :seed {"config.yaml" "model:\n  default: mishima\n"}
+   :args ["--provider"]
+   :expect {:error "--provider must be a provider name"}}
+  {:id :fallback/args-flags :op :fallback
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"}
+   :args ["-m" "k2"]
+   :expect {:lines ["no fallback hops in the effective chain"
+                    "(pinned run — fallback is disabled)"]}}]}]

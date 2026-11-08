@@ -12,6 +12,8 @@
     pause      [reason words]...   (the store is ITONAMI_DIR, else ~/.itonami)
     resume
     status
+    model      <dir> [NAME] [--provider P] [--model M]
+    fallback   <dir> [-m M] [--provider P]
     cas-put    <store> <file>...
     cas-get    <store> <sha> <out>
     cas-verify <store>
@@ -39,6 +41,7 @@
             [itonami.otehon.io :as hio]
             [itonami.otehon.pause :as pause]
             [itonami.otehon.status :as status]
+            [itonami.otehon.model :as model]
             [itonami.otehon.profile :as profile]
             [itonami.otehon.yakuwari :as yakuwari]
             [itonami.otehon.yaml :as yaml]
@@ -109,7 +112,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status)
+(declare ops-pause ops-status ops-model ops-fallback)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -130,6 +133,8 @@
   (case (:op c)
     :pause (ops-pause c scratch)
     :status (ops-status c scratch)
+    :model (ops-model c scratch)
+    :fallback (ops-fallback c scratch)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -335,6 +340,80 @@
     (let [r (gather-status dir)]
       (assoc r :lines (status/render-status r)))))
 
+;; ---------------------------------------------------------------- model ops
+
+(defn- model-flags
+  "Split model/fallback tail args into positionals, the -m/--model run
+  override and --provider. Value flags consume the next token verbatim
+  (even a dash-prefixed one, even when missing — the legacy parse-args
+  rule, so a bare --provider refuses the same way). `--model=` /
+  `--provider=` spellings also work."
+  [args]
+  (loop [as (seq args) pos [] run-model nil provider {:present false :value nil}]
+    (cond (nil? as) {:pos pos :run-model run-model :provider provider}
+          (or (= "-m" (first as)) (= "--model" (first as)))
+          (if (second as)
+            (recur (nnext as) pos (second as) provider)
+            (recur (next as) pos run-model provider))
+          (text/starts-with? (first as) "--model=")
+          (recur (next as) pos (subs (first as) 8) provider)
+          (= "--provider" (first as))
+          (if (second as)
+            (recur (nnext as) pos run-model {:present true :value (second as)})
+            (recur (next as) pos run-model {:present true :value nil}))
+          (text/starts-with? (first as) "--provider=")
+          (recur (next as) pos run-model {:present true :value (subs (first as) 11)})
+          :else (recur (next as) (conj pos (first as)) run-model provider))))
+
+(defn- resolve-in [dir flags]
+  (let [prof (load-dir dir (hio/read-text-fn dir))]
+    (model/resolution (:config prof)
+                      {:model (:run-model flags) :provider (get-in flags [:provider :value])}
+                      (hio/env "ITONAMI_PEER_PORT"))))
+
+(defn- model-input
+  "Case input for the :model / :fallback ops: raw CLI tail tokens in
+  :args (exercising the flag parser), or a structured :request (which can
+  also carry values tokens cannot, like a non-string provider)."
+  [c]
+  (if (contains? c :args)
+    (model-flags (:args c))
+    {:pos (get-in c [:request :pos] [])
+     :run-model (get-in c [:request :run-model])
+     :provider (get-in c [:request :provider] {:present false})}))
+
+(defn- ops-model [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [{:keys [pos run-model provider]} (model-input c)
+          req (model/model-request pos run-model provider)]
+      (if (:error req)
+        req
+        (if-let [s (:set req)]
+          (let [p (str dir "/config.yaml")
+                cur (when (hio/file? p) (hio/slurp-utf8 p))]
+            (try
+              (let [written (model/set-model-text (or cur "") (:model s) (:provider s))]
+                (hio/mkdirs! dir)
+                (hio/replace-file! p written)
+                (let [r (resolve-in dir {:run-model run-model :provider provider})]
+                  {:written written :lines (model/model-lines r true)}))
+              (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                {:status :refused :reason (ex-message e)})))
+          (let [r (resolve-in dir {:run-model run-model :provider provider})]
+            {:lines (model/model-lines r false)}))))))
+
+(defn- ops-fallback [c scratch]
+  (let [dir (scratch-case-dir scratch c)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [{:keys [pos run-model provider]} (model-input c)]
+      (if (seq pos)
+        {:error "usage: itonami-agent fallback [--profile P] [-m model]"}
+        (let [r (resolve-in dir {:run-model run-model :provider provider})]
+          {:lines (model/fallback-lines r)})))))
+
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
         base (if dir (hio/read-text-fn dir) (constantly nil))
@@ -376,7 +455,7 @@
           :else (recur (next as) caps))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -816,6 +895,36 @@
       "status" (let [r (gather-status (pause/store-root hio/env))]
                  (doseq [l (status/render-status r)] (println l))
                  0)
+      "model" (if-not a
+                (usage)
+                (let [{:keys [pos run-model provider]} (model-flags (cons b more))
+                      req (model/model-request pos run-model provider)]
+                  (if (:error req)
+                    (do (println (:error req)) 2)
+                    (let [flags {:run-model run-model :provider provider}]
+                      (if-let [s (:set req)]
+                        (let [p (str a "/config.yaml")
+                              cur (when (hio/file? p) (hio/slurp-utf8 p))]
+                          (try
+                            (let [written (model/set-model-text (or cur "") (:model s) (:provider s))]
+                              (hio/mkdirs! a)
+                              (hio/replace-file! p written)
+                              (let [r (resolve-in a flags)]
+                                (doseq [l (model/model-lines r true)] (println l))
+                                0))
+                            (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                              (println (ex-message e)) 1)))
+                        (let [r (resolve-in a flags)]
+                          (doseq [l (model/model-lines r false)] (println l))
+                          0))))))
+      "fallback" (if-not a
+                   (usage)
+                   (let [{:keys [pos run-model provider]} (model-flags (cons b more))]
+                     (if (seq pos)
+                       (do (println "usage: itonami-agent fallback [--profile P] [-m model]") 2)
+                       (let [r (resolve-in a {:run-model run-model :provider provider})]
+                         (doseq [l (model/fallback-lines r)] (println l))
+                         0))))
       "cas-put" (let [files (if b (cons b more) [])]
                   (if (or (nil? a) (empty? files))
                     (usage)

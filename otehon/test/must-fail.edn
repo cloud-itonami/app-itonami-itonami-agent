@@ -33,4 +33,13 @@
   {:id :must-fail/pause-lift-was-active :op :pause
    :steps [{:action "lift"}]
    :expect {:steps [{:action "lift" :was-active true :active false
-                     :message "resumed — emergency stop lifted"}]}}]}
+                     :message "resumed — emergency stop lifted"}]}}
+  ;; a wrong model line on a clean config
+  {:id :must-fail/model-wrong-line :op :model
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"}
+   :expect {:lines ["model:     WRONG   (model.default)"]}}
+  ;; a wrong rewritten text on a set
+  {:id :must-fail/model-wrong-written :op :model
+   :seed {"config.yaml" "model:\n  default: mishima\n"}
+   :request {:pos ["k2"]}
+   :expect {:written "WRONG"}}]}
