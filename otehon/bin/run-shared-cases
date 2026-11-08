@@ -47,6 +47,12 @@ for r in $runners; do
     sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{2}:[0-9]{2}/TS/' "$out/status-$r.txt"
     echo "resume"; ITONAMI_DIR="$root" "$run" "$r" resume; echo "exit $?"
     echo "resume idle"; ITONAMI_DIR="$root" "$run" "$r" resume; echo "exit $?"
+    mdir="$out/model-$r"; rm -rf "$mdir"; mkdir -p "$mdir"
+    cp "$fixtures/itonami-ok/config.yaml" "$mdir/config.yaml" 2>/dev/null || printf 'model:\n  default: mishima\n' > "$mdir/config.yaml"
+    echo "model show"; "$run" "$r" model "$mdir"; echo "exit $?"
+    echo "fallback show"; "$run" "$r" fallback "$mdir"; echo "exit $?"
+    echo "model set"; "$run" "$r" model "$mdir" k2-pro --provider murakumo; echo "exit $?"
+    echo "model show again"; "$run" "$r" model "$mdir"; echo "exit $?"
     grep -v '^:' "$out/$r.cases" | sed 's/, :runner "[^"]*"//'
   } > "$out/$r.canon" 2>> "$out/$r.err"
 done

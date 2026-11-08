@@ -165,6 +165,77 @@
      :clj (spit path s :encoding "UTF-8")
      :cljs (.writeFileSync fs path s "utf8")))
 
+(defn process-id
+  "This process's pid, for temp-file names."
+  []
+  #?(:lpy (.getpid os)
+     :clj (.pid (java.lang.ProcessHandle/current))
+     :cljs (.-pid js/process)))
+
+(defn- symlink-target
+  "Follow `path` to its link target, or nil when it is not a link (or the
+  target cannot be read — a dangling link is replaced, as in the legacy
+  config writer)."
+  [path]
+  (when #?(:lpy (.islink os/path path)
+           :clj (java.nio.file.Files/isSymbolicLink
+                 (.toPath (java.io.File. ^String path)))
+           :cljs (try (boolean (.isSymbolicLink (.lstatSync fs path)))
+                      (catch :default _ false)))
+    (try #?(:lpy (.realpath os/path path)
+            :clj (str (.toRealPath
+                       (.toPath (java.io.File. ^String path))
+                       (into-array java.nio.file.LinkOption [])))
+            :cljs (.realpathSync fs path))
+         (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil))))
+
+(defn replace-file!
+  "Atomically replace `path` with utf8 `text`: write a sibling temp file
+  and rename over the target. A symlink is followed to its target (a
+  dangling link is replaced). The target's mode is preserved; a new file
+  is created 0600 — the legacy set-config-model! contract, whose files
+  may hold literal auth headers. Returns the path written."
+  [path text]
+  (let [target (or (symlink-target path) path)
+        mode (try (if (file? target)
+                    #?(:lpy (bit-and 511 (.-st_mode (.stat os target)))
+                       :clj (bit-and 511 (int (java.nio.file.Files/getAttribute
+                                               (.toPath (java.io.File. ^String target))
+                                               "unix:mode"
+                                               (into-array java.nio.file.LinkOption
+                                                           [java.nio.file.LinkOption/NOFOLLOW_LINKS]))))
+                       :cljs (bit-and 511 (.-mode (.statSync fs target))))
+                    384)
+                  (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ 384))
+        tmp (str target ".tmp-" (process-id))
+        wrote? (try #?(:lpy (do (with-open [f (python/open tmp ** :mode "w" :encoding "utf-8")]
+                                  (.write f text))
+                                (.chmod os tmp mode)
+                                (.replace os tmp target)
+                                true)
+                        :clj (do (spit tmp text :encoding "UTF-8")
+                                 (java.nio.file.Files/setAttribute
+                                  (.toPath (java.io.File. ^String tmp))
+                                  "unix:mode" (int mode)
+                                  (into-array java.nio.file.LinkOption
+                                              [java.nio.file.LinkOption/NOFOLLOW_LINKS]))
+                                 (java.nio.file.Files/move
+                                  (.toPath (java.io.File. ^String tmp))
+                                  (.toPath (java.io.File. ^String target))
+                                  (into-array java.nio.file.CopyOption
+                                              [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                                               java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+                                 true)
+                        :cljs (do (.writeFileSync fs tmp text #js {:mode mode})
+                                  (.renameSync fs tmp target)
+                                  true))
+                    (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                      (delete-file! tmp)
+                      (throw e)))]
+    (when-not wrote?
+      (throw (ex-info "replace-file!: host write reported failure" {:path path})))
+    target))
+
 (defn pid-alive?
   "Whether `s` names a live process: digits only, in 2..2^31-1 (0 and 1
   are never a gateway owner), and the host still sees the owner.

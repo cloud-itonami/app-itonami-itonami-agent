@@ -27,8 +27,8 @@ covered by shared cases on all three runners.
 | `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check`, `store-plan` (import/export copy plan) | S4 remaining verbs |
 | `doctor` | `doctor-cmd` | — | S3b (needs readiness ports) |
 | `sessions [list]/show/resume` | `sessions-cmd` | — | S3b (sqlite host reads) |
-| `model [NAME] [--provider]` | `model-cmd` | — | S3b (resolution port + textual set) |
-| `fallback` | `fallback-cmd` | — | S3b |
+| `model [NAME] [--provider]` | `model-cmd` | `model` (positional dir, otehon convention) | done (JUN-1036 S3b) |
+| `fallback` | `fallback-cmd` | `fallback` (positional dir, otehon convention) | done (JUN-1036 S3b) |
 | `status` | `status-cmd` | `status` | done (JUN-1036 S3a) |
 | `pause [reason]` | `pause-cmd` | `pause` | done (JUN-1036 S3a) |
 | `resume` | `resume-cmd` | `resume` | done (JUN-1036 S3a) |
@@ -80,7 +80,8 @@ from source, the rest follow the module name until their slice lands.
 | `platform_adapters.cljk` *lane adapters* | — | planned S5 |
 | `process.cljk` | — | planned S2 |
 | `profile.cljk` *store layout* | `profile.cljc`, `status.cljc` (names), `store.cljc` | partial (verbs S4) |
-| `provider.cljk` *chain/resolution* | `rail.cljc` (job target) | partial (display chain S3b, calls S2) |
+| `provider.cljk` *chain/resolution* | `rail.cljc` (job target), `model.cljc` (display chain) | partial (live calls S2) |
+| `profile.cljk` *set-model-text* | `model.cljc` (verbatim port, throws as ex-info) | done for model/provider keys (JUN-1036 S3b) |
 | `quiet.cljk` | — | planned S2 |
 | `rails.cljk` | — | planned S3b |
 | `soul.cljk` | — | planned S4 |
