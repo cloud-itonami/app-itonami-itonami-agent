@@ -24,7 +24,7 @@ covered by shared cases on all three runners.
 | `mcp` | `mcp-cmd` | — | S6 |
 | `dapps` | `dapps-cmd` | — | S6 |
 | `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor), `notepad` (KV verbatim), `runs`/`incidents` (ledger reads: rows list, ack) | done run/tick-exec + notepad + ledger reads (JUN-1036 S2a/S2b/S4a/S4b; ledger/queue writes S5) |
-| `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check`, `store-plan` (import/export copy plan), `profile list/show/check/readiness/refresh/itonamify/rail` | S4 remaining verbs (adopt/release/soul/did/organize/import/export/hy-*; S6-owned check/readiness finding kinds deferred, recorded below) |
+| `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check`, `store-plan` (import/export copy plan), `profile list/show/check/readiness/refresh/itonamify/rail/refresh-bundle/release/import/export` (import/export executes the plan: definition byte copy + Hermes-side park on export) | S4 remaining verbs (adopt/soul/did/organize/hy-*; S6-owned check/readiness finding kinds deferred, recorded below) |
 | `doctor` | `doctor-cmd` | `doctor` (store verbs; S6-owned finding kinds deferred, recorded below) | done (JUN-1036 S3b) |
 | `sessions [list]/show/resume` | `sessions-cmd` | `sessions` (reads state.db read-only; resume refuses verbatim) | done (JUN-1036 S3b) |
 | `model [NAME] [--provider]` | `model-cmd` | `model` (positional dir, otehon convention) | done (JUN-1036 S3b) |
@@ -56,6 +56,15 @@ missing homes/malformed jobs differ in wording (same shape, same codes);
 a `runs --limit` with no leading digits prints no rows; store-case
 directories start empty per case (a previous runner's created files
 never leak into the next runner's case).
+S4c divergences: transfer homes put `default` under `profiles/` like
+every otehon profile (the legacy `home-in` default is the store root);
+scratch import/export has no host-root defaults (missing `--from` /
+`--to` refuses with the usage text); release with no name refuses
+(the legacy blank-name keep line is an accident of `load-profile(nil)`
+reading the store root); the parked stamp text is never asserted;
+import/export dry-run reports 0 copied, verbatim (the count lives in
+the real-copy branch only — itonamify/refresh/rail/release count
+their would-lines instead).
 
 ## Module checklist
 
@@ -95,7 +104,7 @@ from source, the rest follow the module name until their slice lands.
 | `platform_adapters.cljk` *lane adapters* | — | planned S5 |
 | `process.cljk` | — | planned S2 |
 | `profile.cljk` *store layout* | `profile.cljc`, `status.cljc` (names), `store.cljc` | partial (verbs S4) |
-| `profile.cljk` *bundle/manifest lifecycle* | `bundle.cljc` (bundle-files/manifest/cid, default-manifest, with-inference-rail, write-manifest!, with-bundle, refresh-bundle-cid) | done itonamify/refresh/rail (JUN-1036 S4b; did/soul/organize/adopt/release/import/export/hy-* stay later) |
+| `profile.cljk` *bundle/manifest lifecycle* | `bundle.cljc` (bundle-files/manifest/cid, default-manifest, with-inference-rail, write-manifest!, with-bundle, refresh-bundle-cid, copy-profile!) + `cli.cljc` (set-parked!, release/transfer lines) | done itonamify/refresh/rail/refresh-bundle/release/import/export (JUN-1036 S4b/S4c; did/soul/organize/adopt/hy-* stay later) |
 | `provider.cljk` *chain/resolution* | `rail.cljc` (job target), `model.cljc` (display chain) | partial (live calls S2) |
 | `profile.cljk` *set-model-text* | `model.cljc` (verbatim port, throws as ex-info) | done for model/provider keys (JUN-1036 S3b) |
 | `quiet.cljk` | — | planned S2 |
@@ -134,6 +143,10 @@ from source, the rest follow the module name until their slice lands.
   lines); `cron runs`/`history` rows with receipt join, `cron incidents`
   list/ack; 32 cases + 3 must-fail. Toolset/browser/oauth finding kinds
   stay S6; ledger/queue writes stay S5).
-- S4 remaining: adopt/release/soul/did/organize/import/export/hy-*.
+- S4c store verbs part 3 — done (JUN-1036: `profile refresh-bundle`,
+  `release` (manifest flip + marker lift, +`--all`), `import`/`export`
+  (definition byte copy + Hermes-side park on export, +`--force`);
+  21 cases + 3 must-fail. `did` waits on identity crypto (S5+)).
+- S4 remaining: adopt/soul/organize/hy-* (registry + Hy-conversion cluster).
 - S5 messaging: gateway/send/deliver/ledger/peers/chat.
 - S6 tools: backends + bridge/chat/vault/mcp/dapps CLIs.

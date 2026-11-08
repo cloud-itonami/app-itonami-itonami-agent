@@ -287,3 +287,36 @@
   (let [m (with-bundle home (read-manifest home))]
     (write-manifest! home m)
     m))
+
+(def definition-files
+  "What a profile IS, in the format both stores share. Verbatim from
+  profile.cljk: everything else under a profile home is state and stays
+  with the store that produced it."
+  ["SOUL.md" "profile.yaml" "config.yaml" ".env" "secrets.command"
+   "yakuwari.edn" "itonami.edn" "cron/jobs.json"])
+
+(def definition-dirs ["scripts" "skills"])
+
+(defn copy-profile!
+  "Copy one profile's DEFINITION from one store's home to another's,
+  byte for byte. State never crosses. Returns {:copied [rel ...]} in
+  definition order (files) then sorted walk order (dirs). A non-empty
+  target is refused unless `force?`. Verbatim from profile.cljk."
+  [from-home to-home force?]
+  (when-not (hio/dir? from-home)
+    (throw (ex-info (str "profile not found: " from-home) {})))
+  (when (and (not force?) (hio/dir? to-home) (seq (hio/read-dir-names to-home)))
+    (throw (ex-info (str "target is not empty: " to-home) {})))
+  (let [files (concat
+               (for [f definition-files
+                     :let [p (str from-home "/" f)]
+                     :when (hio/file? p)]
+                 [f p])
+               (for [d definition-dirs
+                     r (hio/walk-files! (str from-home "/" d)
+                                        #(str/starts-with? (hio/basename %) "."))
+                     :let [p (str from-home "/" d "/" r)]]
+                 [(str d "/" r) p]))]
+    (doseq [[rel p] files]
+      (hio/copy-file! p (str to-home "/" rel)))
+    {:copied (mapv first files)}))

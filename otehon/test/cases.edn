@@ -1452,4 +1452,185 @@
   {:id :incidents-empty :op :incidents
    :seed {}
    :request {:profile "p1"}
-   :expect {:exit 0 :lines []}}]}]
+   :expect {:exit 0 :lines []}}
+  ;; S4c: profile refresh-bundle rewrites the manifest CID
+  {:id :profile-refresh-bundle-ok :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}
+   :request {:sub "refresh-bundle" :name "ph"}
+   :expect {:exit 0 :lines ["refreshed ph bundle bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma"]}}
+  ;; S4c: profile refresh-bundle refuses a Hermes profile with the hint
+  {:id :profile-refresh-bundle-refuse :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "refresh-bundle" :name "ph"}
+   :expect {:exit 2 :lines ["profile ph is not itonamified; run profile itonamify first"]}}
+  ;; S4c: profile refresh-bundle on a missing home reads the same refusal
+  {:id :profile-refresh-bundle-missing :op :profile
+   :seed {}
+   :request {:sub "refresh-bundle" :name "ghost"}
+   :expect {:exit 2 :lines ["profile ghost is not itonamified; run profile itonamify first"]}}
+  ;; S4c: profile release keeps a Hermes-scheduled profile
+  {:id :profile-release-keep :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "release" :name "ph"}
+   :expect {:exit 0 :lines ["keep    ph  already Hermes-scheduled" "0 profile(s) released"] :parked? false}}
+  ;; S4c: profile release flips an itonami manifest back and lifts the marker
+  {:id :profile-release-released :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "profiles/ph/gateway.parked" "parked by hand\n"}
+   :request {:sub "release" :name "ph"}
+   :expect {:exit 0 :lines ["released ph: Hermes ticks cron again" "1 profile(s) released"] :parked? false
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}}
+  ;; S4c: profile release on a parked-only Hermes profile lifts the marker
+  {:id :profile-release-parked-only :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/ph/gateway.parked" "parked by hand\n"}
+   :request {:sub "release" :name "ph"}
+   :expect {:exit 0 :lines ["released ph: Hermes ticks cron again" "1 profile(s) released"] :parked? false}}
+  ;; S4c: profile release --dry-run prints would and changes nothing
+  {:id :profile-release-dry :op :profile
+   :seed {"profiles/ph/SOUL.md" "soul\n"
+          "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
+          "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/ph/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "profiles/ph/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "profiles/ph/gateway.parked" "parked by hand\n"}
+   :request {:sub "release" :name "ph" :dry-run true}
+   :expect {:exit 0 :lines ["would   release ph" "1 profile(s) would be released"] :parked? true
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Hermes profile\", :profile/hermes-compatible true, :profile/id \"ph\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}}
+  ;; S4c: profile release skips a missing home
+  {:id :profile-release-skip :op :profile
+   :seed {}
+   :request {:sub "release" :name "ghost"}
+   :expect {:exit 0 :lines ["skip    ghost  no such profile" "0 profile(s) released"]}}
+  ;; S4c: profile release without a name refuses (the legacy blank-name
+  ;; keep line is an accident of load-profile(nil), not a contract)
+  {:id :profile-release-usage :op :profile
+   :seed {}
+   :request {:sub "release"}
+   :expect {:exit 2 :lines ["usage: itonami-agent profile release <p>|--all [--dry-run]"]}}
+  ;; S4c: profile release --all mixes a release and a keep, in order
+  {:id :profile-release-all :op :profile
+   :seed {"profiles/p1/SOUL.md" "soul\n"
+          "profiles/p1/profile.yaml" "name: p1\n"
+          "profiles/p1/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/p1/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/p1/itonami.edn" "{:runtime {:scheduler :itonami}}\n"
+          "profiles/p1/gateway.parked" "parked by hand\n"
+          "profiles/p2/SOUL.md" "soul\n"
+          "profiles/p2/profile.yaml" "name: p2\n"
+          "profiles/p2/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/p2/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "release" :all true}
+   :expect {:exit 0 :lines ["released p1: Hermes ticks cron again" "keep    p2  already Hermes-scheduled" "1 profile(s) released"]}}
+  ;; S4c: profile import copies the definition byte for byte (the :copied
+  ;; rels are in definition order, then sorted script walk order)
+  {:id :profile-import-copied :op :profile
+   :seed {"hermes/profiles/p1/SOUL.md" "soul\n"
+          "hermes/profiles/p1/profile.yaml" "name: p1\ndescription: Import me\n"
+          "hermes/profiles/p1/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "hermes/profiles/p1/cron/jobs.json" "{\"jobs\": [{\"id\": \"j1\", \"schedule\": \"*-*-* *:00:00\", \"script\": \"a.py\", \"deliver\": \"local\", \"enabled\": true}]}\n"
+          "hermes/profiles/p1/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Import me\", :profile/hermes-compatible true, :profile/id \"p1\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"
+          "hermes/profiles/p1/scripts/a.py" "print(1)\n"}
+   :request {:sub "import" :from "hermes" :to "store" :name "p1"}
+   :expect {:exit 0 :messages-include ["copied  p1  6 file(s)" "1 profile(s) copied"]
+            :copied ["SOUL.md" "profile.yaml" "config.yaml" "itonami.edn" "cron/jobs.json" "scripts/a.py"]
+            :parked? false
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreicpbpfftzixwqio5cnvjg6rt36yfil4y2f35mng2bvdwjh2a4skma\", :files 5, :skills []}, :capabilities [], :cron? true, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Import me\", :profile/hermes-compatible true, :profile/id \"p1\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}}
+  ;; S4c: profile import --dry-run prints would and copies nothing
+  {:id :profile-import-dry :op :profile
+   :seed {"hermes/profiles/p1/SOUL.md" "soul\n"
+          "hermes/profiles/p1/profile.yaml" "name: p1\ndescription: Import me\n"
+          "hermes/profiles/p1/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "hermes/profiles/p1/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "import" :from "hermes" :to "store" :name "p1" :dry-run true}
+   :expect {:exit 0 :messages-include ["would  import p1" "0 profile(s) would be copied"] :copied []}}
+  ;; S4c: profile import refuses a non-empty target without --force
+  {:id :profile-import-force-refuse :op :profile
+   :seed {"hermes/profiles/p1/SOUL.md" "soul\n"
+          "hermes/profiles/p1/profile.yaml" "name: p1\n"
+          "hermes/profiles/p1/config.yaml" "model:\n  default: mishima\n"
+          "hermes/profiles/p1/cron/jobs.json" "{\"jobs\": []}\n"
+          "store/profiles/p1/keep.txt" "state stays\n"}
+   :request {:sub "import" :from "hermes" :to "store" :name "p1"}
+   :expect {:exit 0 :messages-include ["skip    p1  target is not empty" "0 profile(s) copied"]}}
+  ;; S4c: profile import --force overwrites the non-empty target
+  {:id :profile-import-force :op :profile
+   :seed {"hermes/profiles/p1/SOUL.md" "soul\n"
+          "hermes/profiles/p1/profile.yaml" "name: p1\ndescription: Import me\n"
+          "hermes/profiles/p1/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "hermes/profiles/p1/cron/jobs.json" "{\"jobs\": []}\n"
+          "store/profiles/p1/keep.txt" "state stays\n"}
+   :request {:sub "import" :from "hermes" :to "store" :name "p1" :force true}
+   :expect {:exit 0 :messages-include ["copied  p1  4 file(s)" "1 profile(s) copied"]
+            :copied ["SOUL.md" "profile.yaml" "config.yaml" "cron/jobs.json"]}}
+  ;; S4c: profile import skips a missing source home
+  {:id :profile-import-skip :op :profile
+   :seed {}
+   :request {:sub "import" :from "hermes" :to "store" :name "p1"}
+   :expect {:exit 0 :messages-include ["skip    p1  profile not found:" "0 profile(s) copied"]}}
+  ;; S4c: profile import --all with an empty source refuses
+  {:id :profile-import-usage :op :profile
+   :seed {}
+   :request {:sub "import" :from "hermes" :to "store" :all true}
+   :expect {:exit 2 :lines ["usage: itonami-agent profile import <p>|--all [--from DIR] [--force] [--dry-run]"]}}
+  ;; S4c: profile import without roots refuses (the legacy host-root
+  ;; defaults have no scratch meaning)
+  {:id :profile-import-roots :op :profile
+   :seed {"hermes/profiles/p1/SOUL.md" "soul\n"}
+   :request {:sub "import" :name "p1"}
+   :expect {:exit 2 :lines ["usage: itonami-agent profile import <p>|--all [--from DIR] [--force] [--dry-run]"]}}
+  ;; S4c: profile export parks the Hermes side of a Kotoba-scheduled copy
+  {:id :profile-export-parked :op :profile
+   :seed {"itonami/profiles/p1/SOUL.md" "soul\n"
+          "itonami/profiles/p1/profile.yaml" "name: p1\ndescription: Export me\n"
+          "itonami/profiles/p1/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "itonami/profiles/p1/cron/jobs.json" "{\"jobs\": []}\n"
+          "itonami/profiles/p1/itonami.edn" ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreix\", :files 1, :skills []}, :capabilities [], :cron? false, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Export me\", :profile/hermes-compatible true, :profile/id \"p1\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}
+   :request {:sub "export" :from "itonami" :to "hermes" :name "p1"}
+   :expect {:exit 0 :messages-include ["copied  p1  5 file(s)" "1 profile(s) copied"]
+            :copied ["SOUL.md" "profile.yaml" "config.yaml" "itonami.edn" "cron/jobs.json"]
+            :parked? true
+            :manifest-file ";; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:\n;; Hermes ignores this file; removing it returns the profile to plain Hermes.\n{:bundle {:cid \"bafkreix\", :files 1, :skills []}, :capabilities [], :cron? false, :inference {:authorities [\"api.murakumo.cloud\"], :deny-hosts [\"openrouter.ai\"], :rails [:murakumo]}, :itonami/schema \"cloud.itonami.profile.v2\", :placement {:inference-rail :murakumo, :mode :p2p, :order [:peer :local], :peers :trusted}, :profile/description \"Export me\", :profile/hermes-compatible true, :profile/id \"p1\", :runtime {:engine :itonami-agent, :scheduler :itonami}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}\n"}}
+  ;; S4c: profile export of a Hermes-scheduled profile parks nothing
+  {:id :profile-export-no-park :op :profile
+   :seed {"itonami/profiles/p1/SOUL.md" "soul\n"
+          "itonami/profiles/p1/profile.yaml" "name: p1\ndescription: Export me\n"
+          "itonami/profiles/p1/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "itonami/profiles/p1/cron/jobs.json" "{\"jobs\": []}\n"
+          "itonami/profiles/p1/scripts/a.py" "print(1)\n"}
+   :request {:sub "export" :from "itonami" :to "hermes" :name "p1"}
+   :expect {:exit 0 :messages-include ["copied  p1  5 file(s)" "1 profile(s) copied"] :parked? false}}
+  ;; S4c: profile export without --to refuses
+  {:id :profile-export-usage :op :profile
+   :seed {"itonami/profiles/p1/SOUL.md" "soul\n"}
+   :request {:sub "export" :from "itonami" :name "p1"}
+   :expect {:exit 2 :lines ["usage: itonami-agent profile export <p>|--all [--to DIR] [--force] [--dry-run]"]}}
+  ;; S4c: profile import --all copies every source profile in order
+  {:id :profile-import-all :op :profile
+   :seed {"hermes/profiles/p1/SOUL.md" "soul\n"
+          "hermes/profiles/p1/profile.yaml" "name: p1\n"
+          "hermes/profiles/p1/config.yaml" "model:\n  default: mishima\n"
+          "hermes/profiles/p1/cron/jobs.json" "{\"jobs\": []}\n"
+          "hermes/profiles/p2/SOUL.md" "soul\n"
+          "hermes/profiles/p2/profile.yaml" "name: p2\n"
+          "hermes/profiles/p2/config.yaml" "model:\n  default: mishima\n"
+          "hermes/profiles/p2/cron/jobs.json" "{\"jobs\": []}\n"}
+   :request {:sub "import" :from "hermes" :to "store" :all true}
+   :expect {:exit 0 :messages-include ["copied  p1  4 file(s)" "copied  p2  4 file(s)" "2 profile(s) copied"]}}]}]
