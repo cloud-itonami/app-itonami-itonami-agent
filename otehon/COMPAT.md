@@ -91,7 +91,7 @@ from source, the rest follow the module name until their slice lands.
 | `code_rpc.cljk` | — | planned S6 |
 | `collect.cljk`, `collect_io.cljk` | — | planned S6 |
 | `computer_use.cljk` | — | planned S6 |
-| `confine.cljk` *OS sandbox* | — | planned S2 |
+| `confine.cljk` *OS sandbox* | `confine.cljc` (policy, secret-paths, read-denial, confine-env, seatbelt-profile, bwrap-args, command) | partial (pure policy core done JUN-1036 S2c; `backend` probe and `audit*!` writers stay host-side) |
 | `connections.cljk` | — | planned S6 |
 | `cron.cljk` *jobs/schedules* | `cron.cljc`, `tick.cljc`, `run.cljc`, `exec.cljc` | partial (plans + `run-job` host side and finished-turn apply done, JUN-1036 S2a/S2b; ledger/queue rows S5a; drain rail — deliver/drain/settle/abandoned/finish-run — S5b; the live run-job loop + watcher fan-in stay open) |
 | `dapps.cljk` | — | planned S6 |
@@ -112,12 +112,12 @@ from source, the rest follow the module name until their slice lands.
 | `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; serve/run S5) |
 | `pause.cljk` * | `pause.cljc` | done (JUN-1036 S3a) |
 | `platform_adapters.cljk` *lane adapters* | `adapters.cljc` (per-lane request builders + token-env/for-lane resolution + sync sends, error strings verbatim) | done (JUN-1036 S5c; env-only secrets, injected `:fetch`) |
-| `process.cljk` | — | planned S2 |
+| `process.cljk` | `process.cljc` (linger budget, pending-notification text, background mode) | partial (S5c; supervision runtime: watchers/heartbeats/checkpoints — host-side, not shared-case portable) |
 | `profile.cljk` *store layout* | `profile.cljc`, `status.cljc` (names), `store.cljc` | partial (verbs S4) |
 | `profile.cljk` *bundle/manifest lifecycle* | `bundle.cljc` (bundle-files/manifest/cid, default-manifest, with-inference-rail, write-manifest!, with-bundle, refresh-bundle-cid, copy-profile!) + `manifest.cljc` (with-org) + `cli.cljc` (set-parked!, release/transfer/adopt/organize/hy lines) | done itonamify/refresh/rail/bundle/refresh-bundle/release/import/export/adopt/organize/hy-stage/hy-migrate/did (JUN-1036 S4b/S4c/S4d/S4e) |
 | `provider.cljk` *chain/resolution* | `rail.cljc` (job target), `model.cljc` (display chain) | partial (live calls S2) |
 | `profile.cljk` *set-model-text* | `model.cljc` (verbatim port, throws as ex-info) | done for model/provider keys (JUN-1036 S3b) |
-| `quiet.cljk` | — | planned S2 |
+| `quiet.cljk` | `quiet.cljc` (warn/diag/wake predicates, linger budget, turn-failed?, sync linger loop) | partial (predicates + 35 S2c cases JUN-1036 S2c; sync linger loop with injected fns JUN-1036 S5c; live registry waits stay host-side) |
 | `rails.cljk` | — | planned S3b |
 | `soul.cljk` | `soul.cljc` (world/unit/role render + splice, limit, body guard) | done (JUN-1036 S4d) |
 | `tools.cljk` *tool registry* | — | planned S6 |
@@ -138,7 +138,22 @@ from source, the rest follow the module name until their slice lands.
   7 cases. The live rail call stays open; executions-ledger and
   delivery-queue ROWS stay slice S5 — only their observable inputs,
   statuses and messages are produced here).
-- S3a store verbs pause/status — done (this unit: 5 cases + 2 must-fail).
+- S2c pure policy core — done (JUN-1036: confine policy/read-denial/env/
+  seatbelt-profile/bwrap-args/command + quiet warn/diag/wake/linger/
+  turn-failed predicates; 35 cases + 2 must-fail. The live rail call,
+  process supervision runtime and readline chat stay host-side; the
+  linger loop rides S5c's sync port (injected fns). Port divergences:
+  `secret-paths` takes `itonami-dir` explicitly (legacy reads
+  ITONAMI_DIR); `bwrap-args` takes `:scan-fn` (cases stub the `find`
+  scan); `command` takes `:tmpdir` (cases pin it); `:confine` op redacts
+  scratch roots to `<home>`/`<idir>` and drops `:env` from `command`
+  results (machine env is covered by `confine-env` cases). `backend`
+  probe and `audit*!` writers stay host-side. Note: S5c's merged
+  `quiet.cljc` supersedes the S2c twin (same predicates, sync loop
+  added); the `:quiet` op calls `quiet-notify-linger-seconds` via
+  `process.cljc`. The S5c loop omits the legacy diagnostic-mute
+  displacement — predicate ported, loop-level case absent.)
+- S3a store verbs pause/status — done (JUN-1036: 5 cases + 2 must-fail).
 - S3b read/show ops — done (JUN-1036: model/fallback first; doctor +
   sessions list/show/resume-refusal second, 18 cases. The S6-owned
   doctor finding kinds (unsupported toolsets/tools, browser backend,
