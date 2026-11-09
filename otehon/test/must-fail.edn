@@ -230,4 +230,10 @@
     {:id :must-fail/gateway-producer-invalid :op :gateway :request {:steps [["producer-identity" {"type" "nope"}]]} :expect {:results ["x"]}}
     {:id :must-fail/chat-chunk-zero :op :chat :request {:steps [["chunk" "x" 0]]} :expect {:results [["x"]]}}
     {:id :must-fail/chat-unknown-step :op :chat :request {:steps [["bogus"]]} :expect {:results [nil]}}
-]}
+  {:id :must-fail/confine-secret-expects-nil :op :confine
+   :seed {"home/.ssh/config" "Host x\n"}
+   :call ["read-denial" {:confinement :sandbox :read-scope :all-but-secrets :peer? false} {:path ".ssh/config"}]
+   :expect {:value nil}}
+  {:id :must-fail/quiet-linger-expects-zero :op :quiet
+   :call ["linger-seconds" {}]
+   :expect {:value 0}}]}]

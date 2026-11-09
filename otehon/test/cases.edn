@@ -2785,4 +2785,137 @@ Output since last heartbeat:
     {:id :chat/history-roundtrip :op :chat :request {:steps [["append" "telegram" "C1" [{"role" "user" "content" "a"} {"role" "assistant" "content" "b"}]] ["history" "telegram" "C1"] ["history" "telegram" "C9"] ["append" "telegram" "C1" []]]} :expect {:results [[{"role" "user" "content" "a"} {"role" "assistant" "content" "b"}] [{"role" "user" "content" "a"} {"role" "assistant" "content" "b"}] [] [{"role" "user" "content" "a"} {"role" "assistant" "content" "b"}]]}}
     {:id :chat/poll-matrix :op :chat :request {:fetches [{"kind" "updates" "updates" [{"update_id" 5} {"update_id" "6" "x" 1} {"update_id" "x"}]} {"kind" "http" "status" 500}] :steps [["poll" "TOK" 0 25] ["poll" "TOK" 3 25]]} :expect {:results [{:updates [{"update_id" 5} {"update_id" "6" "x" 1} {"update_id" "x"}] :offset 7} {:error "getUpdates failed: HTTP 500" :updates [] :offset 3}]}}
     {:id :adapters/build-matrix :op :adapters :request {:steps [["build" "telegram" {"token" "T" "chat" "C" "text" "hi"}] ["build" "telegram-thread" {"token" "T" "chat" "C" "text" "hi" "thread" "12"}] ["build" "slack" {"token" "T" "channel" "C" "text" "hi"}] ["build" "discord" {"webhook" "https://x/y" "text" "hi"}] ["build" "discord-bot" {"token" "T" "channel" "C 1" "text" "hi"}] ["build" "mattermost" {"webhook" "https://x/y" "text" "hi"}] ["build" "matrix" {"home" "https://m.host" "token" "T" "room" "room:1" "text" "hi"}] ["build" "feishu" {"token" "T" "chat" "C" "text" "hi"}] ["build" "dingtalk" {"token" "T" "robot" "R" "user" "U" "text" "hi"}] ["build" "wecom" {"token" "T" "to" "U" "agent" "7" "text" "hi"}] ["build" "whatsapp" {"token" "T" "phone" "P" "to" "U" "text" "hi"}]]} :expect {:results [{:url "https://api.telegram.org/botT/sendMessage" :body "{\"chat_id\":\"C\",\"text\":\"hi\"}"} {:url "https://api.telegram.org/botT/sendMessage" :body "{\"chat_id\":\"C\",\"message_thread_id\":12,\"text\":\"hi\"}"} {:url "https://slack.com/api/chat.postMessage" :headers {"Authorization" "Bearer T" "Content-Type" "application/json; charset=utf-8"} :body "{\"channel\":\"C\",\"text\":\"hi\"}"} {:url "https://x/y?wait=true" :body "{\"content\":\"hi\"}"} {:url "https://discord.com/api/channels/C%201/messages" :headers {"Authorization" "Bot T" "Content-Type" "application/json"} :body "{\"content\":\"hi\"}"} {:url "https://x/y" :body "{\"text\":\"hi\"}"} {:url "https://m.host/_matrix/client/v3/rooms/room%3A1/send/m.room.message/TXN" :headers {"Authorization" "Bearer T" "Content-Type" "application/json"} :body "{\"body\":\"hi\",\"msgtype\":\"m.text\"}"} {:url "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id" :headers {"Authorization" "Bearer T" "Content-Type" "application/json; charset=utf-8"} :body "{\"content\":\"{\\\"text\\\":\\\"hi\\\"}\",\"msg_type\":\"text\",\"receive_id\":\"C\"}"} {:url "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend" :headers {"Authorization" "Bearer T" "Content-Type" "application/json; charset=utf-8"} :body "{\"msgKey\":\"sampleText\",\"msgParam\":\"{\\\"text\\\":\\\"hi\\\"}\",\"robotCode\":\"R\",\"userIds\":[\"U\"]}"} {:url "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=T" :headers {"Content-Type" "application/json; charset=utf-8"} :body "{\"agentid\":7,\"msgtype\":\"text\",\"text\":{\"content\":\"hi\"},\"touser\":\"U\"}"} {:url "https://graph.facebook.com/v20.0/P/messages" :headers {"Authorization" "Bearer T" "Content-Type" "application/json; charset=utf-8"} :body "{\"messaging_product\":\"whatsapp\",\"text\":{\"body\":\"hi\"},\"to\":\"U\",\"type\":\"text\"}"}]}}
-]}]
+
+  ;; ---------------------------------------------------------- S2c quiet
+  {:id :quiet/warn-default :op :quiet
+   :call ["warn-enabled?" "cli" {}]
+   :expect {:value true}}
+  {:id :quiet/warn-opt-out :op :quiet
+   :call ["warn-enabled?" "cli" {"display" {"suppress_warning_notifications" "yes"}}]
+   :expect {:value false}}
+  {:id :quiet/warn-platform :op :quiet
+   :call ["warn-enabled?" "cli" {"display" {"platforms" {"cli" {"suppress_warning_notifications" "1"}}
+                                            "suppress_warning_notifications" false}}]
+   :expect {:value false}}
+  {:id :quiet/warn-unknown-value :op :quiet
+   :call ["warn-enabled?" "cli" {"display" {"suppress_warning_notifications" "maybe"}}]
+   :expect {:value true}}
+  {:id :quiet/diag-failure :op :quiet
+   :call ["diagnostic-event?" {"task_failure_notice" true}]
+   :expect {:value true}}
+  {:id :quiet/diag-watch :op :quiet
+   :call ["diagnostic-event?" {"type" "watch_overflow_tripped"}]
+   :expect {:value true}}
+  {:id :quiet/diag-result :op :quiet
+   :call ["diagnostic-event?" {"type" "result"}]
+   :expect {:value false}}
+  {:id :quiet/wake-muted :op :quiet
+   :call ["wake-muted?" [{"type" "watch_disabled"} {"task_failure_notice" true}]
+           {"display" {"suppress_warning_notifications" true}}]
+   :expect {:value true}}
+  {:id :quiet/wake-mixed :op :quiet
+   :call ["wake-muted?" [{"type" "watch_disabled"} {"type" "result"}]
+           {"display" {"suppress_warning_notifications" true}}]
+   :expect {:value false}}
+  {:id :quiet/wake-empty :op :quiet
+   :call ["wake-muted?" [] {}]
+   :expect {:value nil}}
+  {:id :quiet/linger-default :op :quiet
+   :call ["linger-seconds" {}]
+   :expect {:value 600.0}}
+  {:id :quiet/linger-string :op :quiet
+   :call ["linger-seconds" {"terminal" {"oneshot_completion_wait_seconds" "30"}}]
+   :expect {:value 30.0}}
+  {:id :quiet/linger-bool :op :quiet
+   :call ["linger-seconds" {"terminal" {"oneshot_completion_wait_seconds" true}}]
+   :expect {:value 1.0}}
+  {:id :quiet/linger-negative :op :quiet
+   :call ["linger-seconds" {"terminal" {"oneshot_completion_wait_seconds" -5}}]
+   :expect {:value 0}}
+  {:id :quiet/linger-nan :op :quiet
+   :call ["linger-seconds" {"terminal" {"oneshot_completion_wait_seconds" "nan"}}]
+   :expect {:value 600.0}}
+  {:id :quiet/turn-failed-error :op :quiet
+   :call ["turn-failed?" {:error {:error "boom"}}]
+   :expect {:value true}}
+  {:id :quiet/turn-failed-interrupted :op :quiet
+   :call ["turn-failed?" {:exit-reason "interrupted"}]
+   :expect {:value true}}
+  {:id :quiet/turn-failed-unfinished :op :quiet
+   :call ["turn-failed?" {:exit-reason "max_iterations_reached"}]
+   :expect {:value false}}
+  {:id :quiet/turn-failed-clean :op :quiet
+   :call ["turn-failed?" {:exit-reason "completed"}]
+   :expect {:value false}}
+  ;; ---------------------------------------------------------- S2c confine
+  {:id :confine/policy-default :op :confine
+   :call ["policy" {} {}]
+   :expect {:value {:confinement :sandbox :network? false :env-allow []
+                    :write-extra [] :read-scope :all-but-secrets :peer? false}}}
+  {:id :confine/policy-peer :op :confine
+   :call ["policy" {:terminal {:confinement :host :network true :env ["TOK"] :write ["~/notes"]}} {:peer? true}]
+   :expect {:value {:confinement :sandbox :network? false :env-allow []
+                    :write-extra [] :read-scope :roots :peer? true}}}
+  {:id :confine/policy-local :op :confine
+   :call ["policy" {:terminal {:network true :env ["A" "B"]} :web {:allow ["example.com"]}} {}]
+   :expect {:value {:confinement :sandbox :network? true :env-allow ["A" "B"]
+                    :read-scope :all-but-secrets :web-allow ["example.com"] :peer? false}}}
+  {:id :confine/secret-ssh :op :confine
+   :seed {"home/.ssh/config" "Host x\n"}
+   :call ["read-denial" {:confinement :sandbox :read-scope :all-but-secrets :peer? false} {:path ".ssh/config"}]
+   :expect {:value :secret}}
+  {:id :confine/secret-dotenv :op :confine
+   :seed {"home/.env" "K=x\n"}
+   :call ["read-denial" {:confinement :sandbox :read-scope :all-but-secrets :peer? false} {:path ".env"}]
+   :expect {:value :secret}}
+  {:id :confine/secret-profile-env :op :confine
+   :seed {"home/.itonami/profiles/p2/.env" "K=x\n"}
+   :call ["read-denial" {:confinement :sandbox :read-scope :all-but-secrets :peer? false} {:path ".itonami/profiles/p2/.env"}]
+   :expect {:value :secret}}
+  {:id :confine/allow-note :op :confine
+   :seed {"home/notes/todo.txt" "x\n"}
+   :call ["read-denial" {:confinement :sandbox :read-scope :roots :peer? false} {:path "notes/todo.txt" :roots ["notes"]}]
+   :expect {:value nil}}
+  {:id :confine/outside-roots :op :confine
+   :seed {"home/other/f.txt" "x\n"}
+   :call ["read-denial" {:confinement :sandbox :read-scope :roots :peer? false} {:path "other/f.txt" :roots ["notes"]}]
+   :expect {:value :outside-roots}}
+  {:id :confine/host-unconfined :op :confine
+   :seed {"home/.ssh/config" "Host x\n"}
+   :call ["read-denial" {:confinement :host :peer? false} {:path ".ssh/config"}]
+   :expect {:value nil}}
+  {:id :confine/env-grant :op :confine
+   :call ["confine-env" {:env-allow ["TOK"] :read-scope :all-but-secrets} {:tool-env {"TOK" "s3cr3t" "OTHER" "x"} :tmpdir "/tmp/pin"}]
+   :expect {:value {"TOK" "s3cr3t" "TMPDIR" "/tmp/pin"}}}
+  {:id :confine/env-roots-home :op :confine
+   :call ["confine-env" {:env-allow [] :read-scope :roots} {:tool-env {} :tmpdir "/tmp/pin"}]
+   :expect {:value {"TMPDIR" "/tmp/pin" "HOME" "/tmp/pin"}}}
+  {:id :confine/secret-paths :op :confine
+   :seed {"home/.ssh/config" "Host x\n"
+          "home/.netrc" "x\n"
+          "home/.itonami/profiles/p2/.env" "K=x\n"
+          "home/.hermes/profiles/p3/.env" "K=x\n"
+          "itonami/profiles/p1/.env" "K=x\n"}
+   :call ["secret-paths" nil nil]
+   :expect {:value {:dirs ["<home>/.ssh" "<home>/.aws" "<home>/.gnupg" "<home>/.kube" "<home>/.docker"
+                           "<home>/.config/gh" "<home>/.config/gcloud" "<home>/.azure" "<home>/.password-store"
+                           "<home>/Library/Keychains" "<home>/.itonami/node" "<idir>/node"]
+                    :files ["<home>/.netrc" "<home>/.git-credentials" "<home>/.npmrc" "<home>/.pypirc"
+                            "<home>/.itonami/peer.env" "<idir>/peer.env" "<home>/.hermes/.env"
+                            "<idir>/profiles/p1/.env" "<home>/.itonami/profiles/p2/.env" "<home>/.hermes/profiles/p3/.env"]
+                    :name-patterns ["\\.env$" "\\.env\\.[^/]*$" "/secrets\\.command$" "/auth\\.json$"]}}}
+  {:id :confine/command-refused-peer :op :confine
+   :call ["command" {:confinement :sandbox :read-scope :roots :peer? true} {:cmd "echo hi" :backend nil :tmpdir "t"}]
+   :expect {:value {:refused "no OS sandbox on this host (need sandbox-exec or bwrap); turns run for a peer are never unconfined"}}}
+  {:id :confine/seatbelt-profile :op :confine
+   :seed {"home/work/f.txt" "x\\n" "home/notes/n.txt" "x\\n"}
+   :call ["seatbelt-profile" {:write-roots ["work"] :read-roots ["notes"] :read-scope :roots :network? false}]
+   :expect {:value "(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write* (subpath \"<home>/work\") (literal \"/dev/null\") (literal \"/dev/zero\") (regex #\"^/dev/tty\") (regex #\"^/dev/fd/\") (literal \"/dev/dtracehelper\"))\n(deny file-read-data (subpath \"<home>\"))\n(allow file-read-data (subpath \"<home>/work\") (subpath \"<home>/notes\"))\n(deny file-read* file-write* (subpath \"<home>/.ssh\"))\n(deny file-read* file-write* (subpath \"<home>/.aws\"))\n(deny file-read* file-write* (subpath \"<home>/.gnupg\"))\n(deny file-read* file-write* (subpath \"<home>/.kube\"))\n(deny file-read* file-write* (subpath \"<home>/.docker\"))\n(deny file-read* file-write* (subpath \"<home>/.config/gh\"))\n(deny file-read* file-write* (subpath \"<home>/.config/gcloud\"))\n(deny file-read* file-write* (subpath \"<home>/.azure\"))\n(deny file-read* file-write* (subpath \"<home>/.password-store\"))\n(deny file-read* file-write* (subpath \"<home>/Library/Keychains\"))\n(deny file-read* file-write* (subpath \"<home>/.itonami/node\"))\n(deny file-read* file-write* (subpath \"<idir>/node\"))\n(deny file-read* file-write* (literal \"<home>/.netrc\"))\n(deny file-read* file-write* (literal \"<home>/.git-credentials\"))\n(deny file-read* file-write* (literal \"<home>/.npmrc\"))\n(deny file-read* file-write* (literal \"<home>/.pypirc\"))\n(deny file-read* file-write* (literal \"<home>/.itonami/peer.env\"))\n(deny file-read* file-write* (literal \"<idir>/peer.env\"))\n(deny file-read* file-write* (literal \"<home>/.hermes/.env\"))\n(deny file-read* file-write* (regex #\"\\.env$\"))\n(deny file-read* file-write* (regex #\"\\.env\\.[^/]*$\"))\n(deny file-read* file-write* (regex #\"/secrets\\.command$\"))\n(deny file-read* file-write* (regex #\"/auth\\.json$\"))\n(deny network*)"}}
+  {:id :confine/bwrap-args :op :confine
+   :seed {"home/notes/.env" "K=x\\n" "home/work/f.txt" "x\\n" "home/.ssh/config" "Host x\\n" "home/.netrc" "x\\n"}
+   :call ["bwrap-args" {:write-roots ["notes"] :read-roots ["work"] :network? false :found ["notes/.env"]}]
+   :expect {:value ["bwrap" "--ro-bind" "/" "/" "--dev" "/dev" "--proc" "/proc" "--die-with-parent" "--new-session" "--unshare-net" "--tmpfs" "<home>" "--ro-bind" "<home>/work" "<home>/work" "--bind" "<home>/notes" "<home>/notes" "--ro-bind" "/dev/null" "<home>/notes/.env"]}}
+  {:id :confine/command-seatbelt :op :confine
+   :seed {"home/work/f.txt" "x\\n"}
+   :call ["command" {:confinement :sandbox :read-scope :roots :peer? false} {:cmd "echo hi" :write-roots ["work"] :backend "seatbelt" :tmpdir "t" :tool-env {"TOK" "v"}}]
+   :expect {:value {:argv ["/usr/bin/sandbox-exec" "-p" "(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write* (subpath \"<home>/work\") (subpath \"<home>/t\") (literal \"/dev/null\") (literal \"/dev/zero\") (regex #\"^/dev/tty\") (regex #\"^/dev/fd/\") (literal \"/dev/dtracehelper\"))\n(deny file-read-data (subpath \"<home>\"))\n(allow file-read-data (subpath \"<home>/work\") (subpath \"<home>/t\"))\n(deny file-read* file-write* (subpath \"<home>/.ssh\"))\n(deny file-read* file-write* (subpath \"<home>/.aws\"))\n(deny file-read* file-write* (subpath \"<home>/.gnupg\"))\n(deny file-read* file-write* (subpath \"<home>/.kube\"))\n(deny file-read* file-write* (subpath \"<home>/.docker\"))\n(deny file-read* file-write* (subpath \"<home>/.config/gh\"))\n(deny file-read* file-write* (subpath \"<home>/.config/gcloud\"))\n(deny file-read* file-write* (subpath \"<home>/.azure\"))\n(deny file-read* file-write* (subpath \"<home>/.password-store\"))\n(deny file-read* file-write* (subpath \"<home>/Library/Keychains\"))\n(deny file-read* file-write* (subpath \"<home>/.itonami/node\"))\n(deny file-read* file-write* (subpath \"<idir>/node\"))\n(deny file-read* file-write* (literal \"<home>/.netrc\"))\n(deny file-read* file-write* (literal \"<home>/.git-credentials\"))\n(deny file-read* file-write* (literal \"<home>/.npmrc\"))\n(deny file-read* file-write* (literal \"<home>/.pypirc\"))\n(deny file-read* file-write* (literal \"<home>/.itonami/peer.env\"))\n(deny file-read* file-write* (literal \"<idir>/peer.env\"))\n(deny file-read* file-write* (literal \"<home>/.hermes/.env\"))\n(deny file-read* file-write* (regex #\"\\.env$\"))\n(deny file-read* file-write* (regex #\"\\.env\\.[^/]*$\"))\n(deny file-read* file-write* (regex #\"/secrets\\.command$\"))\n(deny file-read* file-write* (regex #\"/auth\\.json$\"))\n(deny network*)" "/bin/sh" "-c" "echo hi"], :tmpdir "<home>/t", :sandbox :seatbelt}}}]}]

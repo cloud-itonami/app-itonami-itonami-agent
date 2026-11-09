@@ -49,6 +49,8 @@
             [itonami.otehon.yakuwari :as yakuwari]
             [itonami.otehon.yaml :as yaml]
             [itonami.otehon.text :as text]
+            [itonami.otehon.confine :as confine]
+            [itonami.otehon.quiet :as quiet]
             [itonami.otehon.tick :as tick]
             [itonami.otehon.store :as store]
             [itonami.otehon.turn :as turn]
@@ -133,7 +135,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -171,6 +173,8 @@
     :watcher (ops-watcher c)
     :adapters (ops-adapters c)
     :chat (ops-chat c scratch)
+    :quiet (ops-quiet c)
+    :confine (ops-confine c scratch)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -2536,6 +2540,63 @@
                           (chat/send-reply! prof msg (str text) fetch env))
           (throw (ex-info (str "chat: unknown step " verb) {:verb verb}))))
       (:steps req []))}))
+(defn- ops-quiet [c]
+  (let [[verb arg arg2] (:call c)]
+    {:value (case verb
+              "warn-enabled?" (quiet/warning-notifications-enabled? arg arg2)
+              "diagnostic-event?" (quiet/diagnostic-process-event? arg)
+              "wake-muted?" (quiet/diagnostic-only-wake-muted? arg arg2)
+              "linger-seconds" (quiet/quiet-notify-linger-seconds arg)
+              "turn-failed?" (quiet/turn-failed? arg)
+              (throw (ex-info (str "quiet: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-confine [c scratch]
+  (let [dir (hio/abs-path (scratch-case-dir scratch c))]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (let [home (str dir "/home")
+          idir (str dir "/itonami")]
+      (hio/mkdirs! home)
+      (hio/mkdirs! idir)
+      (let [[verb arg arg2] (:call c)
+            rel (fn [p] (str home "/" p))
+            redact (fn [s] (-> (str s)
+                               (str/replace (try (hio/realpath idir) (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ idir)) "<idir>")
+                               (str/replace (try (hio/realpath home) (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ home)) "<home>")))
+            redacted (letfn [(redacted [v] (cond (string? v) (redact v)
+                                                     (map? v) (into {} (map (fn [[k x]] [k (redacted x)]) v))
+                                                     (sequential? v) (mapv redacted v)
+                                                     :else v))] redacted)]
+        {:value (redacted
+                 (case verb
+                   "policy" (confine/policy arg (or arg2 {}))
+                   "secret-paths" (confine/secret-paths home idir)
+                   "read-denial" (confine/read-denial arg {:path (rel (:path arg2))
+                                                           :roots (mapv rel (:roots arg2 []))
+                                                           :home home :itonami-dir idir})
+                   "confine-env" (confine/confine-env arg (:tool-env arg2 {}) (:tmpdir arg2))
+                   "seatbelt-profile" (confine/seatbelt-profile
+                                       {:write-roots (mapv rel (:write-roots arg []))
+                                        :read-roots (mapv rel (:read-roots arg []))
+                                        :read-scope (:read-scope arg)
+                                        :home home :network? (:network? arg)
+                                        :itonami-dir idir})
+                   "bwrap-args" (confine/bwrap-args
+                                 {:write-roots (mapv rel (:write-roots arg []))
+                                  :read-roots (mapv rel (:read-roots arg []))
+                                  :home home :network? (:network? arg)
+                                  :itonami-dir idir
+                                  :scan-fn (constantly (mapv rel (:found arg [])))})
+                   "command" (dissoc (confine/command arg {:cmd (:cmd arg2) :argv (:argv arg2)
+                                                           :write-roots (mapv rel (:write-roots arg2 []))
+                                                           :read-roots (mapv rel (:read-roots arg2 []))
+                                                           :tool-env (:tool-env arg2 {})
+                                                           :home home :backend (some-> (:backend arg2) keyword)
+                                                           :tmpdir (some-> (:tmpdir arg2) rel)
+                                                           :itonami-dir idir
+                                                           :scan-fn (when (contains? arg2 :found)
+                                                                      (constantly (mapv rel (:found arg2))))}) :env)
+                   (throw (ex-info (str "confine: unknown call " verb) {:verb verb}))))}))))
 
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
