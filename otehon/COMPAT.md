@@ -103,7 +103,7 @@ from source, the rest follow the module name until their slice lands.
 | `homeassistant.cljk` | — | planned S6 |
 | `host.cljk` *node/file/env/process* | `io.cljc` | partial (files/env/clock/listing/pids/spawn done JUN-1036 S2a; + S5a: `now-micros-iso` (host-zone 6-digit fraction, the `iso-local` micros shape), `json-str-2` (indent-2, iteration order), `parse-iso-ms`, `kill-probe-alive?` (legacy kill(0) probe semantics), `sqlite-literal` numbers inline bare so REAL columns read back numeric) |
 | `identity.cljk` ( FleetSeed/KDF/derive-key/did-of/parse-seed/key-id ) | `ed25519.cljc` (KDF + RFC 8032 expansion + clamped base-point multiply + did:key:z; host SHA-512/UTF-8 in `io.cljc` ) | done (JUN-1036 S4e; node `createPrivateKey` expansion reproduced exactly, oracle-checked) |
-| `loop.cljk` *agent turn loop* | `turn.cljc` (gate) | partial (turn execution S2) |
+| `loop.cljk` *agent turn loop* | `turn.cljc` (gate), `assembly.cljc` (history, wrap-up, turn limits) | partial (S2d assembly done; turn execution S2) |
 | `main.cljk` *CLI dispatch* | `cli.cljc` | partial (this table) |
 | `manifest.cljk` | `manifest.cljc` | done |
 | `mcp.cljk`, `mcp_http_client.mjs` | — | planned S6 |
@@ -138,6 +138,16 @@ from source, the rest follow the module name until their slice lands.
   7 cases. The live rail call stays open; executions-ledger and
   delivery-queue ROWS stay slice S5 — only their observable inputs,
   statuses and messages are produced here).
+- S2d turn assembly core — done (JUN-1036: history-messages, wrap-up
+  notice/threshold/latch-inject, turn-limit spellings/parse/resolve,
+  max-turns precedence; 35 cases + 2 must-fail. The `run` loop itself
+  stays host-side (MCP/browser/dapps/tool wiring, clarify-fn,
+  subagents, live rail), as do `system-prompt`/`skills-index`/
+  `context-file` (skills home + context file + live clock reads).
+  Deliberate: the cap sentinel is the legacy `MAX_SAFE_INTEGER`
+  on every runner (unobservable per the legacy's own comment); `∞`
+  is built from its code point, never a `\u` escape. Keyword roles
+  are dropped exactly like the legacy `contains?` check drops them.)
 - S2c pure policy core — done (JUN-1036: confine policy/read-denial/env/
   seatbelt-profile/bwrap-args/command + quiet warn/diag/wake/linger/
   turn-failed predicates; 35 cases + 2 must-fail. The live rail call,

@@ -2961,4 +2961,110 @@ Output since last heartbeat:
     {:id :tools/execution-disabled :op :tools :request {:steps [["execution-disabled" {"agent" {"disabled_toolsets" ["x"]}} "local"] ["execution-disabled" {"agent" {"disabled_toolsets" ["x"]}} "cron"] ["execution-disabled" {"agent" {"disabled_toolsets" ["x"]} "cron" {"allow_agent_scheduling" true}} "cron"] ["execution-disabled" {"agent" {"disabled_toolsets" "x"}} "cron"] ["execution-disabled" {} "local"]]} :expect {:results [["x"] ["x" "messaging" "clarify" "cronjob"] ["x" "messaging" "clarify"] ["x" "messaging" "clarify" "cronjob"] []]}}
     {:id :tools/runtime :op :tools :request {:steps [["runtime" ["browser" "computer_use"] [] false false false] ["runtime" ["browser" "computer_use"] [] true true true] ["runtime" ["browser"] [] false true true] ["runtime" ["browser"] ["browser_cdp"] true true true]]} :expect {:results [[] ["browser_navigate" "browser_snapshot" "browser_click" "browser_type" "browser_scroll" "browser_back" "browser_press" "browser_get_images" "browser_vision" "browser_console" "browser_cdp" "browser_dialog" "browser_vault_list" "browser_vault_unlock" "browser_vault_fill" "browser_vault_save_login" "browser_vault_enter_code" "browser_exec" "computer_use"] ["browser_navigate" "browser_snapshot" "browser_click" "browser_type" "browser_scroll" "browser_back" "browser_press" "browser_get_images" "browser_vision" "browser_console" "browser_vault_list" "browser_vault_unlock" "browser_vault_fill" "browser_vault_save_login" "browser_vault_enter_code" "browser_exec"] ["browser_navigate" "browser_snapshot" "browser_click" "browser_type" "browser_scroll" "browser_back" "browser_press" "browser_get_images" "browser_vision" "browser_console" "browser_dialog" "browser_vault_list" "browser_vault_unlock" "browser_vault_fill" "browser_vault_save_login" "browser_vault_enter_code" "browser_exec"]]}}
     {:id :tools/schemas :op :tools :request {:steps [["schemas" ["read_file" "nope"]] ["schemas" ["nope"]]]} :expect {:results [[{"type" "function" "function" {"name" "read_file" "description" "Read a text file with line numbers (LINE_NUM|CONTENT)." "parameters" {"type" "object" "properties" {"path" {"type" "string"} "offset" {"type" "integer" "description" "1-based first line"} "limit" {"type" "integer" "description" "max lines (<= 2000)"}} "required" ["path"]}}}] []]}}
+;; ---------------------------------------------------------- S2d assembly
+  {:id :turn-asm/history-basic :op :turn-asm
+   :call ["history-messages" [{"role" "user" "content" "hi"} {"role" "assistant" "content" "hello"}]]
+   :expect {:value [{"role" "user" "content" "hi"} {"role" "assistant" "content" "hello"}]}}
+  {:id :turn-asm/history-drops-tool-system :op :turn-asm
+   :call ["history-messages" [{"role" "system" "content" "s"} {"role" "user" "content" "q"} {"role" "tool" "content" "t"} {"role" "assistant" "content" "a"}]]
+   :expect {:value [{"role" "user" "content" "q"} {"role" "assistant" "content" "a"}]}}
+  {:id :turn-asm/history-parts :op :turn-asm
+   :call ["history-messages" [{"role" "user" "content" [{"type" "text" "text" "a"} {"type" "image" "text" "i"} {"type" "text"}]} {"role" "assistant" "content" nil}]]
+   :expect {:value [{"role" "user" "content" "a\n"} {"role" "assistant" "content" ""}]}}
+  {:id :turn-asm/history-keywords :op :turn-asm
+   :call ["history-messages" [{:role :user :content "k"}]]
+   :expect {:value []}}
+  {:id :turn-asm/wrap-at-threshold :op :turn-asm
+   :call ["wrap-up?" 80 100]
+   :expect {:value true}}
+  {:id :turn-asm/wrap-below :op :turn-asm
+   :call ["wrap-up?" 79 100]
+   :expect {:value false}}
+  {:id :turn-asm/wrap-no-budget :op :turn-asm
+   :call ["wrap-up?" 10 0]
+   :expect {:value false}}
+  {:id :turn-asm/wrap-negative-budget :op :turn-asm
+   :call ["wrap-up?" 10 -5]
+   :expect {:value false}}
+  {:id :turn-asm/inject-appends-latches :op :turn-asm
+   :call ["inject-wrapup" [{"content" "tool-out"}] 100 90]
+   :expect {:value {:first [{"content" "tool-out\n\n[SYSTEM NOTICE — run time budget nearly exhausted] Run time budget nearly exhausted. Stop new discovery/verification work now. Produce the required final deliverable (answer/JSON/summary) from the state you already have, completing only mandatory writes."}] :latched true :second [{"content" "tool-out\n\n[SYSTEM NOTICE — run time budget nearly exhausted] Run time budget nearly exhausted. Stop new discovery/verification work now. Produce the required final deliverable (answer/JSON/summary) from the state you already have, completing only mandatory writes."}]}}}
+  {:id :turn-asm/inject-no-results :op :turn-asm
+   :call ["inject-wrapup" [] 100 90]
+   :expect {:value {:first [] :latched false :second []}}}
+  {:id :turn-asm/inject-below-threshold :op :turn-asm
+   :call ["inject-wrapup" [{"content" "tool-out"}] 100 10]
+   :expect {:value {:first [{"content" "tool-out"}] :latched false :second [{"content" "tool-out"}]}}}
+  {:id :turn-asm/limit-int :op :turn-asm
+   :call ["resolve-turn-limit" 5]
+   :expect {:value 5}}
+  {:id :turn-asm/limit-string :op :turn-asm
+   :call ["resolve-turn-limit" "3"]
+   :expect {:value 3}}
+  {:id :turn-asm/limit-float-trunc :op :turn-asm
+   :call ["resolve-turn-limit" 3.9]
+   :expect {:value 3}}
+  {:id :turn-asm/limit-underscore :op :turn-asm
+   :call ["resolve-turn-limit" "1_0"]
+   :expect {:value 10}}
+  {:id :turn-asm/limit-words :op :turn-asm
+   :call ["resolve-turn-limit" "Unlimited"]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-inf-word :op :turn-asm
+   :call ["resolve-turn-limit" "INF"]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-glyph :op :turn-asm
+   :call ["resolve-turn-limit" "∞"]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-zero-negative :op :turn-asm
+   :call ["resolve-turn-limit" 0]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-negint :op :turn-asm
+   :call ["resolve-turn-limit" -3]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-nil :op :turn-asm
+   :call ["resolve-turn-limit" nil]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-bool :op :turn-asm
+   :call ["resolve-turn-limit" true]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-garbage :op :turn-asm
+   :call ["resolve-turn-limit" "abc"]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-blank :op :turn-asm
+   :call ["resolve-turn-limit" "  "]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-nan :op :turn-asm
+   :call ["resolve-turn-limit" "nan"]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-huge-exp :op :turn-asm
+   :call ["resolve-turn-limit" "1e999"]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-hex :op :turn-asm
+   :call ["resolve-turn-limit" "0x10"]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/limit-explicit-default :op :turn-asm
+   :call ["resolve-turn-limit" "abc" 42]
+   :expect {:value 42}}
+  {:id :turn-asm/max-opt-wins :op :turn-asm
+   :call ["resolve-max-turns" 5 {} nil]
+   :expect {:value 5}}
+  {:id :turn-asm/max-agent-fallback :op :turn-asm
+   :call ["resolve-max-turns" nil {"agent" {"max_turns" "7"}} nil]
+   :expect {:value 7}}
+  {:id :turn-asm/max-root-fallback :op :turn-asm
+   :call ["resolve-max-turns" nil {"max_turns" "9"} nil]
+   :expect {:value 9}}
+  {:id :turn-asm/max-env-fallback :op :turn-asm
+   :call ["resolve-max-turns" nil {} "11"]
+   :expect {:value 11}}
+  {:id :turn-asm/max-unset :op :turn-asm
+   :call ["resolve-max-turns" nil {} nil]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/max-false-resolved :op :turn-asm
+   :call ["resolve-max-turns" false {} nil]
+   :expect {:value 9007199254740991}}
+  {:id :turn-asm/spellings :op :turn-asm
+   :call ["spellings"]
+   :expect {:value ["-1" "0" "inf" "infinite" "infinity" "none" "null" "unlimited" "∞"]}}
 ]}]
