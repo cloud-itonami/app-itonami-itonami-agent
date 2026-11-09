@@ -223,4 +223,11 @@
              :enqueue ["ok"]
              :steps [["watch"] ["enqueues"]]}
    :expect {:results [nil [{"session" "s1"}]]}}
+  ;; S5c unit 2: unknown lanes/steps/verbs throw -----------------------
+  {:id :must-fail/adapters-build-unknown :op :adapters :request {:steps [["build" "sms" {}]]} :expect {:results [{}]}}
+    {:id :must-fail/adapters-unknown-step :op :adapters :request {:steps [["frobnicate"]]} :expect {:results [nil]}}
+    {:id :must-fail/gateway-unknown-fan-in :op :gateway :request {:steps [["fan-in" "bogus"]]} :expect {:results [nil]}}
+    {:id :must-fail/gateway-producer-invalid :op :gateway :request {:steps [["producer-identity" {"type" "nope"}]]} :expect {:results ["x"]}}
+    {:id :must-fail/chat-chunk-zero :op :chat :request {:steps [["chunk" "x" 0]]} :expect {:results [["x"]]}}
+    {:id :must-fail/chat-unknown-step :op :chat :request {:steps [["bogus"]]} :expect {:results [nil]}}
 ]}

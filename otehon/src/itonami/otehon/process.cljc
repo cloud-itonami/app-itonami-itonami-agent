@@ -119,9 +119,18 @@
 (defn format-age
   "Human-friendly elapsed string ('18m', '2h3m', '45s')."
   [seconds]
-  (let [s (try (let [f (double seconds)
-                     f (max 0.0 f)]
-                 (when-not (not= f f) (long f)))
+  (let [s (try (let [;; the cljs `double` will not even coerce a string
+                     ;; (nbb answers the input); force a NaN-or-number
+                     ;; like the legacy Math.trunc does
+                     f #?(:cljs (js/Number (str seconds)) :default (double seconds))
+                     f (max 0.0 f)
+                     ;; NaN is self-equiv in CLJS (= ##NaN ##NaN), so the
+                     ;; classic (not= f f) probe misses it there — check
+                     ;; explicitly like the legacy (Number.isNaN).
+                     nan? #?(:lpy (let [m (python/__import__ "math")] (boolean (.isnan m f)))
+                              :clj (Double/isNaN f)
+                              :cljs (js/Number.isNaN f))]
+                 (when-not nan? (long f)))
                (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil))]
     (cond
       (nil? s) "?"
