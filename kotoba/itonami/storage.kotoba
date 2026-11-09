@@ -1,0 +1,74 @@
+;; itonami.storage — the awai fs integration decisions
+;; (docs/awai-fs-design.md section 7, Native route).
+;;
+;; Hot stays local: the Git common dir, active worktrees and builds stay on
+;; local SSD. awai fs is the warm/cold tier only (JuiceFS-backed warm
+;; capacity with a local cache, B2 objects + restic snapshots for cold).
+;; Measurement 4 and the unresolved macFUSE mount forbid the hot path from
+;; depending on an awai fs mount.
+;;
+;; Role: the kexe-first CLI pattern (agent-cli-route precedent) — this core
+;; is the DECISION half of the `fs` routes. The host performs every effect
+;; (mounts, eviction, pins, snapshots, the free-space watermark) and reads
+;; itonami.edn `:storage`. Hermes never reads itonami.edn, so `:storage` is
+;; itonami-agent only, exactly like `:inference` today. An absent `:storage`
+;; means local-only: existing profiles keep working.
+;;
+;; Evict contract (host-enforced, not modelled here): evict removes only
+;; local cached copies after verifying the B2 object; deleting at the mount
+;; performs remote deletion. A missing mount is a hard error, never an
+;; empty local dir standing in for it.
+;;
+;; Verdict literals. Pinned contract: callers match on these exact strings.
+(ns itonami.storage
+  (:export [storage-verdict fs-route-code fs-usage-line-count
+            test-storage-verdict test-fs-route-code test-fs-usage-lines]))
+
+;; the :storage backend an itonami profile declares, or "" when absent
+(defn storage-verdict [backend :string] :string
+  (cond (= backend "awai-fs") "storage/ok"
+        (= backend "") "storage/local-only"
+        :else "storage/unknown-backend"))
+
+;; fs subcommand codes (pinned by test-fs-route-code):
+;;    0 unknown subcommand (the host dies 2)
+;;    1 usage (bare `fs`)
+;;    2 status   3 mount   4 evict   5 pin   6 snapshot
+(defn fs-route-code [sub :string] :i64
+  (cond (= sub "") 1
+        (= sub "status") 2
+        (= sub "mount") 3
+        (= sub "evict") 4
+        (= sub "pin") 5
+        (= sub "snapshot") 6
+        :else 0))
+
+(defn fs-usage-line-count [route :i64] :i64
+  ;; The usage block lists the five subcommands; any other route prints its
+  ;; own refusal line instead, so those count 0 here.
+  (if (= route 1) 5 0))
+
+;; ---------------------------------------------------------------------------
+;; test-* : zero-arity, true when every assertion holds.
+
+(defn test-storage-verdict [] :bool
+  (and (= "storage/ok" (storage-verdict "awai-fs"))
+       (= "storage/local-only" (storage-verdict ""))
+       (= "storage/unknown-backend" (storage-verdict "b2-direct"))
+       (= "storage/unknown-backend" (storage-verdict "AWAI-FS"))
+       (= "storage/unknown-backend" (storage-verdict "local"))))
+
+(defn test-fs-route-code [] :bool
+  (and (= 1 (fs-route-code ""))
+       (= 2 (fs-route-code "status"))
+       (= 3 (fs-route-code "mount"))
+       (= 4 (fs-route-code "evict"))
+       (= 5 (fs-route-code "pin"))
+       (= 6 (fs-route-code "snapshot"))
+       (= 0 (fs-route-code "mountpoint"))
+       (= 0 (fs-route-code "STATUS"))))
+
+(defn test-fs-usage-lines [] :bool
+  (and (= 5 (fs-usage-line-count 1))
+       (= 0 (fs-usage-line-count 2))
+       (= 0 (fs-usage-line-count 0))))
