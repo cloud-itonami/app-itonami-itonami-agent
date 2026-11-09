@@ -384,3 +384,362 @@
      :text (str (:body-text res))
      :body (try (hio/parse-json (str (:body-text res)))
                 (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil))}))
+
+;; ---------------------------------------------------------------- discover / pick / infer (S5d unit 2)
+
+(defn- url-decode [s]
+  #?(:lpy (let [u (python/__import__ "urllib.parse" ** :fromlist ["unquote"])] (.unquote u (str s)))
+     :clj (java.net.URLDecoder/decode (str s) "UTF-8")
+     :cljs (js/decodeURIComponent (str s))))
+
+(defn header-envelope
+  "The envelope carried by an X-Itonami-Envelope header value (URL-decoded
+  JSON), or nil when absent/unparsable. The host extracts the header;
+  this maps it. Verbatim from p2p.cljk."
+  [v]
+  (when v
+    (try (hio/parse-json (url-decode v))
+         (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil))))
+
+(defn- with-nonces [opts]
+  (assoc opts :nonces (or (:nonces opts) (atom {}))))
+
+(defn normalize-peer-info
+  "A verified /peer payload plus :url/:did in the keyword shape the
+  pick/infer selectors read (`:load` `:max-runs` `:models`
+  `:agent-models` `:profiles` `:peers`; `:error` when unreachable).
+  The wire JSON is untouched; only this internal shape is normalized
+  (the legacy reads mixed string keys here)."
+  [payload url did]
+  (let [kw (into {} (map (fn [[k v]] [(keyword k) v]) payload))]
+    (-> kw
+        (assoc :url url :did did)
+        (update :profiles (fn [ps] (mapv (fn [p] (into {} (map (fn [[k v]] [(keyword k) v]) p))) (or ps []))))
+        (update :peers (fn [ps] (vec (or ps []))))
+        (as-> m (if (contains? m :max_runs) (-> m (assoc :max-runs (:max_runs m)) (dissoc :max_runs)) m))
+        (as-> m (if (contains? m :agent_models) (-> m (assoc :agent-models (:agent_models m)) (dissoc :agent_models)) m))
+        (as-> m (if (contains? m :murakumo_did) (-> m (assoc :murakumo-did (:murakumo_did m)) (dissoc :murakumo_did)) m)))))
+
+(defn peer-info
+  "GET /peer from url; verifies the envelope (signature only, trust is
+  the caller's job). Answers the normalized info or {:url :error}.
+  `:fetch` `:verify` `:now-ms` ride `opts`. Verbatim reasons."
+  [url opts]
+  (try
+    (let [{:keys [status body]} (http-json (:fetch opts) (str url "/itonami/v1/peer") {:timeout-s 10})]
+      (if (= 200 status)
+        (let [env (open-envelope body (assoc (with-nonces opts) :trusted nil))]
+          (if (:error env)
+            {:url url :error (:error env)}
+            (normalize-peer-info (:payload env) url (:did env))))
+        {:url url :error (str "http " status)}))
+    (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+      {:url url :error (ex-message e)})))
+
+(defn discover
+  "Known peers plus one gossip hop. Answers peer-info maps (reachable
+  or not), first hop in peers.edn order then the gossip hop.
+  Verbatim from p2p.cljk."
+  [dir opts]
+  (let [o (with-nonces opts)
+        peers (:peers (read-peers dir))
+        first-hop (mapv #(peer-info (:url %) o) peers)
+        known (set (map :url peers))
+        more (vec (distinct (remove known (mapcat :peers first-hop))))
+        second-hop (mapv #(peer-info % o) more)]
+    (vec (concat first-hop second-hop))))
+
+(defn pick-peer
+  "Trusted, reachable, not full, not me; prefer a peer that already
+  holds cid, then lowest load. Pure over the trust set and own did."
+  [infos trusted me-did cid]
+  (->> infos
+       (filter #(and (not (:error %)) (contains? trusted (:did %)) (not= me-did (:did %))
+                     (< (or (:load %) 0) (or (:max-runs %) 1))))
+       (sort-by (fn [i] [(if (some (fn [p] (= cid (:cid p))) (:profiles i)) 0 1) (or (:load i) 0)]))
+       first))
+
+(defn infer-peers
+  "Trusted, reachable peers that lend a model for this request, least
+  loaded first. Pure over the trust set and own did."
+  [infos trusted me-did model]
+  (let [auto? (or (str/blank? (str model)) (= model "auto"))]
+    (->> infos
+         (filter #(and (not (:error %)) (contains? trusted (:did %)) (not= me-did (:did %))
+                       (if auto? (seq (:agent-models %)) (some #{model} (:models %)))))
+         (sort-by #(or (:load %) 0)))))
+
+(defn infer-via-peers
+  "Ask trusted peers to answer body from THEIR own rails. Answers
+  {:status :text :peer} of the first that answered, or the last
+  failure. `:fetch` `:sign` `:verify` `:now-ms` ride `opts`."
+  [node body infos trusted opts]
+  (let [o (with-nonces opts)]
+    (loop [[peer & more] (infer-peers infos trusted (:did node) (get body "model"))
+           last-err {:status 503 :text (hio/json-str {"error" "no trusted peer lends this model"})}]
+      (if (nil? peer)
+        last-err
+        (let [r (try (http-json (:fetch o) (str (:url peer) "/itonami/v1/infer")
+                               {:method "POST" :timeout-s 900
+                                :body (hio/json-str (sign-envelope node {"body" body} o))})
+                     (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                       {:status 0 :text (ex-message e)}))
+              env (when (= 200 (:status r))
+                    (open-envelope (:body r) (assoc o :trusted #{(:did peer)})))
+              resp (get-in env [:payload "response"])]
+          (if (and resp (not (:error env)))
+            {:status 200 :text resp :peer (:did peer) :rail (get-in env [:payload "rail"])}
+            (recur more (assoc r :peer (:did peer)))))))))
+
+;; ---------------------------------------------------------------- remote run (S5d unit 2)
+
+(defn remote-run
+  "Ask peer (an info map) to run prompt for local profile prof.
+  Answers a loop-result-shaped map with :peer and :receipt; workspace
+  writes are applied under (:home prof). The bundle files+cid ride
+  `ctx` (computed by bundle.cljc, covered there); `:fetch` `:sign`
+  `:verify` `:now-ms` `:sleep` (seconds) ride `ctx`. Guards verbatim."
+  [prof prompt opts peer origin-url ctx]
+  (let [c (with-nonces ctx)
+        node (:node c)
+        home (:home prof)
+        files (:files c)
+        cid (:cid c)]
+    (let [sub (http-json (:fetch c) (str (:url peer) "/itonami/v1/run")
+                         {:method "POST" :timeout-s 60
+                          :body (hio/json-str (sign-envelope node {"profile" (:name prof) "cid" cid "origin" origin-url
+                                                                 "origin_home" home
+                                                                 "prompt" prompt
+                                                                 "opts" {"toolsets" (:toolsets opts) "model" (:model opts)
+                                                                         "provider" (:provider opts) "pinned" (:pinned? opts)
+                                                                         "platform" (:platform opts)
+                                                                         "inference_rail" (get-in prof [:itonami :placement :inference-rail])
+                                                                         "files" (when-not origin-url files)}} c))})
+          run-id (get-in (open-envelope (:body sub) (assoc c :trusted #{(:did peer)})) [:payload "run_id"])
+          deadline (+ ((:now-ms c)) (* 1000 (+ 300 (or (get-in prof [:config "agent" "run_budget_seconds"]) 900))))
+          r (if-not (and (= 202 (:status sub)) run-id)
+              sub
+              (loop []
+                ((:sleep c) 3)
+                (let [pr (try (http-json (:fetch c) (str (:url peer) "/itonami/v1/run/" run-id)
+                                        {:headers (auth-header node {"poll" run-id} c) :timeout-s 30})
+                              (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
+                                {:status 0 :text (ex-message e)}))]
+                  (cond
+                    (= 200 (:status pr)) pr
+                    (> ((:now-ms c)) deadline) {:status 504 :text "peer run exceeded deadline"}
+                    (contains? #{202 0} (:status pr)) (recur)
+                    :else pr))))]
+      (if (not= 200 (:status r))
+        {:final nil :exit-reason "peer_error"
+         :error {:error (str (:url peer) " -> " (:status r) " " (get-in r [:body "error"] (:text r)))}
+         :peer (:did peer) :turns 0 :attempts []}
+        (let [env (open-envelope (:body r) (assoc c :trusted #{(:did peer)}))
+              pl (:payload env)]
+          (cond
+            (:error env) {:final nil :exit-reason "peer_error"
+                          :error {:error (str "result envelope: " (:error env))} :peer (:did peer) :turns 0 :attempts []}
+            (not= cid (get pl "cid")) {:final nil :exit-reason "peer_error"
+                                       :error {:error "peer ran a different bundle"} :peer (:did peer) :turns 0 :attempts []}
+            :else
+            (do (hio/mkdirs! (str home "/workspace"))
+                (doseq [[rel content] (get pl "writes")]
+                  (when (and (str/starts-with? (str rel) "workspace/") (not (str/includes? (str rel) "..")))
+                    (hio/write-text! (str home "/" rel) (str content))))
+                {:final (get pl "final") :exit-reason (get pl "exit_reason") :turns (get pl "turns")
+                 :usage (get pl "usage") :provider (get pl "provider") :model (get pl "model")
+                 :attempts (mapv #(into {} (map (fn [[k v]] [(keyword k) v]) %)) (get pl "attempts"))
+                 :error (when (get pl "error") {:error (get pl "error")})
+                 ;; sorted: parsed-JSON key order differs per runner, so the
+                 ;; legacy document order cannot be reproduced portably.
+                 :writes (mapv #(str home "/" %) (sort (keys (get pl "writes"))))
+                 :peer (:did env)
+                 :receipt {"run_id" (get pl "run_id") "peer" (:did env) "cid" cid
+                           "result_sha256" (get pl "result_sha256") "sig" (get-in r [:body "sig"])}})))))))
+
+;; ---------------------------------------------------------------- serve routes (S5d unit 2)
+
+(defn peer-route
+  "The signed /itonami/v1/peer info body. Every value rides `ctx`
+  (the host reads rails/profiles/health); this shapes + signs."
+  [ctx]
+  (let [node (:node ctx)]
+    (sign-envelope node {"did" (:did node) "url" (:public-url ctx)
+                         "murakumo_did" (:murakumo-did ctx)
+                         "load" @(:active-runs ctx) "max_runs" (:max-runs ctx)
+                         "rails" (:rails ctx)
+                         "models" (:models ctx)
+                         "agent_models" (:agent-models ctx)
+                         "health" (:health ctx)
+                         "profiles" (:profiles ctx)
+                         "peers" (:peer-urls ctx)}
+                     ctx)))
+
+(defn models-route
+  "The loopback /v1/models list: own models plus models trusted peers
+  lend, \"auto\" first. Non-loopback callers get 403."
+  [loopback? infos trusted own-models]
+  (if-not loopback?
+    {:status 403 :body {"error" "loopback only"}}
+    (let [lent (mapcat :models (filter #(contains? trusted (:did %)) infos))]
+      {:status 200 :body {"object" "list"
+                          "data" (vec (for [m (distinct (concat ["auto"] own-models lent))]
+                                        {"id" m "object" "model" "owned_by" "itonami-p2p"}))}})))
+
+(defn local-gateway-complete
+  "The endpoint a node offers ITSELF on loopback: own rails first,
+  then trusted peers' rails. `:complete` [body] answers the own-rails
+  result (host rails); the peer fallback rides `infos`/`trusted`."
+  [node body ctx]
+  (let [own ((:complete ctx) body)]
+    (if (<= 200 (:status own) 299)
+      (assoc own :route (str "self:" (:rail own)))
+      (let [via (infer-via-peers node body (:infos ctx) (:trusted ctx) ctx)]
+        (if (= 200 (:status via))
+          (assoc via :route (str "peer:" (:peer via) ":" (:rail via)))
+          via)))))
+
+(defn chat-route
+  "Loopback POST /v1/chat/completions. Answers {:status :headers :text}
+  (the completion text travels as-is); non-loopback callers get 403."
+  [loopback? node body ctx]
+  (if-not loopback?
+    {:status 403 :body {"error" "loopback only; peers use /itonami/v1/infer"}}
+    (let [r (local-gateway-complete node body ctx)]
+      {:status (if (pos? (or (:status r) 0)) (:status r) 502)
+       :headers {"X-Itonami-Route" (str (:route r))}
+       :text (:text r)})))
+
+(defn infer-route
+  "POST /itonami/v1/infer: a trusted peer lends inference from this
+  node's own rails (never onward). `:complete` [body] is the host
+  rails call."
+  [body trust node ctx]
+  (let [env (open-envelope body (assoc (with-nonces ctx) :trusted (:trusted trust)))]
+    (if (:error env)
+      {:status 403 :body {"error" (:error env)}}
+      (let [r ((:complete ctx) (get-in env [:payload "body"]))]
+        (if (<= 200 (:status r) 299)
+          {:status 200 :body (sign-envelope node {"response" (:text r) "rail" (:rail r)} ctx)}
+          {:status 502 :body {"error" (str "own rails failed: " (:status r))}})))))
+
+(defn bundle-route
+  "GET /itonami/v1/bundle/:cid. `:bundles` maps cid -> {\"files\" ...}
+  (the host's local-bundle lookup)."
+  [cid header-value trust ctx]
+  (let [env (open-envelope (header-envelope header-value) (assoc (with-nonces ctx) :trusted (:trusted trust)))]
+    (cond
+      (:error env) {:status 403 :body {"error" (:error env)}}
+      (not= cid (get-in env [:payload "get"])) {:status 403 :body {"error" "envelope names another cid"}}
+      :else (if-let [b (get (:bundles ctx) cid)]
+              {:status 200 :body {"cid" cid "files" (get b "files")}}
+              {:status 404 :body {"error" "no such bundle here"}}))))
+
+(defn run-accept-route
+  "POST /itonami/v1/run: verify, check capacity, accept with 202.
+  Runs live in the `:runs` atom; execution itself stays host-side."
+  [body trust node ctx]
+  (let [c (with-nonces ctx)
+        env (open-envelope body (assoc c :trusted (:trusted trust)))
+        max-runs (or (:max-runs c) 2)
+        active (:active-runs c)
+        runs (:runs c)]
+    (cond
+      (:error env) {:status 403 :body {"error" (:error env)}}
+      (>= @active max-runs) {:status 429 :body {"error" "busy" "load" @active "max_runs" max-runs}}
+      :else
+      (let [rh ((:random-hex c) 8)
+            run-id (subs (str rh) 0 (min 8 (count (str rh))))]
+        (swap! active inc)
+        (swap! runs assoc run-id {:status "running" :requester (:did env) :started ((:now-ms c))})
+        {:status 202 :body (sign-envelope node {"run_id" run-id "status" "running"} c)}))))
+
+(defn run-poll-route
+  "GET /itonami/v1/run/:id: the requester polls its run. Terminal
+  reads dissoc the run."
+  [run-id header-value trust ctx]
+  (let [c (with-nonces ctx)
+        env (open-envelope (header-envelope header-value) (assoc c :trusted (:trusted trust)))
+        r (get @(:runs c) run-id)]
+    (cond
+      (:error env) {:status 403 :body {"error" (:error env)}}
+      (not= run-id (get-in env [:payload "poll"])) {:status 403 :body {"error" "envelope names another run"}}
+      (nil? r) {:status 404 :body {"error" "no such run"}}
+      (not= (:requester r) (:did env)) {:status 403 :body {"error" "not your run"}}
+      (= "running" (:status r)) {:status 202 :body {"run_id" run-id "status" "running"}}
+      (= "failed" (:status r)) (do (swap! (:runs c) dissoc run-id) {:status 500 :body {"error" (:error r)}})
+      :else (do (swap! (:runs c) dissoc run-id) {:status 200 :body (:envelope r)}))))
+
+(defn serve-route
+  "One peer-server route decision: [method path] + parsed body +
+  headers -> {:status ...} response value. The socket, body reading
+  and JSON printing stay host-side. Verbatim reasons + shapes."
+  [method url body headers ctx]
+  (let [trust (:trust ctx)]
+    (cond
+      (and (= method "GET") (= url "/itonami/v1/peer"))
+      {:status 200 :body (peer-route ctx)}
+
+      (and (= method "GET") (= url "/v1/models"))
+      (models-route (:loopback? ctx) (:infos ctx) (:trusted trust) (:own-models ctx))
+
+      (and (= method "POST") (= url "/v1/chat/completions"))
+      (chat-route (:loopback? ctx) (:node ctx) body ctx)
+
+      (and (= method "POST") (= url "/itonami/v1/infer"))
+      (infer-route body trust (:node ctx) ctx)
+
+      (and (= method "GET") (str/starts-with? (str url) "/itonami/v1/bundle/"))
+      (bundle-route (subs (str url) (count "/itonami/v1/bundle/")) (get headers "x-itonami-envelope") trust ctx)
+
+      (and (= method "POST") (= url "/itonami/v1/run"))
+      (run-accept-route body trust (:node ctx) ctx)
+
+      (and (= method "GET") (str/starts-with? (str url) "/itonami/v1/run/"))
+      (run-poll-route (subs (str url) (count "/itonami/v1/run/")) (get headers "x-itonami-envelope") trust ctx)
+
+      :else {:status 404 :body {"error" "not found" "protocol" protocol}})))
+
+;; ---------------------------------------------------------------- placement (S5d unit 2)
+
+(defn placement
+  "Follow the profile :placement order (e.g. [:peer :local]): try a
+  trusted peer, fall back to local. `:run-local` [prof prompt opts]
+  is the host agent loop; the :peer step rides discover/pick/
+  remote-run over `ctx`. The result carries :placement, the trail of
+  every step tried. Verbatim from p2p.cljk."
+  [prof prompt opts cfg ctx]
+  (let [c (with-nonces ctx)
+        order (if (:force-peer? cfg) [:peer] (get-in prof [:itonami :placement :order] [:local]))
+        cid (get-in prof [:itonami :bundle :cid])
+        step-rec (fn [step r] (cond-> {"step" (name step) "exit_reason" (:exit-reason r)}
+                               (:peer r) (assoc "peer" (:peer r))
+                               (get-in r [:error :error])
+                               (assoc "error" (subs (str (get-in r [:error :error])) 0 (min 200 (count (str (get-in r [:error :error]))))))))]
+    (loop [[step & more] order last-r nil trail []]
+      (cond
+        (nil? step) (assoc (or last-r {:final nil :exit-reason "no_placement"
+                                       :error {:error "no placement step could run the turn"} :turns 0 :attempts []})
+                           :placement trail)
+
+        (= step :local)
+        (let [r ((:run-local c) prof prompt opts)
+              trail (conj trail (step-rec :local r))]
+          (if (and (= "provider_error" (:exit-reason r)) (seq more))
+            (recur more r trail)
+            (assoc r :placement trail)))
+
+        (= step :peer)
+        (let [infos (discover (:dir c) c)
+              peer (pick-peer infos (:trusted (:trust c)) (:did (:node c)) cid)]
+          (if-not peer
+            (recur more (or last-r {:final nil :exit-reason "no_peer"
+                                    :error {:error "no trusted peer available"} :turns 0 :attempts []})
+                   (conj trail {"step" "peer" "exit_reason" "no_peer"}))
+            (let [r (remote-run prof prompt opts peer (:origin-url cfg) c)
+                  trail (conj trail (step-rec :peer r))]
+              (if (and (#{"peer_error" "provider_error"} (:exit-reason r)) (seq more))
+                (recur more r trail)
+                (assoc r :placement trail)))))
+
+        :else (recur more last-r trail)))))
