@@ -55,6 +55,19 @@
             [itonami.otehon.tick :as tick]
             [itonami.otehon.store :as store]
             [itonami.otehon.turn :as turn]
+            [itonami.otehon.execute :as execute]
+            [itonami.otehon.tts :as tts]
+            [itonami.otehon.collect :as collect]
+            [itonami.otehon.clarify :as clarify]
+            [itonami.otehon.webguard :as webguard]
+            [itonami.otehon.dapps :as dapps]
+            [itonami.otehon.oauth :as oauth]
+            [itonami.otehon.connections :as connections]
+            [itonami.otehon.rails :as rails]
+            [itonami.otehon.mcp :as mcp]
+            [itonami.otehon.homeassistant :as homeassistant]
+            [itonami.otehon.computer-use :as computer-use]
+            [itonami.otehon.code-rpc :as code-rpc]
             [itonami.otehon.run :as run]
             [itonami.otehon.doctor :as doctor]
             [itonami.otehon.sessions :as sessions]
@@ -137,7 +150,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -177,6 +190,19 @@
     :chat (ops-chat c scratch)
     :quiet (ops-quiet c)
     :turn-asm (ops-assembly c)
+    :turn-exec (ops-execute c)
+    :tts (ops-tts c)
+    :collect (ops-collect c)
+    :clarify (ops-clarify c)
+    :webguard (ops-webguard c)
+    :process (ops-process c)
+    :dapps (ops-dapps c scratch)
+    :connections (ops-connections c scratch)
+    :rails (ops-rails c)
+    :mcp (ops-mcp c)
+    :homeassistant (ops-homeassistant c)
+    :computer-use (ops-computer-use c)
+    :code-rpc (ops-code-rpc c)
     :confine (ops-confine c scratch)
     :send (ops-send c)
     :peer (ops-peer c scratch)
@@ -621,6 +647,21 @@
                               :stamp stamp :run-at run-at
                               :notepad notepad :linked nil :monitor-context monitor-context}))
 
+(defn- run-step-stub
+  "The host's live step-fn, as a stub (mirrors the `:turn-exec` `:via`
+  selection): the `:request` `:step` name picks the rail outcome. `ok`
+  returns the legacy turn fields with `:status :ok`; anything else fails
+  the way a real rail failure would (failed map, throw, garbage)."
+  [name]
+  (case (str name)
+    "fail" (fn [_] {:status :failed :reason "rail/unavailable"})
+    "throw" (fn [_] (throw (ex-info "run: stub threw" {})))
+    "bad" (fn [_] "ran-inference")
+    (fn [_] {:status :ok :final "live did it" :exit-reason "completed"
+             :turns 1 :provider "murakumo" :model "mishima"
+             :usage {"prompt_tokens" 10 "completion_tokens" 20 "total_tokens" 30}
+             :attempts [{:provider "murakumo" :model "mishima" :status "ok"}]})))
+
 (defn- apply-turn!
   "Apply a finished agent turn: doc, jobs.json record and audit rows.
   Verbatim from run-job-core. `turn` is the executor result; `deliver`
@@ -661,11 +702,24 @@
               :job-after (current-row home (get job "id"))
               :usage-row usage :run-row run-row}}))
 
+(defn- apply-planned-turn!
+  "Apply a `:planned` turn with the host's live `:step-fn`: run the
+  plan's `:exec` through `execute/run-turn`, fold the transcript into
+  the legacy turn shape, and save it the legacy way. `mon` carries the
+  monitor snapshot/state passthrough."
+  [home job prompt plan mon opts micros stamp run-at]
+  (let [transcript (execute/run-turn {:status :ok :exec (:exec plan)}
+                                     {:step-fn (:step-fn opts)})
+        turn (execute/turn-from-transcript transcript)
+        r (apply-turn! home job prompt turn (:deliver opts) micros stamp run-at)]
+    (update r :detail assoc :snapshot (:snapshot mon) :monitor-state (:state mon))))
+
 (defn- execute-run
   "Run one job's host side now. `now-map` = {:iso :parts :ms}; `opts`
-  carries the test-only turn injection {:turn :deliver} (the product
-  command has no executor yet, so a planned turn without one stays
-  pending). Returns {:exit :lines :detail}: detail carries :status plus
+  carries the test-only turn injection {:turn :deliver} and the live
+  step-fn injection {:step-fn :deliver} (the product command has no
+  executor yet, so a planned turn with neither stays pending).
+  Returns {:exit :lines :detail}: detail carries :status plus
   the saved artifacts (output-doc, job-after, snapshot, monitor-state,
   audit rows) for the shared cases."
   [prof job-ref capabilities now-map opts]
@@ -775,14 +829,20 @@
                               :snapshot (:snapshot mon) :monitor-state (:state mon)}})
 
                   (= :planned (:status plan3))
-                  (if-let [turn (:turn opts)]
-                    (let [r (apply-turn! home job (:prompt plan3)
-                                         turn (:deliver opts) micros stamp run-at)]
-                      (update r :detail assoc :snapshot (:snapshot mon) :monitor-state (:state mon)))
-                    {:exit 3
-                     :lines [(str "inference pending for " (get-in plan3 [:job :id])) (canon plan3)]
-                     :detail {:status "pending" :plan (canon plan3)
-                              :snapshot (:snapshot mon) :monitor-state (:state mon)}})
+                  (cond (:step-fn opts)
+                        (apply-planned-turn! home job (:prompt plan3) plan3
+                                             mon opts micros stamp run-at)
+
+                        (:turn opts)
+                        (let [r (apply-turn! home job (:prompt plan3)
+                                             (:turn opts) (:deliver opts) micros stamp run-at)]
+                          (update r :detail assoc :snapshot (:snapshot mon) :monitor-state (:state mon)))
+
+                        :else
+                        {:exit 3
+                         :lines [(str "inference pending for " (get-in plan3 [:job :id])) (canon plan3)]
+                         :detail {:status "pending" :plan (canon plan3)
+                                  :snapshot (:snapshot mon) :monitor-state (:state mon)}})
 
                   :else
                   {:exit (if (= :held (:status plan3)) 2 1)
@@ -790,14 +850,20 @@
                    :detail {:status (name (:status plan3)) :reason (:reason plan3)}}))
 
               (= :planned (:status plan2))
-              (if-let [turn (:turn opts)]
-                (let [r (apply-turn! home job (:prompt plan2)
-                                     turn (:deliver opts) micros stamp run-at)]
-                  (update r :detail assoc :snapshot (:snapshot mon) :monitor-state (:state mon)))
-                {:exit 3
-                 :lines [(str "inference pending for " (get-in plan2 [:job :id])) (canon plan2)]
-                 :detail {:status "pending" :plan (canon plan2)
-                          :snapshot (:snapshot mon) :monitor-state (:state mon)}})
+              (cond (:step-fn opts)
+                    (apply-planned-turn! home job (:prompt plan2) plan2
+                                         mon opts micros stamp run-at)
+
+                    (:turn opts)
+                    (let [r (apply-turn! home job (:prompt plan2)
+                                         (:turn opts) (:deliver opts) micros stamp run-at)]
+                      (update r :detail assoc :snapshot (:snapshot mon) :monitor-state (:state mon)))
+
+                    :else
+                    {:exit 3
+                     :lines [(str "inference pending for " (get-in plan2 [:job :id])) (canon plan2)]
+                     :detail {:status "pending" :plan (canon plan2)
+                              :snapshot (:snapshot mon) :monitor-state (:state mon)}})
 
               :else
               {:exit (if (= :held (:status plan2)) 2 1)
@@ -819,7 +885,8 @@
                                  :ms 0
                                  :parts {:year 2026 :month 11 :day 8 :hour 0 :minute 0}}
                                 (:now req))
-                         {:turn (:turn req) :deliver (:deliver req)})
+                         {:turn (:turn req) :deliver (:deliver req)
+                          :step-fn (when-let [s (:step req)] (run-step-stub s))})
           doc (or (:output-doc (:detail r)) "")
           jobs-doc (try (when (hio/file? (jobs-file dir))
                           (hio/parse-json (hio/slurp-utf8 (jobs-file dir))))
@@ -2564,6 +2631,24 @@
               "spellings" (sort assembly/unlimited-spellings)
               (throw (ex-info (str "turn-asm: unknown call " verb) {:verb verb})))}))
 
+(defn- ops-execute [c]
+  (let [calls (atom 0)
+        stub (case (:via c "ok")
+               "fail-1" (fn [step] (let [i (swap! calls inc)]
+                                     (if (= i 2)
+                                       {:status :failed :reason "turn/step-failed" :id (:id step)}
+                                       {:status :ok :id (:id step)})))
+               "unknown" (fn [step] {:status :unknown :id (:id step)})
+               "bad" (fn [step] (str "ran-" (:id step)))
+               "throw" (fn [step] (swap! calls inc)
+                         (throw (ex-info "turn-exec: stub threw" {:id (:id step)})))
+               (fn [step] (swap! calls inc) {:status :ok :id (:id step)}))]
+    (let [res (execute/run-turn (:plan c) {:step-fn stub})]
+      (cond (:fold c) {:turn (execute/turn-from-transcript res)}
+            (:render c) {:rendered (execute/render-transcript
+                                    res {:prompt (:prompt c "") :run-at (:run-at c)})}
+            :else (assoc res :stub-calls @calls)))))
+
 (defn- ops-quiet [c]
   (let [[verb arg arg2] (:call c)]
     {:value (case verb
@@ -2669,6 +2754,179 @@
 (defn- ops-tools [c]
   (let [req (:request c {})]
     {:results (mapv #(run-tools-step {} %) (:steps req []))}))
+
+(defn- ops-tts [c]
+  (let [[verb arg arg2 arg3 arg4] (:call c)]
+    {:value (case verb
+              "configured" (tts/configured arg)
+              "request" (tts/speech-request arg arg2 arg3 arg4)
+              "format" (tts/safe-format arg)
+              "timeout" (tts/clamp-timeout-s arg)
+              (throw (ex-info (str "tts: unknown call " verb) {:verb verb})))}))
+
+(defn- collect-stub
+  "The outbox's injected fns, as a stub (mirrors the `:turn-exec`
+  `:via` selection): `ok` signs and receipts; the rest fail the way a
+  real signer/appender would (no signature, no receipt, throw)."
+  [name]
+  (case (str name)
+    "no-sig" {:sign-fn (fn [_] nil)
+              :append-fn (fn [_ _] {:transfer-id "t1"})}
+    "no-receipt" {:sign-fn (fn [_] "sig")
+                  :append-fn (fn [_ _] {})}
+    "bare-receipt" {:sign-fn (fn [_] "sig")
+                    :append-fn (fn [_ _] {:transfer-id "t1"})}
+    "throw" {:sign-fn (fn [_] (throw (ex-info "collect: stub threw" {})))
+             :append-fn (fn [_ _] {:transfer-id "t1"})}
+    {:sign-fn (fn [_] "sig")
+     :append-fn (fn [_ _] {:transfer-id "t1" :signed-by "tester"
+                           :appended-at "2026-11-09T00:00:00+09:00"})}))
+
+(defn- ops-collect [c]
+  (let [[verb arg arg2] (:call c)]
+    {:value (case verb
+              "row" (collect/certify-row arg (collect-stub arg2))
+              "certify" (collect/certify arg (collect-stub arg2))
+              "reconcile" (collect/reconcile arg arg2)
+              (throw (ex-info (str "collect: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-clarify [c]
+  (let [[verb arg arg2 arg3] (:call c)]
+    {:value (case verb
+              "strip" (clarify/strip-recommended arg)
+              "mark" (clarify/mark-recommended arg)
+              "clean" (clarify/clean-answer arg arg2)
+              "normalize" (clarify/normalize-questions arg)
+              "status" (clarify/response-status arg arg2 arg3)
+              "result" (clarify/result-json arg arg2)
+              (throw (ex-info (str "clarify: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-webguard [c]
+  (let [[verb arg arg2] (:call c)]
+    {:value (case verb
+              "blocked" (webguard/blocked-address? arg arg2)
+              "allowed" (webguard/host-allowed? arg arg2)
+              "refusal" (webguard/query-refusal arg)
+              (throw (ex-info (str "webguard: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-process [c]
+  (let [[verb arg] (:call c)]
+    {:value (case verb
+              "redact" (process/redact-command arg)
+              (throw (ex-info (str "process: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-dapps [c scratch]
+  (let [dir (scratch-case-dir scratch c)
+        [verb arg arg2 arg3 arg4] (:call c)
+        req (:request c {})
+        env (or (:env req) (hio/all-env))]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (case verb
+      "status" {:rows (dapps/status env)}
+      "with-servers" (dapps/with-servers arg arg2 env)
+      "select-servers" {:value (dapps/select-servers arg arg2 arg3 arg4)}
+      (throw (ex-info (str "dapps: unknown call " verb) {:verb verb})))))
+
+(defn- ops-mcp [c]
+  (let [[verb arg arg2 arg3] (:call c)
+        req (:request c {})
+        env (or (:env req) (hio/all-env))]
+    {:value (case verb
+              "enabled?" (mcp/enabled? arg)
+              "names-for" (mcp/names-for arg arg2 arg3)
+              "command-for" (mcp/command-for arg env)
+              "server-env" (mcp/server-env arg env)
+              "tool-name" (mcp/tool-name arg arg2)
+              "tool-allowed?" (mcp/tool-allowed? arg arg2)
+              "handshake-lines" (mcp/handshake-lines)
+              "call-line" (mcp/call-line arg arg2 arg3)
+              "collect-call-results" (mcp/collect-call-results arg)
+              "collect-exchange-result" (mcp/collect-exchange-result arg)
+              "render-result" (mcp/render-result arg)
+              (throw (ex-info (str "mcp: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-connections [c scratch]
+  (let [dir (scratch-case-dir scratch c)
+        [verb arg arg2] (:call c)
+        req (:request c {})
+        env (or (:env req) (hio/all-env))]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (case verb
+      "status" {:rows (connections/connection-status arg env dir arg2)}
+      "store-name" {:value (oauth/store-name arg)}
+      (throw (ex-info (str "connections: unknown call " verb) {:verb verb})))))
+
+(defn- ops-rails [c]
+  (let [[verb arg arg2] (:call c)]
+    {:value (case verb
+              "small-model?" (rails/small-model? arg)
+              "normalize-ids" (rails/normalize-model-ids arg)
+              "detect-entries" (rails/detect-entries arg)
+              "all-models" (rails/all-models arg)
+              "agent-models" (rails/agent-models arg)
+              "candidates" (rails/select-candidates arg arg2)
+              (throw (ex-info (str "rails: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-homeassistant [c]
+  (let [[verb arg arg2 arg3 arg4] (:call c)]
+    {:value (case verb
+              "entity-id-error" (homeassistant/entity-id-error arg)
+              "service-error" (homeassistant/service-error arg arg2)
+              "blocked-error" (homeassistant/blocked-error arg)
+              "coerce-data" (homeassistant/coerce-data arg)
+              "build-payload" (homeassistant/build-payload arg arg2 arg3 arg4)
+              "project-states" (homeassistant/project-states arg arg2 arg3)
+              "project-state" (homeassistant/project-state arg)
+              "project-services" (homeassistant/project-services arg arg2)
+              "project-affected" (homeassistant/project-affected arg)
+              (throw (ex-info (str "homeassistant: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-computer-use [c]
+  (let [[verb arg arg2 arg3 arg4] (:call c)]
+    {:value (case verb
+              "canon-keys" (computer-use/canon-keys arg)
+              "blocked-input?" (boolean (computer-use/blocked-input? arg arg2))
+              "select-window" (computer-use/select-window arg arg2 arg3 arg4)
+              "build-request" (computer-use/build-request arg arg2 arg3)
+              "content-text" (computer-use/content-text arg)
+              "result-error" (computer-use/result-error arg)
+              "action-request" (computer-use/action-request {:computer-state (atom arg)
+                                                             :computer-session arg2} arg3 arg4)
+              (throw (ex-info (str "computer-use: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-code-rpc [c]
+  (let [[verb arg arg2 arg3 arg4] (:call c)]
+    {:value (case verb
+              "tool-error" (code-rpc/tool-error arg)
+              "result-error" (code-rpc/result-error arg)
+              "tool-errors-since" (code-rpc/tool-errors-since arg arg2)
+              "sandbox-tools-for" (code-rpc/sandbox-tools-for arg)
+              "failure-hint" (code-rpc/failure-hint arg arg2)
+              "hint-on-failure" (code-rpc/hint-on-failure arg arg2 arg3 arg4)
+              "generate-hermes-tools" (code-rpc/generate-hermes-tools arg)
+              "token-str" (code-rpc/token-str arg)
+              "token-ok?" (code-rpc/token-ok? arg arg2)
+              "duration-seconds" (code-rpc/duration-seconds arg arg2)
+              "req-file?" (code-rpc/req-file? arg)
+              "res-name" (code-rpc/res-name arg)
+              "int-seq?" (code-rpc/int-seq? arg)
+              "refusal" (code-rpc/refusal arg arg2 arg3 arg4)
+              "terminal-args" (code-rpc/terminal-args arg arg2)
+              "message-text" (code-rpc/message-text (ex-info arg {}))
+              "make-state" (let [st (code-rpc/make-state arg)]
+                             {:rpc-dir (:rpc-dir st) :rpc-token (:rpc-token st)
+                              :allowed (:allowed st) :max-tool-calls (:max-tool-calls st)
+                              :counter @(:counter st)})
+              "finish-call" (let [st (code-rpc/make-state {:rpc-dir "/tmp/r"
+                                                           :dispatch (fn [_ _] "unused")})
+                                  now (hio/now-ms)
+                                  results (if (sequential? arg3) arg3 [arg3])
+                                  out (mapv #(code-rpc/finish-call! st arg arg2 % now) results)]
+                              {:result (last out) :count @(:counter st)
+                               :log (mapv #(dissoc % "duration") @(:log st))})
+              (throw (ex-info (str "code-rpc: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-send [c]
   (let [req (:request c {})
