@@ -49,6 +49,7 @@
             [itonami.otehon.yakuwari :as yakuwari]
             [itonami.otehon.yaml :as yaml]
             [itonami.otehon.text :as text]
+            [itonami.otehon.assembly :as assembly]
             [itonami.otehon.confine :as confine]
             [itonami.otehon.quiet :as quiet]
             [itonami.otehon.tick :as tick]
@@ -136,7 +137,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -175,6 +176,7 @@
     :adapters (ops-adapters c)
     :chat (ops-chat c scratch)
     :quiet (ops-quiet c)
+    :turn-asm (ops-assembly c)
     :confine (ops-confine c scratch)
     :send (ops-send c)
     :peer (ops-peer c scratch)
@@ -2545,6 +2547,23 @@
                           (chat/send-reply! prof msg (str text) fetch env))
           (throw (ex-info (str "chat: unknown step " verb) {:verb verb}))))
       (:steps req []))}))
+(defn- ops-assembly [c]
+  (let [[verb arg arg2 arg3] (:call c)]
+    {:value (case verb
+              "history-messages" (assembly/history-messages arg)
+              "wrap-up?" (assembly/wrap-up? arg arg2)
+              "inject-wrapup" (let [seen (atom false)
+                                    first (assembly/maybe-inject-run-budget-wrapup arg seen arg2 arg3)
+                                    latched @seen
+                                    second (assembly/maybe-inject-run-budget-wrapup first seen arg2 arg3)]
+                                {:first first :latched latched :second second})
+              "resolve-turn-limit" (if (some? arg2)
+                                     (assembly/resolve-turn-limit arg arg2)
+                                     (assembly/resolve-turn-limit arg))
+              "resolve-max-turns" (assembly/resolve-max-turns arg arg2 arg3)
+              "spellings" (sort assembly/unlimited-spellings)
+              (throw (ex-info (str "turn-asm: unknown call " verb) {:verb verb})))}))
+
 (defn- ops-quiet [c]
   (let [[verb arg arg2] (:call c)]
     {:value (case verb
