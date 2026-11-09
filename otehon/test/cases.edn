@@ -2484,4 +2484,268 @@
                       nil
                       [{"chat" "-100" "text" "hi" "meta" nil}]
                       ["Watcher delivery error: bang"]]}}
+{:id :watcher/gone-immediately :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100"}
+             :session-seq [nil]
+             :steps [["watch"] ["sleeps"] ["sends"] ["enqueues"] ["warns"]]}
+   :expect {:results [nil [5] [] [] []]}}
+  {:id :watcher/exit-consumed :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100" "notify_on_complete" true}
+             :sessions {"s1" {"state" "exited" "exit-code" 0 "output" "done"}}
+             :session-seq ["s1"]
+             :consumed-ids ["s1"]
+             :steps [["watch"] ["sends"] ["enqueues"]]}
+   :expect {:results [nil [] []]}}
+  {:id :watcher/silent-off :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100"}
+             :config {"display" {"background_process_notifications" "off"}}
+             :sessions {"s1" {"state" "running" "output" "working"}}
+             :session-seq ["s1" nil]
+             :steps [["watch"] ["sends"] ["sleeps"]]}
+   :expect {:results [nil [] [5 5]]}}
+  {:id :watcher/running-all-update :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100"}
+             :config {"display" {"background_process_notifications" "all"}}
+             :sessions {"s1" {"state" "running" "exit-code" 0 "output" "hello" "command" ""}}
+             :session-seq ["s1" "s1" nil]
+             :steps [["watch"] ["sends"] ["sleeps"]]}
+   :expect {:results [nil [{"chat" "-100" "text" "⏳ Background task still running
+
+Recent output:
+```
+hello
+```" "thread" ""}] [5 5 5]]}}
+  {:id :watcher/agent-notify-delivered :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100" "notify_on_complete" true}
+             :sessions {"s1" {"state" "exited" "exit-code" 0 "output" "did it" "command" ""}}
+             :session-seq ["s1"]
+             :enqueue ["ok"]
+             :steps [["watch"] ["sends"] ["enqueues"] ["sleeps"]]}
+   :expect {:results [nil [] [{"session" "s1" "head" "[IMPORTANT: Background process s1 completed normally (exit code 0).
+Command: 
+Output:
+did it]"}] [5]]}}
+  {:id :watcher/agent-notify-busy-receipt :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100" "notify_on_complete" true}
+             :sessions {"s1" {"state" "exited" "exit-code" 0 "output" "did it" "command" ""}}
+             :session-seq ["s1"]
+             :enqueue ["ok"]
+             :launching-turn true
+             :steps [["watch"] ["sends"] ["enqueues"]]}
+   :expect {:results [nil [{"chat" "-100" "text" "✅ Background task finished" "thread" ""}]
+                      [{"session" "s1" "head" "[IMPORTANT: Background process s1 completed normally (exit code 0).
+Command: 
+Output:
+did it]"}]]}}
+  {:id :watcher/refuse-then-deliver :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100" "notify_on_complete" true}
+             :sessions {"s1" {"state" "exited" "exit-code" 0 "output" "did it" "command" ""}}
+             :session-seq ["s1" "s1"]
+             :enqueue ["refuse" "ok"]
+             :steps [["watch"] ["sends"] ["enqueues"] ["sleeps"]]}
+   :expect {:results [nil [] [{"session" "s1" "head" "[IMPORTANT: Background process s1 completed normally (exit code 0).
+Command: 
+Output:
+did it]"} {"session" "s1" "head" "[IMPORTANT: Background process s1 completed normally (exit code 0).
+Command: 
+Output:
+did it]"}] [5 10]]}}
+  {:id :watcher/refuse-8x-fallback-warn :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100" "notify_on_complete" true}
+             :sessions {"s1" {"state" "exited" "exit-code" 0 "output" "did it" "command" ""}}
+             :session-seq ["s1" "s1" "s1" "s1" "s1" "s1" "s1" "s1"]
+             :enqueue ["refuse" "refuse" "refuse" "refuse" "refuse" "refuse" "refuse" "refuse"]
+             :steps [["watch"] ["sends"] ["warns"] ["sleeps"]]}
+   :expect {:results [nil [] ["Process watcher: completion for s1 was refused 8 times; falling back to the notify_mode=concise notice"]
+                      [5 10 20 40 60 60 60 60]]}}
+  {:id :watcher/refuse-8x-committed :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100" "notify_on_complete" true}
+             :sessions {"s1" {"state" "exited" "exit-code" 0 "output" "did it" "command" ""}}
+             :session-seq ["s1" "s1" "s1" "s1" "s1" "s1" "s1" "s1"]
+             :enqueue ["refuse" "refuse" "refuse" "refuse" "refuse" "refuse" "refuse" "refuse"]
+             :admission true
+             :steps [["watch"] ["sends"] ["warns"]]}
+   :expect {:results [nil [] []]}}
+  {:id :watcher/mode-matrix :op :watcher
+   :request {:steps [["mode" {} {}]
+                     ["mode" {"HERMES_BACKGROUND_NOTIFICATIONS" "ERROR"} {}]
+                     ["mode" {} {"display" {"background_process_notifications" false}}]
+                     ["mode" {} {"display" {"background_process_notifications" "bogus"}}]
+                     ["mode" {"HERMES_BACKGROUND_NOTIFICATIONS" " All "} {}]]}
+   :expect {:results ["concise" "error" "off" "concise" "all"]}}
+  {:id :watcher/backoff-matrix :op :watcher
+   :request {:steps [["backoff" 1 10 60] ["backoff" 2 10 60] ["backoff" 8 10 60]
+                     ["backoff" 63 10 60] ["backoff" 1 0 60] ["backoff" 1 -5 60]]}
+   :expect {:results [10 20 60 60 60 60]}}
+  {:id :watcher/age-matrix :op :watcher
+   :request {:steps [["age" 45] ["age" 789] ["age" 7384] ["age" "bogus"] ["age" -5]]}
+   :expect {:results ["45s" "13m9s" "2h3m" "?" "0s"]}}
+  {:id :watcher/notify-matrix :op :watcher
+   :request {:steps [
+                     ["notify" {"type" "completion" "session_id" "s1" "command" "echo hi" "exit_code" 0 "output" "hi" "completion_reason" "exited"}]
+                     ["notify" {"type" "completion" "session_id" "s2" "command" "run.sh" "exit_code" 143 "output" "boom" "completion_reason" "killed" "termination_source" "Hermes"}]
+                     ["notify" {"type" "heartbeat" "session_id" "s3" "command" "sleep 60" "seq" 2 "elapsed" 125 "interval" 5 "output" "tick"}]
+                     ["notify" {"type" "watch_match" "session_id" "s4" "command" "tail" "pattern" "ERR" "output" "ERR x" "suppressed" 3}]
+                     ["notify" {"type" "watch_disabled" "message" "disk full"}]
+                     ["notify" {"type" "completion" "session_id" "s5" "command" "c" "exit_code" 1 "output" "e" "handoff_note" "take over"}]
+                     ["notify" {"type" "completion" "session_id" "s6" "command" "c" "exit_code" 0 "output" "ok" "owner_task_id" "sub-9"}]
+                     ["notify" {"type" "completion" "session_id" "s7" "command" "c" "exit_code" 0 "output" "tail-here" "output_cut" 42}]
+                     ["notify" {"type" "completion" "session_id" "s8" "command" "c" "exit_code" 0 "output" "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" "owner_task_id" "sub-1"}]]}
+   :expect {:results [
+                      "[IMPORTANT: Background process s1 completed normally (exit code 0).
+Command: echo hi
+Output:
+hi]"
+                      "[IMPORTANT: Background process s2 terminated by Hermes (exit code 143, SIGTERM).
+Command: run.sh
+Output:
+boom]"
+                      "[Background process s3 heartbeat #2 — still running after 2m5s (next in 5s when there is new output; you will also be told when it exits).
+Command: sleep 60
+Output since last heartbeat:
+tick]"
+                      "[IMPORTANT: Background process s4 matched watch pattern \"ERR\".
+Command: tail
+Matched output:
+ERR x
+(3 earlier matches were suppressed by rate limit)]"
+                      "[IMPORTANT: disk full]"
+                      "[IMPORTANT: Background process s5 exited (exit code 1).
+Handed off to you by a subagent before it finished. Purpose: take over
+Command: c
+Output:
+e]"
+                      "[IMPORTANT: Background process s6 completed normally (exit code 0).
+Started by subagent sub-9 (delegate_task).
+Command: c
+Output:
+ok]"
+                      "[IMPORTANT: Background process s7 completed normally (exit code 0).
+Command: c
+Output:
+...(first 42 characters cut — process(action=\"log\", session_id=\"s7\") has the full output)
+tail-here]"
+                      "[IMPORTANT: Background process s8 completed normally (exit code 0).
+Started by subagent sub-1 (delegate_task).
+Command: c
+Output:
+...(output trimmed — subagent-owned process; see the delegation's live transcript for full output)
+zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz]"]}}
+  {:id :watcher/short-and-display :op :watcher
+   :request {:steps [["short-command" "echo hi"]
+                     ["short-command" "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+                     ["display-text" [{"command" "lint" "exit_code" 3}]]
+                     ["display-text" [{"command" "a"} {"command" "b"}]]
+                     ["display-text" [{"command" "c" "completion_reason" "lost"}]]]}
+   :expect {:results ["echo hi" "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..."
+                      "Background Process Failed (exit 3): lint"
+                      "2 Background Processes Finished"
+                      "Background Process Lost: c"]}}
+  {:id :watcher/final-and-running :op :watcher
+   :request {:sessions {"s9" {"state" "exited" "exit-code" 1 "output" "line1\nline2" "command" "make test" "started-at" 5000}}
+             :steps [["final" "s9" "concise" 8000]
+                     ["final" "s9" "all" 8000]
+                     ["running" "s9"]]}
+   :expect {:results ["❌ Background task failed — `make test` (3s, exit 1). Last output:
+```
+line1
+line2
+```
+Ask me to rerun it or show the full log."
+                      "❌ Background task failed — `make test` (3s, exit 1)
+Ask me to rerun it or show the full log.
+
+Final output:
+```
+line1
+line2
+```"
+                      "⏳ Background task still running — `make test`
+
+Recent output:
+```
+line1
+line2
+```"]}}
+  {:id :watcher/completion-event :op :watcher
+   :request {:sessions {"s1" {"state" "exited" "exit-code" 0 "output" "done" "command" "echo hi"
+                              "owner-task-id" "t1" "task-id" "t1" "started-at" 1700000000000}}
+             :steps [["completion-event" {"session_id" "s1" "session_key" "k" "platform" "telegram"
+                                          "chat_id" "-100" "message_id" "m1" "parent_session_id" "p1"} "s1"]]}
+   :expect {:results [{"type" "completion" "session_id" "s1" "session_key" "k" "platform" "telegram"
+                       "chat_type" "" "chat_id" "-100" "thread_id" "" "user_id" "" "user_name" ""
+                       "owner_task_id" "t1" "task_id" "t1" "message_id" "m1" "started_at" 1700000000
+                       "command" "echo hi" "exit_code" 0 "completion_reason" nil "termination_source" ""
+                       "output" "done" "parent_session_id" "p1"}]}}
+  {:id :watcher/completion-event-cut :op :watcher
+   :request {:sessions {"s2" {"state" "exited" "exit-code" 0 "output" "y\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" "command" "c"}}
+             :steps [["completion-event" {"session_id" "s2"} "s2"]]}
+     :expect {:results [{"type" "completion" "session_id" "s2" "session_key" "" "platform" ""
+                       "chat_type" "" "chat_id" "" "thread_id" "" "user_id" "" "user_name" ""
+                       "owner_task_id" "" "task_id" "" "message_id" nil "parent_session_id" ""
+                       "command" "c" "exit_code" 0 "completion_reason" nil "termination_source" ""
+                       "output" "[… output truncated — showing last 2000 chars]
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}]}}
+  {:id :watcher/batch-text :op :watcher
+   :request {:steps [["batch" [[{"type" "completion" "session_id" "sA"} "T1"] [{"type" "completion" "session_id" "sB"} "T2"]] []]
+                     ["batch" [[{"type" "completion" "session_id" "sA"} "T1"] [{"type" "completion" "session_id" "sB"} "T2"]] ["sA"]]
+                     ["batch" [] []]]}
+   :expect {:results ["[IMPORTANT: 2 background processes completed. Treat these results as one batch and give one consolidated response; preserve failures and actionable results.]
+
+T1
+
+T2" "T2" nil]}}
+  {:id :watcher/drain-and-pending :op :watcher
+   :request {:steps [["drain" {"queue" [{"type" "completion" "session_id" "s2" "command" "a" "exit_code" 0 "output" "ok"} {"type" "completion" "session_id" "s3" "command" "b" "exit_code" 0 "output" "ok2"} {"type" "heartbeat" "session_id" "s4" "command" "c" "seq" 1 "elapsed" 5 "interval" 5 "output" ""}] "consumed" ["s3"]}]
+                     ["pending" {"queue" [{"type" "completion" "session_id" "s2" "command" "a" "exit_code" 0 "output" "ok"} {"type" "completion" "session_id" "s3" "command" "b" "exit_code" 0 "output" "ok2"} {"type" "heartbeat" "session_id" "s4" "command" "c" "seq" 1 "elapsed" 5 "interval" 5 "output" ""}] "consumed" ["s3"]}]]}
+   :expect {:results [[[{"type" "completion" "session_id" "s2" "command" "a" "exit_code" 0 "output" "ok"} "[IMPORTANT: Background process s2 completed normally (exit code 0).
+Command: a
+Output:
+ok]"] [{"type" "heartbeat" "session_id" "s4" "command" "c" "seq" 1 "elapsed" 5 "interval" 5 "output" ""} "[Background process s4 heartbeat #1 — still running after 5s (next in 5s when there is new output; you will also be told when it exits).
+Command: c
+Output since last heartbeat:
+]"]]
+                      ["[IMPORTANT: Background process s2 completed normally (exit code 0).
+Command: a
+Output:
+ok]" "[Background process s4 heartbeat #1 — still running after 5s (next in 5s when there is new output; you will also be told when it exits).
+Command: c
+Output since last heartbeat:
+]"]]}}
+  {:id :watcher/quiet-gates :op :watcher
+   :request {:steps [["linger" {}]
+                     ["linger" {"terminal" {"oneshot_completion_wait_seconds" "30"}}]
+                     ["linger" {"terminal" {"oneshot_completion_wait_seconds" true}}]
+                     ["linger" {"terminal" {"oneshot_completion_wait_seconds" "bogus"}}]
+                     ["suppress" "telegram" {}]
+                     ["suppress" "telegram" {"display" {"suppress_warning_notifications" "on"}}]
+                     ["suppress" "discord" {"display" {"platforms" {"discord" {"suppress_warning_notifications" true}}}}]
+                     ["suppress" "telegram" {"display" {"platforms" {"discord" {"suppress_warning_notifications" true}}}}]
+                     ["diag" {"task_failure_notice" true}]
+                     ["diag" {"type" "watch_disabled"}]
+                     ["diag" {"type" "completion"}]
+                     ["wake-muted" [{"type" "watch_disabled"}] {}]
+                     ["wake-muted" [{"type" "completion"}] {}]
+                     ["wake-muted" [{"type" "watch_disabled"}] {"display" {"suppress_warning_notifications" "on"}}]
+                     ["turn-failed" {:error {:error "x"}}]
+                     ["turn-failed" {:exit-reason "completed"}]
+                     ["turn-failed" {:exit-reason "interrupted"}]]}
+   :expect {:results [600 30 1 600 true false false true
+                      true true false false false true
+                      true false true]}}
+  {:id :watcher/oneshot-linger :op :watcher
+   :request {:steps [["oneshot" {} false] ["waits"]
+                     ["oneshot" {} true] ["waits"]]}
+   :expect {:results [nil [{:config {}}] nil [{:config {}}]]}}
+  {:id :watcher/continue-loop :op :watcher
+   :request {:max-rounds 8
+             :steps [["continue" [{"final" "r1"} {"final" "r2"}]
+                                  [[[{"type" "completion" "session_id" "s1"} "t1"]] []]
+                                  [{} {}]
+                                  0]
+                     ["continue" [{"final" "r9"}]
+                                  [[[{"type" "completion" "session_id" "s2"} "t2"]]]
+                                  [{"timed_out" ["x"]}]
+                                  0]]}
+   :expect {:results [{"final" "r1"} {"final" "r9"}]}}
 ]}]

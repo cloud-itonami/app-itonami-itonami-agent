@@ -67,7 +67,10 @@
             [itonami.otehon.ledger :as ledger]
             [itonami.otehon.delivery :as delivery]
             [itonami.otehon.drain :as drain]
-            [itonami.otehon.gateway :as gateway]))
+            [itonami.otehon.gateway :as gateway]
+            [itonami.otehon.process :as process]
+            [itonami.otehon.quiet :as quiet]
+            [itonami.otehon.watcher :as watcher]))
 
 ;; ---------------------------------------------------------------- canonical print
 
@@ -128,7 +131,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -163,6 +166,7 @@
     :delivery (ops-delivery c)
     :drain (ops-drain c scratch)
     :gateway (ops-gateway c)
+    :watcher (ops-watcher c)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -2162,6 +2166,137 @@
                    adapters)
         platforms (or (:platforms req) {})]
     {:results (mapv #(run-gateway-step adapters platforms calls warns %) (:steps req []))}))
+
+(defn- make-test-session [data]
+  {:started-at (get data "started-at")
+   :command (str (get data "command" ""))
+   :exit-code (atom (get data "exit-code" 0))
+   :output (atom (str (get data "output" "")))
+   :owner-task-id (atom (str (get data "owner-task-id" "")))
+   :task-id (atom (str (get data "task-id" "")))
+   :state (atom (keyword (str (get data "state" "running"))))
+   :completion-reason (atom (get data "completion-reason"))
+   :termination-source (atom (str (get data "termination-source" "")))
+   :parent-session-id (atom (str (get data "parent-session-id" "")))})
+
+(defn- whole-number [v]
+  (if (and (number? v) (== v (long v))) (long v) v))
+
+(defn- run-watcher-step [ctx [verb & args]]
+  (let [{:keys [sessions calls enqueues warns sleeps waits]} ctx
+        {:keys [watcher config env consumed-ids launching-turn admission
+                enqueue-answers max-ticks now-ms]} ctx]
+    (case verb
+      "watch" (let [seq-atom (atom (vec (:session-seq ctx)))
+                    session-fn (fn [_id]
+                                 (let [s @seq-atom]
+                                   (if (empty? s)
+                                     nil
+                                     (do (reset! seq-atom (vec (rest s)))
+                                         (when-let [id (first s)]
+                                           (get sessions (str id)))))))
+                    eq-atom (atom (vec enqueue-answers))
+                    enqueue! (fn [text evt]
+                               (swap! enqueues conj
+                                      {"session" (str (get evt "session_id"))
+                                       "head" (subs (str text) 0 (min 200 (count (str text))))})
+                               (let [a @eq-atom]
+                                 (if (empty? a)
+                                   nil
+                                   (do (reset! eq-atom (vec (rest a)))
+                                       (when (= "refuse" (str (first a))) false)))))
+                    send! (fn [platform chat-id thread-id text _watcher]
+                            (swap! calls conj {"chat" (str chat-id) "text" (str text)
+                                               "thread" (str thread-id)})
+                            nil)]
+                (watcher/run-process-watcher!
+                 watcher
+                 {:config config :env env
+                  :session-fn session-fn :send! send!
+                  :enqueue! enqueue!
+                  :launching-turn-active? (fn [_ _] (boolean launching-turn))
+                  :admission-recheck (when (some? admission)
+                                       (fn [_] (boolean admission)))
+                  :sleep-fn (fn [s] (swap! sleeps conj (whole-number s)) nil)
+                  :now-fn (fn [] now-ms)
+                  :consumed?-fn (fn [id] (contains? (set (map str consumed-ids)) (str id)))
+                  :warn-fn (fn [m] (swap! warns conj (str m)) nil)
+                  :max-ticks (or max-ticks 10000)}))
+      "sends" @calls
+      "enqueues" @enqueues
+      "sleeps" @sleeps
+      "warns" @warns
+      "waits" @waits
+      "mode" (process/background-notifications-mode (first args) (second args))
+      "backoff" (whole-number (process/jittered-backoff (first args) (second args) (nth args 2)))
+      "age" (process/format-age (first args))
+      "notify" (process/format-completion-notification (first args))
+      "short-command" (process/short-command (first args))
+      "display-text" (process/process-completion-display-text (first args))
+      "final" (let [[id mode now] args]
+                (process/format-process-final-message (str id) (get sessions (str id)) (str mode) now))
+      "running" (process/format-process-running-message (get sessions (str (first args))))
+      "completion-event" (let [[w id] args]
+                           (process/build-process-completion-event w (get sessions (str id)) (str id)))
+      "batch" (process/notification-batch-text (first args) (set (map str (or (second args) []))))
+      "drain" (process/drain-notifications!
+               (let [o (first args)]
+                 {:session-key (get o "session-key")
+                  :skip-poll-observed? (if (contains? o "skip-poll-observed?") (boolean (get o "skip-poll-observed?")) true)
+                  :surface-child? (boolean (get o "surface-child?"))
+                  :queue (get o "queue") :consumed (set (map str (or (get o "consumed") [])))
+                  :poll-observed (set (map str (or (get o "poll-observed") [])))}))
+      "pending" (process/pending-notification-messages
+                 (let [o (first args)]
+                   {:session-key (get o "session-key")
+                    :skip-poll-observed? (if (contains? o "skip-poll-observed?") (boolean (get o "skip-poll-observed?")) true)
+                    :surface-child? (boolean (get o "surface-child?"))
+                    :queue (get o "queue") :consumed (set (map str (or (get o "consumed") [])))
+                    :poll-observed (set (map str (or (get o "poll-observed") [])))}))
+      "linger" (whole-number (quiet/quiet-notify-linger-seconds (first args)))
+      "suppress" (quiet/warning-notifications-enabled? (str (first args)) (second args))
+      "diag" (quiet/diagnostic-process-event? (first args))
+      "wake-muted" (quiet/diagnostic-only-wake-muted? (first args) (second args))
+      "turn-failed" (quiet/turn-failed? (first args))
+      "oneshot" (do (quiet/oneshot-exit-linger!
+                     (first args) (boolean (second args))
+                     {:wait-fn (fn [o] (swap! waits conj o) nil)})
+                    nil)
+      "continue" (let [[run-results drain-pairs wait-maps now] args
+                       rr (atom (vec run-results))
+                       dp (atom (vec drain-pairs))
+                       wm (atom (vec wait-maps))]
+                   (quiet/continue-quiet-notify-completions!
+                    "sk"
+                    (fn [texts] (let [r (first @rr)] (reset! rr (vec (rest @rr))) r))
+                    {:config (:config ctx)
+                     :linger-budget 600
+                     :max-rounds (or (:max-rounds ctx) 8)
+                     :surface-child? false
+                     :now-fn (fn [] (or now 0))
+                     :wait-fn (fn [_ _] (let [w (first @wm)] (reset! wm (vec (rest @wm))) (or w {})))
+                     :drain-fn (fn [_] (let [d (first @dp)] (reset! dp (vec (rest @dp))) (or d [])))}))
+      (throw (ex-info (str "watcher: unknown step " verb) {:verb verb})))))
+
+(defn- ops-watcher [c]
+  (let [req (:request c {})
+        sessions (into {} (for [[id data] (or (:sessions req) {})]
+                             [(str id) (make-test-session data)]))
+        ctx {:watcher (or (:watcher req) {})
+             :config (or (:config req) {})
+             :env (or (:env req) {})
+             :sessions sessions
+             :session-seq (vec (or (:session-seq req) []))
+             :consumed-ids (or (:consumed-ids req) [])
+             :launching-turn (:launching-turn req)
+             :admission (:admission req)
+             :enqueue-answers (vec (or (:enqueue req) []))
+             :max-ticks (:max-ticks req)
+             :max-rounds (:max-rounds req)
+             :now-ms (or (:now req) 0)
+             :calls (atom []) :enqueues (atom []) :warns (atom [])
+             :sleeps (atom []) :waits (atom [])}]
+    {:results (mapv #(run-watcher-step ctx %) (:steps req []))}))
 
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
