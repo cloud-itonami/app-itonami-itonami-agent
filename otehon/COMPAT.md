@@ -32,9 +32,9 @@ covered by shared cases on all three runners.
 | `status` | `status-cmd` | `status` | done (JUN-1036 S3a) |
 | `pause [reason]` | `pause-cmd` | `pause` | done (JUN-1036 S3a) |
 | `resume` | `resume-cmd` | `resume` | done (JUN-1036 S3a) |
-| `send` | `send-cmd` | — | S5 |
+| `send` | `send-cmd` | `cli.cljc` run-send-step (platform/chat-id/thread-id/text validation, adapter send via chat/send-reply!, injected `:fetch`) | done (JUN-1036 S5d unit 1; live command wiring stays host-side) |
 | `gateway run/serve` | `gateway-run/serve` | — | S5 |
-| `peer serve/run/discover/rails/exec/authorities` | `peer-cmd` | `peer-push/pull` (sync plans) | S5 remaining verbs |
+| `peer serve/run/discover/rails/exec/authorities` | `peer-cmd` | `peer-push/pull` (sync plans) + `peer.cljc` messaging plane (S5d unit 1) | partial (S5d unit 1 done: trust/envelope/bundle; serve/run/discover routes stay unit 2) |
 | `help` | usage | usage | done |
 
 Deliberate divergences (documented, not gaps): profile order is sorted
@@ -109,7 +109,7 @@ from source, the rest follow the module name until their slice lands.
 | `mcp.cljk`, `mcp_http_client.mjs` | — | planned S6 |
 | `notepad.cljk` | `notepad.cljc` | done (JUN-1036 S4a; clear is ported, unwired — no CLI surface) |
 | `oauth.cljk` | — | planned S6 |
-| `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; serve/run S5) |
+| `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; + S5d unit 1: did:key parse/valid/pub->did, signed envelopes + auth header, peers.edn read/write/add, ensure-rail, path rebase, bundle materialize/fetch, service-record projection/overlay, fetch mapping; serve/run/discover routes stay unit 2) |
 | `pause.cljk` * | `pause.cljc` | done (JUN-1036 S3a) |
 | `platform_adapters.cljk` *lane adapters* | `adapters.cljc` (per-lane request builders + token-env/for-lane resolution + sync sends, error strings verbatim) | done (JUN-1036 S5c; env-only secrets, injected `:fetch`) |
 | `process.cljk` | `process.cljc` (linger budget, pending-notification text, background mode) | partial (S5c; supervision runtime: watchers/heartbeats/checkpoints — host-side, not shared-case portable) |
@@ -229,4 +229,23 @@ from source, the rest follow the module name until their slice lands.
     machine; CLI print paths were already cwd-relative.
   Watcher fan-in (batching/timers), `platform_adapters`, peer
   serve/discover and the live gateway serve loop stay S5c/S6.
+- S5d unit 1 peer messaging plane + send — done (JUN-1036:
+  `peer.cljc` did:key parse/valid/pub->did, sign/open envelopes +
+  auth header, peers.edn read/write/add, ensure-rail, rebase-paths,
+  bundle materialize/fetch, service-record projection/overlay,
+  http-json mapping + `cli.cljc` run-send-step/ops-send.
+  15 cases + 7 must-fail; 433 cases + 48 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon byte-identical —
+  see the evidence doc. Verified divergences:
+  - crypto/time/nonces/fetch ride injected seams (`:sign` `:verify`
+    `:now-ms` `:random-hex` `:nonces` `:fetch`); the live send /
+    gateway-serve / peer socket commands stay host-side (S6).
+  - `service-records->peer-infos` / `overlay-service-records` answer
+    keyword `:models` / `:load`, so record overlay overwrites instead
+    of duplicating the key.
+  - a nil rail passes through as nil (no `(str nil)` coercion), so
+    `ensure-rail` leaves the config unchanged.
+  - envelope maps keep string keys end to end; trust/peer-info maps
+    keep keyword keys.
+  Discover/remote-run/serve routes stay unit 2.
 - S6 tools: backends + bridge/chat/vault/mcp/dapps CLIs.
