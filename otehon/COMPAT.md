@@ -34,7 +34,7 @@ covered by shared cases on all three runners.
 | `resume` | `resume-cmd` | `resume` | done (JUN-1036 S3a) |
 | `send` | `send-cmd` | `cli.cljc` run-send-step (platform/chat-id/thread-id/text validation, adapter send via chat/send-reply!, injected `:fetch`) | done (JUN-1036 S5d unit 1; live command wiring stays host-side) |
 | `gateway run/serve` | `gateway-run/serve` | — | S5 |
-| `peer serve/run/discover/rails/exec/authorities` | `peer-cmd` | `peer-push/pull` (sync plans) + `peer.cljc` messaging plane (S5d unit 1) | partial (S5d unit 1 done: trust/envelope/bundle; serve/run/discover routes stay unit 2) |
+| `peer serve/run/discover/rails/exec/authorities` | `peer-cmd` | `peer-push/pull` (sync plans) + `peer.cljc` messaging plane + client/routes (S5d units 1+2) | partial (S5d done: trust/envelope/bundle + discover/pick/infer/remote-run/routes/placement; socket/child-process/agent-loop/rails reads stay host-side, S6) |
 | `help` | usage | usage | done |
 
 Deliberate divergences (documented, not gaps): profile order is sorted
@@ -109,7 +109,7 @@ from source, the rest follow the module name until their slice lands.
 | `mcp.cljk`, `mcp_http_client.mjs` | — | planned S6 |
 | `notepad.cljk` | `notepad.cljc` | done (JUN-1036 S4a; clear is ported, unwired — no CLI surface) |
 | `oauth.cljk` | — | planned S6 |
-| `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; + S5d unit 1: did:key parse/valid/pub->did, signed envelopes + auth header, peers.edn read/write/add, ensure-rail, path rebase, bundle materialize/fetch, service-record projection/overlay, fetch mapping; serve/run/discover routes stay unit 2) |
+| `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; + S5d unit 1: did:key parse/valid/pub->did, signed envelopes + auth header, peers.edn read/write/add, ensure-rail, path rebase, bundle materialize/fetch, service-record projection/overlay, fetch mapping; + S5d unit 2: peer-info/discover/pick-peer/infer-peers/infer-via-peers/remote-run, seven serve routes + dispatch, local-gateway-complete, placement; socket/child-process/agent-loop/rails reads/health syscalls stay host-side) |
 | `pause.cljk` * | `pause.cljc` | done (JUN-1036 S3a) |
 | `platform_adapters.cljk` *lane adapters* | `adapters.cljc` (per-lane request builders + token-env/for-lane resolution + sync sends, error strings verbatim) | done (JUN-1036 S5c; env-only secrets, injected `:fetch`) |
 | `process.cljk` | `process.cljc` (linger budget, pending-notification text, background mode) | partial (S5c; supervision runtime: watchers/heartbeats/checkpoints — host-side, not shared-case portable) |
@@ -249,4 +249,29 @@ from source, the rest follow the module name until their slice lands.
   - envelope maps keep string keys end to end; trust/peer-info maps
     keep keyword keys.
   Discover/remote-run/serve routes stay unit 2.
+- S5d unit 2 discover/remote-run/serve routes — done (JUN-1036:
+  `peer.cljc` peer-info/discover (one gossip hop)/pick-peer/
+  infer-peers/infer-via-peers/remote-run (submit + poll loop +
+  receipt + workspace-write application, bundle files+cid injected) +
+  peer/models/chat/infer/bundle/run-accept/run-poll routes behind
+  the serve-route dispatch + local-gateway-complete + placement
+  order loop with `:run-local` host seam.
+  19 cases + 7 must-fail; 487 cases + 57 must-fail green on the
+  rebased union on basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208,
+  canon byte-identical — see the evidence doc. Verified divergences:
+  - discovery infos are keyword-normalized (`:load` `:max-runs`
+    `:models` `:agent-models` `:profiles` `:peers`); the wire JSON
+    and the verified signing fields are untouched.
+  - `remote-run` `:writes` are sorted (parsed-JSON key order differs
+    per runner) and the run `workspace/` dir is created before
+    applying writes.
+  - the scripted clock pops once per read; crypto/time/sleep/rails/
+    local-run/fetch ride injected seams (`:sign` `:verify`
+    `:now-ms` `:random-hex` `:nonces` `:fetch` `:sleep` `:complete`
+    `:run-local` `:bundles`). The socket, child processes, agent
+    loop, live rails, health syscalls and the live serve commands
+    stay host-side (S6).
+  - the run-poll done/failed dissoc branches have no case (no step
+    can complete a run in the shared `:runs` atom); the 202 running
+    read, 404, requester and poll-name checks are covered.
 - S6 tools: backends + bridge/chat/vault/mcp/dapps CLIs.

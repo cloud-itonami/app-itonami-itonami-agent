@@ -2635,8 +2635,41 @@
         ctx {:profile-config (or (:profile-config req) {}) :env env :fetch fetch}]
     {:results (mapv #(run-send-step ctx %) (:steps req []))}))
 
+(defn- pad-end [s n]
+  (let [s (str s)] (str s (apply str (repeat (max 0 (- n (count s))) " ")))))
+
+(defn- route-ctx [ctx]
+  (let [{:keys [req node fetch sign verify now-ms random-hex nonces runs active-runs complete]} ctx]
+    {:node node :fetch fetch :sign sign :verify verify :now-ms now-ms :random-hex random-hex
+     :nonces nonces :runs runs :active-runs active-runs :complete complete
+     :trust {:trusted (or (:trusted req) #{})}
+     :loopback? (boolean (:loopback? req))
+     :infos (:infos req) :own-models (:own-models req)
+     :public-url (:public-url req) :murakumo-did (:murakumo-did req)
+     :max-runs (or (:max-runs req) 2)
+     :rails (:rails req) :models (:models req) :agent-models (:agent-models req)
+     :health (:health req) :profiles (:profiles req) :peer-urls (:peer-urls req)
+     :bundles (:bundles req)}))
+
+(defn- peer-list-lines [dir node fetch verify-fn now-ms nonces]
+  (let [o {:fetch fetch :verify verify-fn :now-ms now-ms :nonces nonces}
+        infos (peer/discover dir o)
+        {:keys [trusted]} (peer/read-peers dir)
+        me (:did node)]
+    (vec (keep (fn [i]
+                 (when-not (= me (:did i))
+                   (str (pad-end (:url i) 32)
+                        (if (:error i)
+                          (str "unreachable: " (:error i))
+                          (str (:did i)
+                               (if (contains? trusted (:did i)) "  trusted" "  untrusted")
+                               "  load " (:load i) "/" (:max-runs i)
+                               "  models " (str/join "," (:agent-models i))
+                               (when (:murakumo-did i) (str "  murakumo " (:murakumo-did i))))))))
+               infos))))
+
 (defn- run-peer-step [ctx [verb & args]]
-  (let [{:keys [dir req fetch node now-ms random-hex sign verify nonces]} ctx
+  (let [{:keys [dir req fetch node now-ms random-hex sign verify nonces sleep sleeps complete run-local]} ctx
         verify-fn (cond (= verify "throw") (fn [& _] (throw (ex-info "peer verify failed" {})))
                         (false? verify) (fn [& _] false)
                         :else (fn [& _] true))]
@@ -2656,8 +2689,10 @@
                (peer/auth-header node payload {:now-ms now-ms :random-hex random-hex :sign sign}))
       "materialize" (let [[cid files] args] (peer/materialize-bundle! dir (str cid) files))
       "file" (let [[rel] args]
-               (let [p (str dir "/peer-runs/" (:cid req) "/home/" rel)]
-                 (when (hio/file? p) (hio/slurp-utf8 p))))
+               (let [p (str dir "/peer-runs/" (:cid req) "/home/" rel)
+                     q (str (:home (:prof req)) "/" rel)]
+                 (cond (hio/file? p) (hio/slurp-utf8 p)
+                       (hio/file? q) (hio/slurp-utf8 q))))
       "fetch-bundle" (let [[origin-url cid] args]
                        (peer/fetch-bundle node (str origin-url) (str cid)
                                            {:fetch fetch :sign sign}))
@@ -2666,6 +2701,50 @@
       "records" (let [[services] args] (peer/service-records->peer-infos services))
       "overlay" (let [[infos services] args] (peer/overlay-service-records infos services))
       "http" (let [[url opts] args] (peer/http-json fetch (str url) opts))
+      "header" (let [[v] args] (peer/header-envelope v))
+      "trust" (let [[did] args]
+                (peer/write-peers! dir (update (peer/read-peers dir) :trusted conj (str did))))
+      "peer-info" (let [[url] args]
+                    (peer/peer-info (str url) {:fetch fetch :verify verify-fn
+                                               :now-ms now-ms :nonces nonces}))
+      "discover" (peer/discover dir {:fetch fetch :verify verify-fn
+                                     :now-ms now-ms :nonces nonces})
+      "pick" (let [[infos cid] args
+                    t (:trusted (peer/read-peers dir))]
+                (peer/pick-peer infos t (:did node) (str cid)))
+      "infer-peers" (let [[infos model] args
+                          t (:trusted (peer/read-peers dir))]
+                      (peer/infer-peers infos t (:did node) model))
+      "infer-via" (let [[body infos] args
+                        t (:trusted (peer/read-peers dir))]
+                    (peer/infer-via-peers node body infos t
+                                          {:fetch fetch :sign sign :verify verify-fn
+                                           :now-ms now-ms :nonces nonces}))
+      "remote-run" (let [[prompt run-opts peer] args]
+                     (peer/remote-run (:prof req) (str prompt) (or run-opts {})
+                                      peer (:origin-url req)
+                                      {:node node :fetch fetch :sign sign :verify verify-fn
+                                       :now-ms now-ms :nonces nonces :sleep sleep
+                                       :files (:files req) :cid (:cid req)}))
+      "route" (let [[method url body headers lb] args]
+                (peer/serve-route (str method) (str url) body (or headers {})
+                                  (cond-> (assoc (route-ctx ctx) :verify verify-fn)
+                                    (some? lb) (assoc :loopback? (boolean lb)))))
+      "local-complete" (let [[body] args]
+                         (peer/local-gateway-complete
+                          node body
+                          {:complete complete :fetch fetch :sign sign :verify verify-fn
+                           :now-ms now-ms :nonces nonces
+                           :infos (:infos req) :trusted (or (:trusted req) #{})}))
+      "place" (let [[prof prompt run-opts cfg] args]
+                  (peer/placement prof (str prompt) (or run-opts {}) (or cfg {})
+                                  (assoc (route-ctx ctx)
+                                         :verify verify-fn
+                                         :trust {:trusted (:trusted (peer/read-peers dir))}
+                                         :dir dir :run-local run-local :sleep sleep
+                                         :files (:files req) :cid (:cid req))))
+      "list" (peer-list-lines dir node fetch verify-fn now-ms nonces)
+      "sleeps" @sleeps
       (throw (ex-info (str "peer: unknown step " verb) {:verb verb})))))
 
 (defn- ops-peer [c scratch]
@@ -2676,12 +2755,31 @@
         calls (atom [])
         fetch (stub-fetch calls (vec (or (:fetches req) [])))
         node (or (:node req) {:did "did:key:zStub"})
+        nows (atom (vec (or (:nows req) [])))
+        sleeps (atom [])
+        completes (atom (vec (or (:completes req) [])))
+        locals (atom (vec (or (:locals req) [])))
         ctx {:dir dir :req req :fetch fetch :node node
-             :now-ms (fn [] (long (or (:now req) 0)))
+             :now-ms (fn [] (let [s @nows]
+                              (if (empty? s)
+                                (long (or (:now req) 0))
+                                (do (reset! nows (vec (rest s))) (long (first s))))))
              :random-hex (fn [_] (str (or (:nonce req) "000000000000000000000000")))
              :sign (fn [_payload] (str (or (:sig req) "SIG")))
              :verify (:verify req)
-             :nonces (atom {})}]
+             :nonces (atom {})
+             :sleep (fn [s] (swap! sleeps conj s) nil)
+             :sleeps sleeps
+             :complete (fn [_body] (let [s @completes]
+                                     (if (empty? s)
+                                       {:status 500 :text "no scripted completion" :rail "none"}
+                                       (do (reset! completes (vec (rest s))) (first s)))))
+             :run-local (fn [_prof _prompt _opts] (let [s @locals]
+                                                    (if (empty? s)
+                                                      {:final nil :exit-reason "no_placement"
+                                                       :error {:error "no scripted local run"} :turns 0 :attempts []}
+                                                      (do (reset! locals (vec (rest s))) (first s)))))
+             :runs (atom {}) :active-runs (atom 0)}]
     {:results (mapv #(run-peer-step ctx %) (:steps req []))}))
 
 (defn run-case [c fixtures scratch]
