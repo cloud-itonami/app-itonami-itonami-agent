@@ -301,6 +301,13 @@
    "status" "handoff_pending" "handoff_started_at" "claimed_at"
    "started_at" "finished_at" "error" "delivery_outcome" "scheduled_instant"])
 
+(defn get-execution
+  "One execution row by id, or nil."
+  [home id]
+  (let [row (first (hio/sqlite-rows (db-path home)
+                     "SELECT * FROM executions WHERE id=?" [(str id)]))]
+    (when row (into {} (for [k row-keys] [k (get row k)])))))
+
 (defn rows
   "Read-only helper used by cron status and tests."
   [home job-id]

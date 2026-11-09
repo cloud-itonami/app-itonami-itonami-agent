@@ -15,12 +15,12 @@ out=$(mktemp -d)
 status=0
 fixtures="$here/test/fixtures"
 for r in $runners; do
-  if "$run" "$r" test "$here/test/cases.edn" > "$out/$r.cases" 2> "$out/$r.err"; then
+  if "$run" "$r" test test/cases.edn > "$out/$r.cases" 2> "$out/$r.err"; then
     echo "PASS  $r cases: $(tail -n 1 "$out/$r.cases")"
   else
     echo "FAIL  $r cases"; grep -v ' ok$' "$out/$r.cases"; tail -n 5 "$out/$r.err"; status=1
   fi
-  if "$run" "$r" test "$here/test/must-fail.edn" > "$out/$r.mustfail" 2>> "$out/$r.err"; then
+  if "$run" "$r" test test/must-fail.edn > "$out/$r.mustfail" 2>> "$out/$r.err"; then
     echo "FAIL  $r must-fail cases passed: the harness cannot fail"; status=1
   else
     n=$(grep -c ' FAIL$' "$out/$r.mustfail")
