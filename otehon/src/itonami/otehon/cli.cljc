@@ -74,7 +74,8 @@
             [itonami.otehon.quiet :as quiet]
             [itonami.otehon.watcher :as watcher]
             [itonami.otehon.adapters :as adapters]
-            [itonami.otehon.chat :as chat]))
+            [itonami.otehon.chat :as chat]
+            [itonami.otehon.tools :as tools]))
 
 ;; ---------------------------------------------------------------- canonical print
 
@@ -135,7 +136,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -177,6 +178,7 @@
     :confine (ops-confine c scratch)
     :send (ops-send c)
     :peer (ops-peer c scratch)
+    :tools (ops-tools c)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -2626,6 +2628,28 @@
             (if (nil? res)
               {:sent (str platform ":" chat-id)}
               {:error (str "send failed: " res)})))))))
+
+(defn- run-tools-step [ctx [verb & args]]
+  (case (str verb)
+    "names" (let [[sets] args] (tools/tool-names (vec sets)))
+    "toolsets" (vec (sort (keys tools/toolsets)))
+    "unsupported-tools" (let [[names] args] (tools/unsupported-tools (vec names)))
+    "unsupported-toolsets" (let [[sets additional] args]
+                             (tools/unsupported-toolsets (vec sets) (set (or additional []))))
+    "approval" (let [[name args] args] (tools/approval-required? (str name) (or args {})))
+    "enabled" (let [[requested disabled] args]
+                (tools/enabled-tool-names (vec requested) (vec disabled)))
+    "execution-disabled" (let [[config platform] args]
+                           (tools/execution-disabled-toolsets (or config {}) (str platform)))
+    "runtime" (let [[requested disabled cdp? browser? computer?] args]
+                (tools/runtime-tool-names (vec requested) (vec disabled)
+                                          (boolean cdp?) (boolean browser?) (boolean computer?)))
+    "schemas" (let [[names] args] (tools/tool-schemas (vec names)))
+    (throw (ex-info (str "tools: unknown step " verb) {:verb verb}))))
+
+(defn- ops-tools [c]
+  (let [req (:request c {})]
+    {:results (mapv #(run-tools-step {} %) (:steps req []))}))
 
 (defn- ops-send [c]
   (let [req (:request c {})
