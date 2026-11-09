@@ -2540,8 +2540,6 @@
                           (chat/send-reply! prof msg (str text) fetch env))
           (throw (ex-info (str "chat: unknown step " verb) {:verb verb}))))
       (:steps req []))}))
-        platforms (or (:platforms req) {})]
-    {:results (mapv #(run-gateway-step adapters platforms calls warns %) (:steps req []))}))
 (defn- ops-quiet [c]
   (let [[verb arg arg2] (:call c)]
     {:value (case verb
