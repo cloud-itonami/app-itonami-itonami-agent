@@ -262,4 +262,10 @@
   {:id :must-fail/turn-asm-wrap-expects-true :op :turn-asm
    :call ["wrap-up?" 79 100]
    :expect {:value true}}
+  {:id :must-fail/sse-cooldown-expects-zero :op :sse
+   :call ["cooldown" {:status 429}]
+   :expect {:value 0}}
+  {:id :must-fail/sse-complete-fragment-expects-true :op :sse
+   :call ["complete?" {:seen? true :content "half"}]
+   :expect {:value true}}
 ]}]

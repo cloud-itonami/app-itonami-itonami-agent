@@ -50,6 +50,7 @@
             [itonami.otehon.yaml :as yaml]
             [itonami.otehon.text :as text]
             [itonami.otehon.assembly :as assembly]
+            [itonami.otehon.sse :as sse]
             [itonami.otehon.confine :as confine]
             [itonami.otehon.quiet :as quiet]
             [itonami.otehon.tick :as tick]
@@ -137,7 +138,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-sse)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -181,6 +182,7 @@
     :send (ops-send c)
     :peer (ops-peer c scratch)
     :tools (ops-tools c)
+    :sse (ops-sse c)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -2665,6 +2667,17 @@
                                           (boolean cdp?) (boolean browser?) (boolean computer?)))
     "schemas" (let [[names] args] (tools/tool-schemas (vec names)))
     (throw (ex-info (str "tools: unknown step " verb) {:verb verb}))))
+
+(defn- ops-sse [c]
+  (let [[verb arg arg2 arg3] (:call c)]
+    {:value (case verb
+              "acc" (sse/sse-acc)
+              "parse-text" (sse/sse-parse-text arg)
+              "finish" (sse/sse-finish arg)
+              "complete?" (sse/sse-complete? arg)
+              "cooldown" (sse/cooldown-ms arg)
+              "hop-error" (sse/hop-error arg arg2 arg3)
+              (throw (ex-info (str "sse: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-tools [c]
   (let [req (:request c {})]

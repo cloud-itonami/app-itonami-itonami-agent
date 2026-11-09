@@ -3067,4 +3067,90 @@ Output since last heartbeat:
   {:id :turn-asm/spellings :op :turn-asm
    :call ["spellings"]
    :expect {:value ["-1" "0" "inf" "infinite" "infinity" "none" "null" "unlimited" "∞"]}}
+
+  ;; ---------------------------------------------------------- S2e sse
+  {:id :sse/parse-simple-content :op :sse
+   :call ["parse-text" "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n"]
+   :expect {:value {"choices" [{"index" 0 "finish_reason" "stop" "message" {"role" "assistant" "content" "hi"}}] "model" nil "usage" nil}}}
+  {:id :sse/parse-comment-blank-noise :op :sse
+   :call ["parse-text" ": keep-alive\n\nevent: ping\ndata: {\"choices\":[{\"delta\":{\"content\":\"yo\"},\"finish_reason\":\"stop\"}]}\n\n"]
+   :expect {:value {"choices" [{"index" 0 "finish_reason" "stop" "message" {"role" "assistant" "content" "yo"}}] "model" nil "usage" nil}}}
+  {:id :sse/parse-crlf :op :sse
+   :call ["parse-text" "data: {\"choices\":[{\"delta\":{\"content\":\"cr\"},\"finish_reason\":\"stop\"}]}\r\n\r\ndata: [DONE]\r\n"]
+   :expect {:value {"choices" [{"index" 0 "finish_reason" "stop" "message" {"role" "assistant" "content" "cr"}}] "model" nil "usage" nil}}}
+  {:id :sse/parse-malformed-json :op :sse
+   :call ["parse-text" "data: {oops\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"]
+   :expect {:value {"choices" [{"index" 0 "finish_reason" "stop" "message" {"role" "assistant" "content" "ok"}}] "model" nil "usage" nil}}}
+  {:id :sse/parse-tool-call-split :op :sse
+   :call ["parse-text" "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"t1\",\"function\":{\"name\":\"run\",\"arguments\":\"{\\\"a\\\":\"}}]},\"finish_reason\":null}]}\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n"]
+   :expect {:value {"choices" [{"index" 0 "finish_reason" "tool_calls" "message" {"role" "assistant" "content" nil "tool_calls" [{"id" "t1" "type" "function" "function" {"name" "run" "arguments" "{\"a\":1}"}}]}}] "model" nil "usage" nil}}}
+  {:id :sse/parse-multi-index-tools :op :sse
+   :call ["parse-text" "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"b\",\"function\":{\"name\":\"b2\",\"arguments\":\"{}\"}}]}}]}\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"a1\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n"]
+   :expect {:value {"choices" [{"index" 0 "finish_reason" "tool_calls" "message" {"role" "assistant" "content" nil "tool_calls" [{"id" "a" "type" "function" "function" {"name" "a1" "arguments" "{}"}} {"id" "b" "type" "function" "function" {"name" "b2" "arguments" "{}"}}]}}] "model" nil "usage" nil}}}
+  {:id :sse/parse-reasoning :op :sse
+   :call ["parse-text" "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"}}]}\ndata: {\"choices\":[{\"delta\":{\"content\":\"say\"},\"finish_reason\":\"stop\"}]}\n"]
+   :expect {:value {"choices" [{"index" 0 "finish_reason" "stop" "message" {"role" "assistant" "content" "say" "reasoning_content" "think"}}] "model" nil "usage" nil}}}
+  {:id :sse/parse-usage-model :op :sse
+   :call ["parse-text" "data: {\"model\":\"m\",\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3},\"choices\":[{\"delta\":{\"content\":\"u\"},\"finish_reason\":\"stop\"}]}\n"]
+   :expect {:value {"choices" [{"index" 0 "finish_reason" "stop" "message" {"role" "assistant" "content" "u"}}] "model" "m" "usage" {"prompt_tokens" 1 "completion_tokens" 2 "total_tokens" 3}}}}
+  {:id :sse/parse-usage-timings :op :sse
+   :call ["parse-text" "data: {\"timings\":{\"prompt_n\":4,\"predicted_n\":6},\"choices\":[{\"delta\":{\"content\":\"t\"},\"finish_reason\":\"stop\"}]}\n"]
+   :expect {:value {"choices" [{"index" 0 "finish_reason" "stop" "message" {"role" "assistant" "content" "t"}}] "model" nil "usage" {"prompt_tokens" 4 "completion_tokens" 6 "total_tokens" 10}}}}
+  {:id :sse/parse-error-chunk :op :sse
+   :call ["parse-text" "data: {\"error\":{\"message\":\"bad key\",\"type\":\"auth\"}}\n"]
+   :expect {:value {"error" {"message" "bad key" "type" "auth"}}}}
+  {:id :sse/parse-unseen :op :sse
+   :call ["parse-text" ": keep-alive\n\n"]
+   :expect {:value {"choices" []}}}
+  {:id :sse/parse-empty :op :sse
+   :call ["parse-text" ""]
+   :expect {:value {"choices" []}}}
+  {:id :sse/parse-data-empty-payload :op :sse
+   :call ["parse-text" "data:\ndata:   \n"]
+   :expect {:value {"choices" []}}}
+  {:id :sse/finish-error :op :sse
+   :call ["finish" {:error {:message "x"}}]
+   :expect {:value {"error" {:message "x"}}}}
+  {:id :sse/finish-unseen :op :sse
+   :call ["finish" {:seen? false}]
+   :expect {:value {"choices" []}}}
+  {:id :sse/finish-full :op :sse
+   :call ["finish" {:seen? true :content "c" :reasoning "" :tools {"0" {:id "t" :name "n" :args "{}"}} :finish "stop" :model "m" :usage {:prompt_tokens 1}}]
+   :expect {:value {"choices" [{"index" 0 "finish_reason" "stop" "message" {"role" "assistant" "content" "c" "tool_calls" [{"id" "t" "type" "function" "function" {"name" "n" "arguments" "{}"}}]}}] "model" "m" "usage" {:prompt_tokens 1}}}}
+  {:id :sse/complete-done :op :sse
+   :call ["complete?" {:done? true}]
+   :expect {:value true}}
+  {:id :sse/complete-finish :op :sse
+   :call ["complete?" {:finish "stop"}]
+   :expect {:value true}}
+  {:id :sse/complete-error :op :sse
+   :call ["complete?" {:error {:message "x"}}]
+   :expect {:value true}}
+  {:id :sse/complete-fragment :op :sse
+   :call ["complete?" {:seen? true :content "half"}]
+   :expect {:value false}}
+  {:id :sse/cooldown-402 :op :sse
+   :call ["cooldown" {:status 402}]
+   :expect {:value 1800000}}
+  {:id :sse/cooldown-401 :op :sse
+   :call ["cooldown" {:status 401}]
+   :expect {:value 1800000}}
+  {:id :sse/cooldown-429 :op :sse
+   :call ["cooldown" {:status 429}]
+   :expect {:value 120000}}
+  {:id :sse/cooldown-500 :op :sse
+   :call ["cooldown" {:status 500}]
+   :expect {:value 300000}}
+  {:id :sse/cooldown-transport :op :sse
+   :call ["cooldown" {:error "reset"}]
+   :expect {:value 300000}}
+  {:id :sse/hop-error-truncates :op :sse
+   :call ["hop-error" {:provider "p" :model "m"} 500 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"]
+   :expect {:value {:provider "p" :model "m" :status 500 :error "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}}}
+  {:id :sse/hop-error-short :op :sse
+   :call ["hop-error" {:provider "p" :model "m"} 200 "ok"]
+   :expect {:value {:provider "p" :model "m" :status 200 :error "ok"}}}
+  {:id :sse/acc-shape :op :sse
+   :call ["acc"]
+   :expect {:value {:seen? false :done? false :content "" :reasoning "" :tools {} :finish nil :model nil :usage nil :error nil}}}
 ]}]
