@@ -95,12 +95,13 @@ from source, the rest follow the module name until their slice lands.
 | `connections.cljk` | — | planned S6 |
 | `cron.cljk` *jobs/schedules* | `cron.cljc`, `tick.cljc`, `run.cljc`, `exec.cljc` | partial (plans + `run-job` host side and finished-turn apply done, JUN-1036 S2a/S2b; live rail + ledger/queue rows S5) |
 | `dapps.cljk` | — | planned S6 |
-| `delivery.cljk`, `delivery_queue.cljk` | — | planned S5 |
+| `delivery.cljk` | `delivery.cljc` (normalize/lanes/bot-chat token/adapter registry/classify-outcome, pure) | done (JUN-1036 S5a; shared cases assert the vocabulary incl. the outcome table) |
+| `delivery_queue.cljk` | `queue.cljc` (`cron/deliveries.db`, `deliveries` + bounded `delivery_tombstones`, enqueue/get-status/claim-row/claim-next/finish/recover) | done (JUN-1036 S5a; fencing answers verified by follow-up SELECT — same outcome single-writer; `job_json` keeps the legacy indent-2 layout, key order is the map's iteration order) |
 | `execution_ledger.cljk` *reads* | `cli.cljc` (runs-for, incidents-for: rows/incidents/ack over `cron/executions.db`) | done reads (JUN-1036 S4b; claim/finish/upsert/resolve writes stay S5) |
-| `execution_ledger.cljk` *writes* | — | planned S5 |
+| `execution_ledger.cljk` *writes* | `ledger.cljc` (`cron/executions.db`, executions + incidents DDL verbatim; claim (throws on active)/mark-handoff-pending/adopt-claimed/mark-running/finish (completed\|failed + 1000-row overflow drop)/set-delivery-outcome/incident upsert/get/ack/alerted/list/resolve/withheld gate) | done (JUN-1036 S5a; fencing verified by follow-up SELECT; no BEGIN IMMEDIATE — single-writer oracle, see notes) |
 | `gateway.cljk` | `gateway` (watcher egress surface) | partial (delivery loop S5) |
 | `homeassistant.cljk` | — | planned S6 |
-| `host.cljk` *node/file/env/process* | `io.cljc` | partial (files/env/clock/listing/pids/spawn done, JUN-1036 S2a) |
+| `host.cljk` *node/file/env/process* | `io.cljc` | partial (files/env/clock/listing/pids/spawn done JUN-1036 S2a; + S5a: `now-micros-iso` (host-zone 6-digit fraction, the `iso-local` micros shape), `json-str-2` (indent-2, iteration order), `parse-iso-ms`, `kill-probe-alive?` (legacy kill(0) probe semantics), `sqlite-literal` numbers inline bare so REAL columns read back numeric) |
 | `identity.cljk` ( FleetSeed/KDF/derive-key/did-of/parse-seed/key-id ) | `ed25519.cljc` (KDF + RFC 8032 expansion + clamped base-point multiply + did:key:z; host SHA-512/UTF-8 in `io.cljc` ) | done (JUN-1036 S4e; node `createPrivateKey` expansion reproduced exactly, oracle-checked) |
 | `loop.cljk` *agent turn loop* | `turn.cljc` (gate) | partial (turn execution S2) |
 | `main.cljk` *CLI dispatch* | `cli.cljc` | partial (this table) |
@@ -172,4 +173,24 @@ from source, the rest follow the module name until their slice lands.
   missed in the S4c denominator). 11 cases + 2 must-fail.
   S4 profile verbs complete; S5 messaging writes next.
 - S5 messaging: gateway/send/deliver/ledger/peers/chat.
+- S5a state plane — done (JUN-1036: delivery vocabulary + queue/ledger
+  sqlite writes; 28 cases + 5 must-fail — see the evidence doc.
+  Verified divergences, all covered by cases or recorded here:
+  - fencing answers come from a follow-up SELECT (the hio writer returns
+    no change count); identical outcomes in the single-writer oracle.
+  - no BEGIN IMMEDIATE around claim/recover; concurrent multi-process
+    fencing is best-effort (the oracle runs one writer per home).
+  - queue `finish!`/`recover` return pre-update rows with the status
+    overridden, verbatim from the legacy (`status` assoc on the read row).
+  - `job_json` keeps the legacy indent-2 layout; key order follows the
+    map's iteration order (Basilisp maps are hash-ordered, so shared
+    cases assert parsed content, and byte equality with the legacy is
+    recorded in the evidence doc via a one-off oracle).
+  - `get-incident` selects the same 10 keys as the legacy (which names
+    every column it reads); `incidents` selects the same 12.
+  - timestamps take an explicit trailing arg in the port (production
+    passes live time); the live `recover` grace math uses live now-ms
+    with fixed seeds, so outcomes stay deterministic.
+  - a nil ledger owner keeps its row (legacy kill(nil) reads alive);
+    a nil queue owner reads dead (legacy parseInt gives NaN).
 - S6 tools: backends + bridge/chat/vault/mcp/dapps CLIs.

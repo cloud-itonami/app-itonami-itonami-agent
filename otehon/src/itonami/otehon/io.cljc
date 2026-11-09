@@ -391,6 +391,78 @@
      :clj (System/currentTimeMillis)
      :cljs (.now js/Date)))
 
+(defn now-micros-iso
+  "Now as an ISO-8601 timestamp in the host zone with a six-digit fraction
+  (\"YYYY-MM-DDTHH:MM:SS.ffffff+HH:MM\"), the same shape the legacy host
+  helper writes for queue and ledger rows: milliseconds from now-ms padded
+  with three zeros. Pure: the second fields come from now-parts and the
+  fraction from now-ms, so no host branch is needed. Shared cases always
+  pass explicit timestamps, so this shapes new production rows only."
+  []
+  (let [iso (:iso (now-parts))
+        ms (mod (now-ms) 1000)
+        frac (str (quot ms 100) (mod (quot ms 10) 10) (mod ms 10) "000")]
+    (str (subs iso 0 19) "." frac (subs iso 19))))
+
+(defn json-str-2
+  "Encode `x` as JSON with a 2-space indent, the layout the legacy queue
+  persists for job_json. Unlike json-str the key order is the map's own
+  iteration order (insertion order on every runner): byte comparison with
+  the legacy output holds for maps built in the same order."
+  [x]
+  (letfn [(key-name [k] (if (keyword? k) (name k) (str k)))
+          (emit [v level]
+            (let [pad (apply str (repeat (* 2 level) " "))
+                  pad-in (apply str (repeat (* 2 (inc level)) " "))]
+              (cond (nil? v) "null"
+                    (true? v) "true"
+                    (false? v) "false"
+                    (number? v) (str v)
+                    (string? v) (json-escape v)
+                    (map? v) (if (empty? v) "{}"
+                               (str "{\n"
+                                    (str/join ",\n"
+                                              (map (fn [[k val]]
+                                                     (str pad-in (json-escape (key-name k)) ": " (emit val (inc level))))
+                                                   v))
+                                    "\n" pad "}"))
+                    (sequential? v) (if (empty? v) "[]"
+                                      (str "[\n"
+                                           (str/join ",\n"
+                                                     (map (fn [e] (str pad-in (emit e (inc level)))) v))
+                                           "\n" pad "]"))
+                    :else (throw (ex-info "json-str-2: unsupported value" {})))))]
+    (emit x 0)))
+
+(defn parse-iso-ms
+  "An ISO-8601 timestamp to epoch milliseconds, or nil when unparseable.
+  The ledger repeat-alert cooldown compares alerted_at against now; a
+  missing or unparseable stamp delivers rather than withholding."
+  [s]
+  (when (and (string? s) (not (str/blank? s)))
+    #?(:lpy (try (int (* 1000 (.timestamp (.fromisoformat (.-datetime (python/__import__ "datetime")) s))))
+                 (catch python/Exception _ nil))
+       :clj (try (.toEpochMilli (.toInstant (java.time.OffsetDateTime/parse (str s))))
+                 (catch Exception _ nil))
+       :cljs (try (let [t (.parse js/Date (str s))]
+                    (when-not (js/isNaN t) t))
+                  (catch :default _ nil)))))
+
+(defn kill-probe-alive?
+  "kill(pid, 0) with the legacy process-alive?/pid-alive? probe semantics:
+  true unless the host reports the process missing (ESRCH). An EPERM
+  (another user's live process) still reads live. Callers validate the
+  shape: nil and non-integers never reach the probe (a nil queue owner is
+  dead; a nil ledger owner keeps its row, as in the legacy)."
+  [n]
+  #?(:lpy (try (.kill os n 0) true
+               (catch python/Exception e (not= 3 (.-errno e))))
+     :clj (try (let [o (java.lang.ProcessHandle/of (long n))]
+                 (boolean (and (.isPresent o) (.isAlive (.get o)))))
+               (catch Exception _ false))
+     :cljs (try (do (.kill js/process n 0) true)
+                (catch :default e (not= "ESRCH" (.-code e))))))
+
 (defn utf8-bytes
   "The UTF-8 byte length of `s`."
   [s]
@@ -484,6 +556,9 @@
   [v]
   (cond (nil? v) "NULL"
         (integer? v) (str v)
+        ;; REAL seconds (ledger handoff stamps) must inline bare: quoted
+        ;; they would read back TEXT and fail the numeric grace check.
+        (number? v) (str v)
         :else (str "'" (str/replace (str v) "'" "''") "'")))
 
 (defn- sqlite-inline

@@ -2042,4 +2042,242 @@
   {:id :profile-bundle-missing :op :profile
    :seed {}
    :request {:sub "bundle" :name "p9"}
-   :expect {:exit 0 :lines ["error   p9  no such profile"]}}]}]
+   :expect {:exit 0 :lines ["error   p9  no such profile"]}}
+  ;; S5a: the delivery queue state plane ---------------------------------
+  {:id :queue/enqueue-status :op :queue
+   :request {:profile "p1"
+             :steps [["enqueue" "e1" {"id" "j1"} "hello" false "2026-11-08T10:00:01.000000+09:00"]
+                     ["status" "e1"]]}
+   :expect {:results [{"execution_id" "e1" "job_json" "{\n  \"id\": \"j1\"\n}" "content" "hello" "for_failure" 0 "status" "pending" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" nil "error" nil}
+                      {"execution_id" "e1" "job_json" "{\n  \"id\": \"j1\"\n}" "content" "hello" "for_failure" 0 "status" "pending" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" nil "error" nil}]}}
+  {:id :queue/claim-next-order :op :queue
+   :request {:profile "p1"
+             :steps [["enqueue" "e1" {"id" "j1"} "first" false "2026-11-08T10:00:01.000000+09:00"]
+                     ["enqueue" "e2" {"id" "j2"} "second" true "2026-11-08T10:00:02.000000+09:00"]
+                     ["claim-next" 3000000]
+                     ["status" "e1"]
+                     ["claim-next" 4000000]
+                     ["status" "e2"]]}
+   :expect {:results [{"execution_id" "e1" "job_json" "{\n  \"id\": \"j1\"\n}" "content" "first" "for_failure" 0 "status" "pending" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" nil "error" nil}
+                      {"execution_id" "e2" "job_json" "{\n  \"id\": \"j2\"\n}" "content" "second" "for_failure" 1 "status" "pending" "created_at" "2026-11-08T10:00:02.000000+09:00" "finished_at" nil "error" nil}
+                      {"execution_id" "e1" "job_json" "{\n  \"id\": \"j1\"\n}" "content" "first" "for_failure" 0 "status" "delivering" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" nil "error" nil}
+                      {"execution_id" "e1" "job_json" "{\n  \"id\": \"j1\"\n}" "content" "first" "for_failure" 0 "status" "delivering" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" nil "error" nil}
+                      {"execution_id" "e2" "job_json" "{\n  \"id\": \"j2\"\n}" "content" "second" "for_failure" 1 "status" "delivering" "created_at" "2026-11-08T10:00:02.000000+09:00" "finished_at" nil "error" nil}
+                      {"execution_id" "e2" "job_json" "{\n  \"id\": \"j2\"\n}" "content" "second" "for_failure" 1 "status" "delivering" "created_at" "2026-11-08T10:00:02.000000+09:00" "finished_at" nil "error" nil}]}}
+  {:id :queue/claim-finish-fence :op :queue
+   :request {:profile "p1"
+             :steps [["enqueue" "e3" {"id" "j3"} "once" false "2026-11-08T10:00:01.000000+09:00"]
+                     ["claim" "e3" 5000000]
+                     ["claim" "e3" 5000000]
+                     ["finish" "e3" "delivered" nil "2026-11-08T10:00:02.000000+09:00"]
+                     ["status" "e3"]
+                     ["finish" "e3" "failed" "x" "2026-11-08T10:00:03.000000+09:00"]]}
+   ;; the finished row reads redacted: finish always prunes terminal payloads
+   :expect {:results [{"execution_id" "e3" "job_json" "{\n  \"id\": \"j3\"\n}" "content" "once" "for_failure" 0 "status" "pending" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" nil "error" nil}
+                      {:claimed true}
+                      {:claimed false}
+                      {:finished true}
+                      {"execution_id" "e3" "job_json" "{}" "content" "" "for_failure" 0 "status" "delivered" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" "2026-11-08T10:00:02.000000+09:00" "error" nil}
+                      {:finished false}]}}
+  {:id :queue/recover-abandoned :op :queue
+   :request {:profile "p1"
+             :setup-sql ["INSERT INTO deliveries(execution_id,job_json,content,for_failure,status,owner_process_id,owner_pid,owner_started_at,created_at) VALUES ('old-1','{}','seed',0,'delivering','other',2147483647,100,'2026-11-08T09:00:00.000000+09:00')"]
+             :steps [["recover" "2026-11-08T10:00:09.000000+09:00"]
+                     ["enqueue" "e4" {"id" "j4"} "live" false "2026-11-08T10:00:01.000000+09:00"]
+                     ["claim" "e4" 6000000]
+                     ["recover" "2026-11-08T10:00:10.000000+09:00"]
+                     ["status" "e4"]]}
+   ;; the recovered rows read back pre-update (only the status is overridden)
+   :expect {:results [{:recovered [{"execution_id" "old-1" "job_json" "{}" "content" "seed" "for_failure" 0 "status" "unknown" "created_at" "2026-11-08T09:00:00.000000+09:00" "finished_at" nil "error" nil}]}
+                      {"execution_id" "e4" "job_json" "{\n  \"id\": \"j4\"\n}" "content" "live" "for_failure" 0 "status" "pending" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" nil "error" nil}
+                      {:claimed true}
+                      {:recovered []}
+                      {"execution_id" "e4" "job_json" "{\n  \"id\": \"j4\"\n}" "content" "live" "for_failure" 0 "status" "delivering" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" nil "error" nil}]}}
+  {:id :queue/prune-tombstone-bound :op :queue
+   :request {:profile "p1"
+             :steps [["seed-terminal" "k-" 1005 "2026-11-08T09:00:00.000000+09:00"]
+                     ["enqueue" "e9" {"id" "j9"} "ninth" false "2026-11-08T10:00:01.000000+09:00"]
+                     ["claim" "e9" 7000000]
+                     ["finish" "e9" "delivered" nil "2026-11-08T10:00:09.000000+09:00"]
+                     ["tombstones"]
+                     ["status" "k-0000"]
+                     ["status" "k-0006"]
+                     ["enqueue" "k-0002" {"id" "jx"} "again" false "2026-11-08T10:00:02.000000+09:00"]]}
+   :expect {:results [{:seeded 1005}
+                      {"execution_id" "e9" "job_json" "{\n  \"id\": \"j9\"\n}" "content" "ninth" "for_failure" 0 "status" "pending" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" nil "error" nil}
+                      {:claimed true}
+                      {:finished true}
+                      [{"execution_id" "k-0000" "terminal_status" "delivered" "finished_at" "2026-11-08T09:00:00.000000+09:00"}
+                       {"execution_id" "k-0001" "terminal_status" "delivered" "finished_at" "2026-11-08T09:00:00.000000+09:00"}
+                       {"execution_id" "k-0002" "terminal_status" "delivered" "finished_at" "2026-11-08T09:00:00.000000+09:00"}
+                       {"execution_id" "k-0003" "terminal_status" "delivered" "finished_at" "2026-11-08T09:00:00.000000+09:00"}
+                       {"execution_id" "k-0004" "terminal_status" "delivered" "finished_at" "2026-11-08T09:00:00.000000+09:00"}
+                       {"execution_id" "k-0005" "terminal_status" "delivered" "finished_at" "2026-11-08T09:00:00.000000+09:00"}]
+                      {"execution_id" "k-0000" "status" "delivered" "finished_at" "2026-11-08T09:00:00.000000+09:00" "error" nil}
+                      {"execution_id" "k-0006" "job_json" "{}" "content" "" "for_failure" 0 "status" "delivered" "created_at" "2026-11-08T09:00:00.000000+09:00" "finished_at" "2026-11-08T09:00:00.000000+09:00" "error" nil}
+                      {"execution_id" "k-0002" "status" "delivered" "finished_at" "2026-11-08T09:00:00.000000+09:00"}]}}
+  ;; S5a: the execution ledger state plane --------------------------------
+  {:id :ledger/claim-fence :op :ledger
+   :request {:profile "p1"
+             :steps [["claim" "j1" "cron" "2026-11-08T10:00:01.000000+09:00"]
+                     ["claim" "j1" "cron" "2026-11-08T10:00:02.000000+09:00"]]}
+   :expect {:results [{:claimed true} {:claimed false :reason "active-exists"}]}}
+  {:id :ledger/handoff-adopt-flow :op :ledger
+   :request {:profile "p1"
+             :steps [["claim" "j2" "cron" "2026-11-08T10:00:01.000000+09:00"]
+                     ["handoff" "$live" 1000.5]
+                     ["adopt" "$live" "2026-11-08T10:00:02.000000+09:00"]
+                     ["run" "$live" "2026-11-08T10:00:03.000000+09:00"]
+                     ["finish" "$live" true "delivered" "2026-11-08T10:00:04.000000+09:00"]
+                     ["outcome" "$live" "delivered"]
+                     ["terminal-count"]]}
+   :expect {:results [{:claimed true} {:pending true} {:adopted true} {:running false} {:finished true} {:settled true} {:terminal 1}]}}
+  {:id :ledger/run-finish-fence :op :ledger
+   :request {:profile "p1"
+             :steps [["claim" "j4" "cron" "2026-11-08T10:00:01.000000+09:00"]
+                     ["run" "$live" "2026-11-08T10:00:02.000000+09:00"]
+                     ["run" "$live" "2026-11-08T10:00:03.000000+09:00"]
+                     ["finish" "$live" false "failed" "2026-11-08T10:00:04.000000+09:00"]
+                     ["finish" "$live" true "done" "2026-11-08T10:00:05.000000+09:00"]
+                     ["terminal-count"]]}
+   :expect {:results [{:claimed true} {:running true} {:running false} {:finished true} {:finished false} {:terminal 1}]}}
+  {:id :ledger/adopt-fenced :op :ledger
+   :request {:profile "p1"
+             :steps [["claim" "j5" "cron" "2026-11-08T10:00:01.000000+09:00"]
+                     ["adopt" "$live" "2026-11-08T10:00:02.000000+09:00"]
+                     ["adopt" "nope" "2026-11-08T10:00:02.000000+09:00"]
+                     ["handoff" "nope" 1000.5]]}
+   :expect {:results [{:claimed true} {:adopted false} {:adopted false} {:pending false}]}}
+  {:id :ledger/recover-interrupted :op :ledger
+   :request {:profile "p1"
+             :setup-sql ["INSERT INTO executions(id,job_id,source,process_id,pid,process_started_at,status,claimed_at,handoff_pending,handoff_started_at) VALUES ('stale-1','j9','cron','other',2147483647,100,'claimed','2026-11-08T09:00:00.000000+09:00',0,NULL)"
+                         "INSERT INTO executions(id,job_id,source,process_id,pid,process_started_at,status,claimed_at,handoff_pending,handoff_started_at) VALUES ('stale-2','j7','cron','other',2147483647,100,'claimed','2026-11-08T09:00:00.000000+09:00',1,9999999999.0)"
+                         "INSERT INTO executions(id,job_id,source,process_id,pid,process_started_at,status,claimed_at,handoff_pending,handoff_started_at) VALUES ('stale-3','j6','cron','other',2147483647,100,'claimed','2026-11-08T09:00:00.000000+09:00',1,1000.0)"]
+             :steps [["claim" "j8" "cron" "2026-11-08T10:00:01.000000+09:00"]
+                     ["rows" "j9"]
+                     ["rows" "j7"]
+                     ["rows" "j6"]]}
+   :expect {:results [{:claimed true}
+                      [{"id" "stale-1" "job_id" "j9" "source" "cron" "status" "unknown" "handoff_pending" 0 "handoff_started_at" nil "claimed_at" "2026-11-08T09:00:00.000000+09:00" "started_at" nil "finished_at" "2026-11-08T10:00:01.000000+09:00" "error" "scheduler restarted before a terminal result; execution outcome is unknown" "delivery_outcome" nil "scheduled_instant" nil}]
+                      [{"id" "stale-2" "job_id" "j7" "source" "cron" "status" "claimed" "handoff_pending" 1 "handoff_started_at" 9999999999.0 "claimed_at" "2026-11-08T09:00:00.000000+09:00" "started_at" nil "finished_at" nil "error" nil "delivery_outcome" nil "scheduled_instant" nil}]
+                      [{"id" "stale-3" "job_id" "j6" "source" "cron" "status" "unknown" "handoff_pending" 0 "handoff_started_at" nil "claimed_at" "2026-11-08T09:00:00.000000+09:00" "started_at" nil "finished_at" "2026-11-08T10:00:01.000000+09:00" "error" "scheduler restarted before a terminal result; execution outcome is unknown" "delivery_outcome" nil "scheduled_instant" nil}]]}}
+  {:id :ledger/incident-cycle :op :ledger
+   :request {:profile "p1"
+             :steps [["upsert" "j1" "boom 429 rate limit exceeded" "o.log" "2026-11-08T10:00:01.000000+09:00"]
+                     ["incident" "j1_b6fbd84809a1"]
+                     ["upsert" "j1" "boom 429 rate limit exceeded" "o.log" "2026-11-08T10:00:02.000000+09:00"]
+                     ["incidents"]
+                     ["alerted" "j1_b6fbd84809a1" "2026-11-08T10:00:03.000000+09:00"]
+                     ["resolve" "j1" "2026-11-08T10:00:04.000000+09:00"]
+                     ["upsert" "j1" "boom 429 rate limit exceeded" "o.log" "2026-11-08T10:00:05.000000+09:00"]
+                     ["incident" "j1_b6fbd84809a1"]
+                     ["ack" "j1_b6fbd84809a1" "2026-11-08T10:00:06.000000+09:00"]
+                     ["ack" "j1_b6fbd84809a1" "2026-11-08T10:00:07.000000+09:00"]
+                     ["upsert" "j1" "boom 429 rate limit exceeded" "o.log" "2026-11-08T10:00:08.000000+09:00"]
+                     ["incident" "j1_b6fbd84809a1"]]}
+   :expect {:results [{:id "j1_b6fbd84809a1" :error-signature "b6fbd84809a1" :failure-type "rate_limit"}
+                      {"id" "j1_b6fbd84809a1" "job_id" "j1" "error_sig" "b6fbd84809a1" "state" "detected" "failure_type" "rate_limit" "first_seen_at" "2026-11-08T10:00:01.000000+09:00" "last_seen_at" "2026-11-08T10:00:01.000000+09:00" "alerted_at" nil "acked_at" nil "closed_at" nil}
+                      {:id "j1_b6fbd84809a1" :error-signature "b6fbd84809a1" :failure-type "rate_limit"}
+                      [{"id" "j1_b6fbd84809a1" "job_id" "j1" "error_sig" "b6fbd84809a1" "state" "detected" "failure_type" "rate_limit" "first_seen_at" "2026-11-08T10:00:01.000000+09:00" "last_seen_at" "2026-11-08T10:00:02.000000+09:00" "alerted_at" nil "acked_at" nil "closed_at" nil "error" "execution failed" "output_file" "o.log"}]
+                      {:alerted true}
+                      {:resolved true}
+                      {:id "j1_b6fbd84809a1" :error-signature "b6fbd84809a1" :failure-type "rate_limit"}
+                      {"id" "j1_b6fbd84809a1" "job_id" "j1" "error_sig" "b6fbd84809a1" "state" "detected" "failure_type" "rate_limit" "first_seen_at" "2026-11-08T10:00:01.000000+09:00" "last_seen_at" "2026-11-08T10:00:05.000000+09:00" "alerted_at" nil "acked_at" nil "closed_at" nil}
+                      {:closed true}
+                      {:closed false}
+                      {:id "j1_b6fbd84809a1" :error-signature "b6fbd84809a1" :failure-type "rate_limit"}
+                      {"id" "j1_b6fbd84809a1" "job_id" "j1" "error_sig" "b6fbd84809a1" "state" "closed" "failure_type" "rate_limit" "first_seen_at" "2026-11-08T10:00:01.000000+09:00" "last_seen_at" "2026-11-08T10:00:08.000000+09:00" "alerted_at" nil "acked_at" "2026-11-08T10:00:06.000000+09:00" "closed_at" "2026-11-08T10:00:06.000000+09:00"}]}}
+  {:id :ledger/withhold-matrix :op :ledger
+   :request {:profile "p1"
+             :steps [["withhold" "j2" {} "x timeout" "o.log" "2026-11-08T10:00:01.000000+09:00"]
+                     ["alerted" "j2_edd1764d747f" "2030-01-01T00:00:00.000000+09:00"]
+                     ["withhold" "j2" {} "x timeout" "o.log" "2026-11-08T10:00:02.000000+09:00"]
+                     ["withhold" "j2" {"cron" {"failure_repeat_alert_hours" 0}} "x timeout" "o.log" "2026-11-08T10:00:03.000000+09:00"]
+                     ["ack" "j2_edd1764d747f" "2026-11-08T10:00:04.000000+09:00"]
+                     ["withhold" "j2" {} "x timeout" "o.log" "2026-11-08T10:00:05.000000+09:00"]]}
+   :expect {:results [{:withheld false :incident-id "j2_edd1764d747f"}
+                      {:alerted true}
+                      {:withheld true :incident-id "j2_edd1764d747f"}
+                      {:withheld false :incident-id "j2_edd1764d747f"}
+                      {:closed true}
+                      {:withheld true :incident-id "j2_edd1764d747f"}]}}
+  {:id :ledger/failure-types :op :ledger
+   :request {:profile "p1"
+             :steps [["upsert" "jt" "Rate Limit 429 quota hit" nil "2026-11-08T10:00:01.000000+09:00"]
+                     ["upsert" "jt" "script timed out after 30s" nil "2026-11-08T10:00:01.000000+09:00"]
+                     ["upsert" "jt" "401 unauthorized token expired" nil "2026-11-08T10:00:01.000000+09:00"]
+                     ["upsert" "jt" "delivery to telegram failed" nil "2026-11-08T10:00:01.000000+09:00"]
+                     ["upsert" "jt" "config validation error" nil "2026-11-08T10:00:01.000000+09:00"]
+                     ["upsert" "jt" "script exited no_agent" nil "2026-11-08T10:00:01.000000+09:00"]
+                     ["upsert" "jt" "model provider inference down" nil "2026-11-08T10:00:01.000000+09:00"]
+                     ["upsert" "jt" "weird blue failure" nil "2026-11-08T10:00:01.000000+09:00"]]}
+   :expect {:results [{:id "jt_bf7ccc2d1271" :error-signature "bf7ccc2d1271" :failure-type "rate_limit"}
+                      {:id "jt_0e2b56868efb" :error-signature "0e2b56868efb" :failure-type "timeout"}
+                      {:id "jt_842096eee548" :error-signature "842096eee548" :failure-type "auth"}
+                      {:id "jt_239659964585" :error-signature "239659964585" :failure-type "delivery"}
+                      {:id "jt_c7d8953214a7" :error-signature "c7d8953214a7" :failure-type "config"}
+                      {:id "jt_e44e0d3271e3" :error-signature "e44e0d3271e3" :failure-type "script"}
+                      {:id "jt_b02cf6bc10dd" :error-signature "b02cf6bc10dd" :failure-type "agent"}
+                      {:id "jt_93f5150711e0" :error-signature "93f5150711e0" :failure-type "unknown"}]}}
+  {:id :ledger/rows-order :op :ledger
+   :request {:profile "p1"
+             :setup-sql ["INSERT INTO executions(id,job_id,source,process_id,pid,process_started_at,status,claimed_at) VALUES ('r1','j1','cron','s',5,50,'claimed','2026-11-08T10:00:01.000000+09:00')"
+                         "INSERT INTO executions(id,job_id,source,process_id,pid,process_started_at,status,claimed_at) VALUES ('r2','j1','cron','s',6,60,'running','2026-11-08T10:00:02.000000+09:00')"]
+             :steps [["rows" nil]
+                     ["rows" "j1"]
+                     ["rows" "j9"]
+                     ["incident" "nope"]]}
+   :expect {:results [[{"id" "r2" "job_id" "j1" "source" "cron" "status" "running" "handoff_pending" 0 "handoff_started_at" nil "claimed_at" "2026-11-08T10:00:02.000000+09:00" "started_at" nil "finished_at" nil "error" nil "delivery_outcome" nil "scheduled_instant" nil}
+                       {"id" "r1" "job_id" "j1" "source" "cron" "status" "claimed" "handoff_pending" 0 "handoff_started_at" nil "claimed_at" "2026-11-08T10:00:01.000000+09:00" "started_at" nil "finished_at" nil "error" nil "delivery_outcome" nil "scheduled_instant" nil}]
+                      [{"id" "r2" "job_id" "j1" "source" "cron" "status" "running" "handoff_pending" 0 "handoff_started_at" nil "claimed_at" "2026-11-08T10:00:02.000000+09:00" "started_at" nil "finished_at" nil "error" nil "delivery_outcome" nil "scheduled_instant" nil}
+                       {"id" "r1" "job_id" "j1" "source" "cron" "status" "claimed" "handoff_pending" 0 "handoff_started_at" nil "claimed_at" "2026-11-08T10:00:01.000000+09:00" "started_at" nil "finished_at" nil "error" nil "delivery_outcome" nil "scheduled_instant" nil}]
+                      []
+                      nil]}}
+  {:id :ledger/terminal-overflow :op :ledger
+   :request {:profile "p1"
+             :steps [["seed-terminal" "ov-" 1005 "2026-11-08T09:00:00.000000+09:00"]
+                     ["claim" "j9" "cron" "2026-11-08T10:00:01.000000+09:00"]
+                     ["run" "$live" "2026-11-08T10:00:02.000000+09:00"]
+                     ["finish" "$live" true "delivered" "2026-11-08T10:00:09.000000+09:00"]
+                     ["terminal-count"]]}
+   :expect {:results [{:seeded 1005} {:claimed true} {:running true} {:finished true} {:terminal 1000}]}}
+  ;; S5a: the delivery vocabulary ------------------------------------------
+  {:id :delivery/normalize :op :delivery
+   :call ["normalize" nil]
+   :expect {:value "local"}}
+  {:id :delivery/normalize-list :op :delivery
+   :call ["normalize" ["telegram" "" " local "]]
+   :expect {:value "telegram,local"}}
+  {:id :delivery/lanes :op :delivery
+   :call ["lanes" "telegram, local,,"]
+   :expect {:value ["telegram" "local"]}}
+  {:id :delivery/token :op :delivery
+   :call ["token" "bot-chat:Work"]
+   :expect {:value "Work"}}
+  {:id :delivery/token-bare :op :delivery
+   :call ["token" "bot-chat"]
+   :expect {:value ""}}
+  {:id :delivery/token-other :op :delivery
+   :call ["token" "telegram"]
+   :expect {:value nil}}
+  {:id :delivery/classify-failed :op :delivery
+   :call ["classify" {:delivery-error "boom"}]
+   :expect {:value "failed"}}
+  {:id :delivery/classify-queued :op :delivery
+   :call ["classify" {:should-deliver true :delivery-queued true}]
+   :expect {:value "queued"}}
+  {:id :delivery/classify-suppressed :op :delivery
+   :call ["classify" {:notification-suppressed true}]
+   :expect {:value "suppressed"}}
+  {:id :delivery/classify-not-configured :op :delivery
+   :call ["classify" {:should-deliver true :unresolved-origin true}]
+   :expect {:value "not_configured"}}
+  {:id :delivery/classify-delivered :op :delivery
+   :call ["classify" {:should-deliver true :normalized-deliver "telegram"}]
+   :expect {:value "delivered"}}
+  {:id :delivery/classify-suppressed-acked :op :delivery
+   :call ["classify" {:incident-acked true :success false}]
+   :expect {:value "suppressed_acked"}}
+  {:id :delivery/classify-local :op :delivery
+   :call ["classify" {:should-deliver true :normalized-deliver "local"}]
+   :expect {:value "suppressed"}}]}]

@@ -67,6 +67,9 @@ the owner, 64 usage.
 | `src/itonami/otehon/bundle.cljc` | profile bundle files/CID, manifest lifecycle itonamify/refresh/rail, definition copy (pure + `io` file copy) | `profile.cljk` (bundle-files/manifest/cid, default-manifest, with-inference-rail, write-manifest!, with-bundle, refresh-bundle-cid, copy-profile!), `host.cljk` (sha/base32/json) |
 | `src/itonami/otehon/soul.cljc` | SOUL world/unit/role block render + splice (pure + `io` sha) | `src/itonami/agent/soul.cljk` |
 | `src/itonami/otehon/ed25519.cljc` | Ed25519 base-point multiply + did:key render (pure 16-bit limbs + `cas` sha256 + `io` utf8/sha512) | `src/itonami/agent/identity.cljk` (KDF/derive, RFC 8032 expansion via host) + `src/itonami/agent/p2p.cljk` (base58btc) |
+| `src/itonami/otehon/delivery.cljc` | delivery lane vocabulary: normalize/lanes/bot-chat token/adapter registry/outcome table (pure) | `src/itonami/agent/delivery.cljk` |
+| `src/itonami/otehon/queue.cljc` | delivery queue: `cron/deliveries.db` deliveries + tombstones, enqueue/claim/finish/recover (`io` sqlite) | `src/itonami/agent/delivery_queue.cljk` |
+| `src/itonami/otehon/ledger.cljc` | execution ledger: `cron/executions.db` claims + incidents, fencing, restart recovery, alert gate (`io` sqlite) | `src/itonami/agent/execution_ledger.cljk` |
 | `src/itonami/otehon/io.cljc` | files, JSON, EDN, exit, clock, listing, utf8 writes, pid liveness, atomic replace: the only host code | — |
 | `src/itonami/otehon/pause.cljc` | emergency-stop marker paths, record, messages (pure) | `src/itonami/agent/pause.cljk`, `main.cljk` pause/resume-cmd |
 | `src/itonami/otehon/status.cljc` | store status lines (pure) | `main.cljk` status-cmd |

@@ -148,4 +148,32 @@
           "profiles/p2/profile.yaml" "name: p2\n"
           "profiles/p2/cron/jobs.json" "{\"jobs\": []}\n"}
    :request {:sub "bundle" :name "p2"}
-   :expect {:exit 0 :lines ["WRONG"]}}]}]
+   :expect {:exit 0 :lines ["WRONG"]}}
+  ;; S5a: a re-terminalized send answers false (proves the finish fence)
+  {:id :must-fail/queue-finish-twice :op :queue
+   :request {:profile "p1"
+             :steps [["enqueue" "e1" {"id" "j1"} "c" false "2026-11-08T10:00:01.000000+09:00"]
+                     ["claim" "e1" 100]
+                     ["finish" "e1" "delivered" nil "2026-11-08T10:00:02.000000+09:00"]
+                     ["finish" "e1" "delivered" nil "2026-11-08T10:00:03.000000+09:00"]]}
+   :expect {:results [{"execution_id" "e1"} {:claimed true} {:finished true} {:finished true}]}}
+  ;; S5a: claiming from an empty queue answers nil (proves the drain reads)
+  {:id :must-fail/queue-claim-next-empty :op :queue
+   :request {:profile "p1" :steps [["claim-next" 100]]}
+   :expect {:results [{"execution_id" "e1"}]}}
+  ;; S5a: a second claim on the same job answers fenced (proves the fence)
+  {:id :must-fail/ledger-double-claim :op :ledger
+   :request {:profile "p1"
+             :steps [["claim" "j1" "cron" "2026-11-08T10:00:01.000000+09:00"]
+                     ["claim" "j1" "cron" "2026-11-08T10:00:02.000000+09:00"]]}
+   :expect {:results [{:claimed true} {:claimed true}]}}
+  ;; S5a: finishing an unknown execution answers false (proves the fence)
+  {:id :must-fail/ledger-finish-unknown :op :ledger
+   :request {:profile "p1"
+             :steps [["finish" "nope" true "delivered" "2026-11-08T10:00:01.000000+09:00"]]}
+   :expect {:results [{:finished true}]}}
+  ;; S5a: acking an unknown incident answers false (proves the fence)
+  {:id :must-fail/ledger-ack-unknown :op :ledger
+   :request {:profile "p1"
+             :steps [["ack" "nope" "2026-11-08T10:00:01.000000+09:00"]]}
+   :expect {:results [{:closed true}]}}]}]
