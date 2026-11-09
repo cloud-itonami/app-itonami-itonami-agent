@@ -19,7 +19,8 @@ jobs:
   oracle-otehon-cljc:
     name: oracle-otehon-cljc (basilisp, babashka, nbb)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The basilisp leg alone takes ~15 min on CI runners; bb is slower.
+    timeout-minutes: 60
     steps:
       - name: Fetch the requested source without a runtime action
         env:
