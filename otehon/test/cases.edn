@@ -2280,4 +2280,208 @@
    :expect {:value "suppressed_acked"}}
   {:id :delivery/classify-local :op :delivery
    :call ["classify" {:should-deliver true :normalized-deliver "local"}]
-   :expect {:value "suppressed"}}]}]
+   :expect {:value "suppressed"}}
+  ;; S5b: the drain rail ---------------------------------------------------
+  {:id :drain/deliver-ok :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j1" "name" "J1" "deliver" "telegram"}]
+             :for-lane {"telegram" "ok"}
+             :steps [["deliver" "exec-1" "j1" "hello" false "2026-11-08T10:00:01.000000+09:00"]
+                     ["queue" "exec-1"]
+                     ["calls"]]}
+   :expect {:results [nil
+                      {"execution_id" "exec-1" "job_json" "{}" "content" "" "for_failure" 0 "status" "delivered" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" "2026-11-08T10:00:01.000000+09:00" "error" nil}
+                      [{"lane" "telegram" "content" "hello"}]]}}
+  {:id :drain/deliver-unconfigured-and-local :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j2" "name" "J2" "deliver" "telegram, local"}
+                    {"id" "j3" "name" "J3" "deliver" "local"}]
+             :steps [["deliver" "exec-2" "j2" "ping" false "2026-11-08T10:00:01.000000+09:00"]
+                     ["queue" "exec-2"]
+                     ["calls"]
+                     ["deliver" "exec-3" "j3" "quiet" false "2026-11-08T10:00:02.000000+09:00"]
+                     ["queue" "exec-3"]]}
+   :expect {:results ["delivery requested for 'telegram' but no Kotoba delivery adapter is configured"
+                      {"execution_id" "exec-2" "job_json" "{}" "content" "" "for_failure" 0 "status" "failed" "created_at" "2026-11-08T10:00:01.000000+09:00" "finished_at" "2026-11-08T10:00:01.000000+09:00" "error" "delivery requested for 'telegram' but no Kotoba delivery adapter is configured"}
+                      []
+                      nil
+                      nil]}}
+  {:id :drain/deliver-fallback-branches :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j4" "name" "J4" "deliver" "sms"}]
+             :delivery-fn "ok"
+             :steps [["deliver" "exec-4a" "j4" "a" false "2026-11-08T10:00:01.000000+09:00"]]}
+   :expect {:results [nil]}}
+  {:id :drain/deliver-fallback-false :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j4" "name" "J4" "deliver" "sms"}]
+             :delivery-fn "false"
+             :steps [["deliver" "exec-4b" "j4" "b" false "2026-11-08T10:00:01.000000+09:00"]]}
+   :expect {:results ["delivery adapter returned false"]}}
+  {:id :drain/deliver-fallback-throw :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j4" "name" "J4" "deliver" "sms"}]
+             :delivery-fn "throw:bang"
+             :steps [["deliver" "exec-4c" "j4" "c" false "2026-11-08T10:00:01.000000+09:00"]]}
+   :expect {:results ["delivery adapter failed: bang"]}}
+  {:id :drain/deliver-fallback-err :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j4" "name" "J4" "deliver" "sms"}]
+             :delivery-fn "err:oops"
+             :steps [["deliver" "exec-4d" "j4" "d" false "2026-11-08T10:00:01.000000+09:00"]]}
+   :expect {:results ["oops"]}}
+  {:id :drain/drain-and-settle :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j5" "name" "J5" "deliver" "telegram"}]
+             :for-lane {"telegram" "ok"}
+             :setup-sql {"deliveries.db" ["INSERT INTO deliveries(execution_id,job_json,content,for_failure,status,created_at) VALUES ('exec-9','{\"id\":\"j5\",\"name\":\"J5\",\"deliver\":\"telegram\"}','ping',0,'pending','2026-11-08T09:00:00.000000+09:00')"]
+                         "executions.db" ["INSERT INTO executions(id,job_id,source,process_id,pid,status,claimed_at) VALUES ('exec-9','j5','cron','seed',1,'claimed','2026-11-08T09:00:00.000000+09:00')"]}
+             :steps [["drain" "2026-11-08T10:00:01.000000+09:00"]
+                     ["queue" "exec-9"]
+                     ["job" "j5"]
+                     ["exec" "exec-9"]
+                     ["calls"]
+                     ["drain" "2026-11-08T10:00:02.000000+09:00"]]}
+   :expect {:results [{:drained 1}
+                      {"execution_id" "exec-9" "job_json" "{}" "content" "" "for_failure" 0 "status" "delivered" "created_at" "2026-11-08T09:00:00.000000+09:00" "finished_at" "2026-11-08T10:00:01.000000+09:00" "error" nil}
+                      {"id" "j5" "name" "J5" "deliver" "telegram" "last_status" "ok" "last_delivery_error" nil}
+                      {"id" "exec-9" "job_id" "j5" "source" "cron" "status" "claimed" "handoff_pending" 0 "handoff_started_at" nil "claimed_at" "2026-11-08T09:00:00.000000+09:00" "started_at" nil "finished_at" nil "error" nil "delivery_outcome" "delivered" "scheduled_instant" nil}
+                      [{"lane" "telegram" "content" "ping"}]
+                      {:drained 0}]}}
+  {:id :drain/drain-failed-no-adapter :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j6" "name" "J6" "deliver" "telegram"}]
+             :setup-sql {"deliveries.db" ["INSERT INTO deliveries(execution_id,job_json,content,for_failure,status,created_at) VALUES ('exec-8','{\"id\":\"j6\",\"name\":\"J6\",\"deliver\":\"telegram\"}','ping',0,'pending','2026-11-08T09:00:00.000000+09:00')"]
+                         "executions.db" ["INSERT INTO executions(id,job_id,source,process_id,pid,status,claimed_at) VALUES ('exec-8','j6','cron','seed',1,'claimed','2026-11-08T09:00:00.000000+09:00')"]}
+             :steps [["drain" "2026-11-08T10:00:01.000000+09:00"]
+                     ["queue" "exec-8"]
+                     ["job" "j6"]
+                     ["exec" "exec-8"]]}
+   :expect {:results [{:drained 1}
+                      {"execution_id" "exec-8" "job_json" "{}" "content" "" "for_failure" 0 "status" "failed" "created_at" "2026-11-08T09:00:00.000000+09:00" "finished_at" "2026-11-08T10:00:01.000000+09:00" "error" "delivery requested for 'telegram' but no Kotoba delivery adapter is configured"}
+                      {"id" "j6" "name" "J6" "deliver" "telegram" "last_status" "delivery_failed" "last_delivery_error" "delivery requested for 'telegram' but no Kotoba delivery adapter is configured"}
+                      {"id" "exec-8" "job_id" "j6" "source" "cron" "status" "claimed" "handoff_pending" 0 "handoff_started_at" nil "claimed_at" "2026-11-08T09:00:00.000000+09:00" "started_at" nil "finished_at" nil "error" nil "delivery_outcome" "failed" "scheduled_instant" nil}]}}
+  {:id :drain/abandoned-sweep :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j6" "name" "J6" "deliver" "telegram"}]
+             :setup-sql {"deliveries.db" ["INSERT INTO deliveries(execution_id,job_json,content,for_failure,status,owner_process_id,owner_pid,owner_started_at,created_at) VALUES ('exec-8','{\"id\":\"j6\",\"name\":\"J6\",\"deliver\":\"telegram\"}','ping',0,'delivering','other',2147483647,100,'2026-11-08T09:00:00.000000+09:00')"]}
+             :steps [["abandoned" "2026-11-08T10:00:01.000000+09:00"]
+                     ["queue" "exec-8"]
+                     ["job" "j6"]
+                     ["incidents"]]}
+   :expect {:results [{:recovered 1}
+                      {"execution_id" "exec-8" "job_json" "{}" "content" "" "for_failure" 0 "status" "unknown" "created_at" "2026-11-08T09:00:00.000000+09:00" "finished_at" "2026-11-08T10:00:01.000000+09:00" "error" nil}
+                      {"id" "j6" "name" "J6" "deliver" "telegram"}
+                      [{"id" "j6_011dae9274a2" "job_id" "j6" "error_sig" "011dae9274a2" "state" "detected" "failure_type" "delivery" "first_seen_at" "2026-11-08T10:00:01.000000+09:00" "last_seen_at" "2026-11-08T10:00:01.000000+09:00" "alerted_at" nil "acked_at" nil "closed_at" nil "error" "execution failed" "output_file" nil}]]}}
+  {:id :drain/finish-run-ok :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j7" "name" "Nightly" "deliver" "telegram"}]
+             :for-lane {"telegram" "ok"}
+             :steps [["finish" "j7" {:final "did things" :exit-reason "completed" :execution-id "exec-7" :usage {"prompt_tokens" 10 "completion_tokens" 5 "total_tokens" 15} :turns 2 :provider "p" :model "m" :attempts []} "2026-11-08T10:00:01.000000+09:00" "2026-11-08T10:00:09.000000+09:00"]
+                     ["doc" "j7" "2026-11-08T10:00:01.000000+09:00"]
+                     ["job" "j7"]
+                     ["run-line"]
+                     ["usage-line"]
+                     ["queue" "exec-7"]
+                     ["calls"]]}
+   :expect {:results [{:status "ok" :delivery-error nil :output-file "test/scratch/drain-finish-run-ok/profiles/p1/cron/output/j7/2026-11-08_10-00-01.md" :result {:final "did things" :exit-reason "completed" :execution-id "exec-7" :usage {"prompt_tokens" 10 "completion_tokens" 5 "total_tokens" 15} :turns 2 :provider "p" :model "m" :attempts []}}
+                      "# Cron Job: Nightly\n\n**Job ID:** j7\n**Run Time:** 2026-11-08 10:00:01\n**Schedule:** \n**Engine:** itonami-agent\n\n## Prompt\n\n\n\n## Response\n\ndid things\n"
+                      {"id" "j7" "name" "Nightly" "deliver" "telegram" "last_run_at" "2026-11-08T10:00:01.000000+09:00" "last_status" "ok" "last_error" nil "last_delivery_error" nil "failure_streak" 0 "repeat" {"completed" 1}}
+                      {"job_id" "j7" "status" "ok" "execution_id" "exec-7"}
+                      {"job_id" "j7" "deliver_target" "telegram" "delivery_error" nil "response_silent" false "duration_ms" 8000 "error" nil}
+                      {"execution_id" "exec-7" "job_json" "{}" "content" "" "for_failure" 0 "status" "delivered" "created_at" "2026-11-08T10:00:09.000000+09:00" "finished_at" "2026-11-08T10:00:09.000000+09:00" "error" nil}
+                      [{"lane" "telegram" "content" "did things"}]]}}
+  {:id :drain/finish-run-failure :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j8" "name" "Failing" "deliver" "telegram"}]
+             :for-lane {"telegram" "ok"}
+             :steps [["finish" "j8" {:final "[CRON_FAILURE] boom" :exit-reason "script_error" :error {:error "boom detail"} :execution-id "exec-8"} "2026-11-08T10:00:01.000000+09:00" "2026-11-08T10:00:09.000000+09:00"]
+                     ["doc" "j8" "2026-11-08T10:00:01.000000+09:00"]
+                     ["job" "j8"]
+                     ["run-line"]]}
+   :expect {:results [{:status "error" :delivery-error nil :output-file "test/scratch/drain-finish-run-failure/profiles/p1/cron/output/j8/2026-11-08_10-00-01.md" :result {:final "[CRON_FAILURE] boom" :exit-reason "script_error" :error {:error "boom detail"} :execution-id "exec-8"}}
+                      "# Cron Job: Failing (FAILED)\n\n**Job ID:** j8\n**Run Time:** 2026-11-08 10:00:01\n**Schedule:** \n**Engine:** itonami-agent\n\n## Prompt\n\n\n\n## Response\n\n[CRON_FAILURE] boom\n\n## Error\n\n```\nboom detail\n```\n"
+                      {"id" "j8" "name" "Failing" "deliver" "telegram" "last_run_at" "2026-11-08T10:00:01.000000+09:00" "last_status" "error" "last_error" "boom detail" "last_delivery_error" nil "failure_streak" 1 "repeat" {"completed" 1}}
+                      {"job_id" "j8" "status" "error" "execution_id" "exec-8"}]}}
+  {:id :drain/finish-run-silent :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j9" "name" "Silent" "deliver" "telegram"}]
+             :for-lane {"telegram" "ok"}
+             :steps [["finish" "j9" {:final "[SILENT]" :exit-reason "completed" :execution-id "exec-9"} "2026-11-08T10:00:01.000000+09:00" "2026-11-08T10:00:09.000000+09:00"]
+                     ["queue" "exec-9"]
+                     ["calls"]
+                     ["run-line"]]}
+   :expect {:results [{:status "silent" :delivery-error nil :output-file "test/scratch/drain-finish-run-silent/profiles/p1/cron/output/j9/2026-11-08_10-00-01.md" :result {:final "[SILENT]" :exit-reason "completed" :execution-id "exec-9"}} nil [] {"job_id" "j9" "status" "silent" "execution_id" "exec-9"}]}}
+  {:id :drain/finish-run-delivery-fails :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j10" "name" "Down" "deliver" "telegram"}]
+             :for-lane {"telegram" "err:down"}
+             :steps [["finish" "j10" {:final "done" :exit-reason "completed" :execution-id "exec-10"} "2026-11-08T10:00:01.000000+09:00" "2026-11-08T10:00:09.000000+09:00"]
+                     ["queue" "exec-10"]
+                     ["job" "j10"]]}
+   :expect {:results [{:status "delivery_failed" :delivery-error "down" :output-file "test/scratch/drain-finish-run-delivery-fails/profiles/p1/cron/output/j10/2026-11-08_10-00-01.md" :result {:final "done" :exit-reason "completed" :execution-id "exec-10"}}
+                      {"execution_id" "exec-10" "job_json" "{}" "content" "" "for_failure" 0 "status" "failed" "created_at" "2026-11-08T10:00:09.000000+09:00" "finished_at" "2026-11-08T10:00:09.000000+09:00" "error" "down"}
+                      {"id" "j10" "name" "Down" "deliver" "telegram" "last_run_at" "2026-11-08T10:00:01.000000+09:00" "last_status" "delivery_failed" "last_error" nil "last_delivery_error" "down" "failure_streak" 0 "repeat" {"completed" 1}}]}}
+  ;; S5b: gateway transport resolution -----------------------------------
+  {:id :gateway/resolve-native-wins :op :gateway
+   :request {:adapters {"telegram" "ok" "relay" "ok"}
+             :relay-fronts ["telegram"]
+             :platforms {"telegram" {:enabled true} "relay" {:enabled true}}
+             :steps [["resolve" "telegram"]
+                     ["resolve" "Telegram"]
+                     ["inject" "telegram"]
+                     ["inject" "sms"]]}
+   :expect {:results [{"transport-platform" "telegram" "config" {:enabled true}}
+                      {"transport-platform" "telegram" "config" {:enabled true}}
+                      {:found true}
+                      {:found false}]}}
+  {:id :gateway/resolve-relay-fallback :op :gateway
+   :request {:adapters {"relay" "ok"}
+             :relay-fronts ["telegram"]
+             :platforms {"relay" {:enabled true}}
+             :steps [["resolve" "telegram"]
+                     ["inject" "telegram"]
+                     ["resolve" "sms"]
+                     ["inject" "sms"]]}
+   :expect {:results [{"transport-platform" "relay" "config" {:enabled true}}
+                      {:found true}
+                      nil
+                      {:found false}]}}
+  {:id :gateway/resolve-disabled-native :op :gateway
+   :request {:adapters {"telegram" "ok" "relay" "ok"}
+             :relay-fronts ["telegram"]
+             :platforms {"telegram" {:enabled false} "relay" {:enabled true}}
+             :steps [["resolve" "telegram"]]}
+   :expect {:results [{"transport-platform" "relay" "config" {:enabled true}}]}}
+  {:id :gateway/resolve-all-disabled :op :gateway
+   :request {:adapters {"telegram" "ok" "relay" "ok"}
+             :relay-fronts ["telegram"]
+             :platforms {"telegram" {:enabled false} "relay" {:enabled false}}
+             :steps [["resolve" "telegram"]
+                     ["resolve" "sms"]]}
+   :expect {:results [nil nil]}}
+  {:id :gateway/send-ok-and-calls :op :gateway
+   :request {:adapters {"telegram" "ok"}
+             :steps [["send" "telegram" "-100" "" "hi"]
+                     ["calls"]
+                     ["warns"]]}
+   :expect {:results [nil
+                      [{"chat" "-100" "text" "hi" "meta" nil}]
+                      []]}}
+  {:id :gateway/send-discord-metadata :op :gateway
+   :request {:adapters {"discord" "ok"}
+             :steps [["send" "discord" "C1" "t1" "hello"]
+                     ["calls"]]}
+   :expect {:results [nil
+                      [{"chat" "C1" "text" "hello" "meta" {"thread_id" "t1" "non_conversational" true}}]]}}
+  {:id :gateway/send-blank-chat-and-throw :op :gateway
+   :request {:adapters {"telegram" "throw:bang"}
+             :steps [["send" "telegram" "" "" "hi"]
+                     ["send" "telegram" "-100" "" "hi"]
+                     ["calls"]
+                     ["warns"]]}
+   :expect {:results [nil
+                      nil
+                      [{"chat" "-100" "text" "hi" "meta" nil}]
+                      ["Watcher delivery error: bang"]]}}
+]}]

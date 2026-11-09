@@ -93,13 +93,13 @@ from source, the rest follow the module name until their slice lands.
 | `computer_use.cljk` | — | planned S6 |
 | `confine.cljk` *OS sandbox* | — | planned S2 |
 | `connections.cljk` | — | planned S6 |
-| `cron.cljk` *jobs/schedules* | `cron.cljc`, `tick.cljc`, `run.cljc`, `exec.cljc` | partial (plans + `run-job` host side and finished-turn apply done, JUN-1036 S2a/S2b; live rail + ledger/queue rows S5) |
+| `cron.cljk` *jobs/schedules* | `cron.cljc`, `tick.cljc`, `run.cljc`, `exec.cljc` | partial (plans + `run-job` host side and finished-turn apply done, JUN-1036 S2a/S2b; ledger/queue rows S5a; drain rail — deliver/drain/settle/abandoned/finish-run — S5b; the live run-job loop + watcher fan-in stay open) |
 | `dapps.cljk` | — | planned S6 |
 | `delivery.cljk` | `delivery.cljc` (normalize/lanes/bot-chat token/adapter registry/classify-outcome, pure) | done (JUN-1036 S5a; shared cases assert the vocabulary incl. the outcome table) |
 | `delivery_queue.cljk` | `queue.cljc` (`cron/deliveries.db`, `deliveries` + bounded `delivery_tombstones`, enqueue/get-status/claim-row/claim-next/finish/recover) | done (JUN-1036 S5a; fencing answers verified by follow-up SELECT — same outcome single-writer; `job_json` keeps the legacy indent-2 layout, key order is the map's iteration order) |
 | `execution_ledger.cljk` *reads* | `cli.cljc` (runs-for, incidents-for: rows/incidents/ack over `cron/executions.db`) | done reads (JUN-1036 S4b; claim/finish/upsert/resolve writes stay S5) |
 | `execution_ledger.cljk` *writes* | `ledger.cljc` (`cron/executions.db`, executions + incidents DDL verbatim; claim (throws on active)/mark-handoff-pending/adopt-claimed/mark-running/finish (completed\|failed + 1000-row overflow drop)/set-delivery-outcome/incident upsert/get/ack/alerted/list/resolve/withheld gate) | done (JUN-1036 S5a; fencing verified by follow-up SELECT; no BEGIN IMMEDIATE — single-writer oracle, see notes) |
-| `gateway.cljk` | `gateway` (watcher egress surface) | partial (delivery loop S5) |
+| `gateway.cljk` | `gateway.cljc` (platform values, delivery transport, adapter/injection resolution, watcher send seam — pure core) | done transport core (JUN-1036 S5b; batching/timers fan-in and the serve loop need process.cljk + a live runtime and stay open) |
 | `homeassistant.cljk` | — | planned S6 |
 | `host.cljk` *node/file/env/process* | `io.cljc` | partial (files/env/clock/listing/pids/spawn done JUN-1036 S2a; + S5a: `now-micros-iso` (host-zone 6-digit fraction, the `iso-local` micros shape), `json-str-2` (indent-2, iteration order), `parse-iso-ms`, `kill-probe-alive?` (legacy kill(0) probe semantics), `sqlite-literal` numbers inline bare so REAL columns read back numeric) |
 | `identity.cljk` ( FleetSeed/KDF/derive-key/did-of/parse-seed/key-id ) | `ed25519.cljc` (KDF + RFC 8032 expansion + clamped base-point multiply + did:key:z; host SHA-512/UTF-8 in `io.cljc` ) | done (JUN-1036 S4e; node `createPrivateKey` expansion reproduced exactly, oracle-checked) |
@@ -193,4 +193,25 @@ from source, the rest follow the module name until their slice lands.
     with fixed seeds, so outcomes stay deterministic.
   - a nil ledger owner keeps its row (legacy kill(nil) reads alive);
     a nil queue owner reads dead (legacy parseInt gives NaN).
+- S5b drain rail + gateway transport core — done (JUN-1036:
+  `drain.cljc` (deliver-output/settle/drain-queued/tick-abandoned/
+  output-doc/save-output/record-run-state/finish-run, sequential where
+  the legacy fans out — terminal rows identical) + `gateway.cljc`
+  (platform-value/delivery-transport/resolve-delivery-transport/
+  resolve-injection-adapter/send-watcher-message!, adapters injected).
+  20 cases + 4 must-fail; 361 cases + 32 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon byte-identical —
+  see the evidence doc. Verified divergences:
+  - the drain answers `{:drained n}` / `{:recovered n}` counts (the
+    legacy answers the row count the same way; promise fan-out is a
+    host-side shape, not an observable value).
+  - `finish-run!` takes the loop result as data (injected in cases);
+    the live agent loop stays host-side.
+  - platform/config maps are looked up by string lane with keyword
+    `:enabled` flags, verbatim from the legacy.
+  - the harness `test` invocation is relative (`test/cases.edn`) so
+    reported output-file paths stay `test/scratch/...` on every
+    machine; CLI print paths were already cwd-relative.
+  Watcher fan-in (batching/timers), `platform_adapters`, peer
+  serve/discover and the live gateway serve loop stay S5c/S6.
 - S6 tools: backends + bridge/chat/vault/mcp/dapps CLIs.

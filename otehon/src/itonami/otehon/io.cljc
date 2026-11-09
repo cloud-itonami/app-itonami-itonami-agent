@@ -463,6 +463,21 @@
      :cljs (try (do (.kill js/process n 0) true)
                 (catch :default e (not= "ESRCH" (.-code e))))))
 
+(defn set-mode!
+  "chmod `path` to the numeric `mode` (the cron output docs use 384 =
+  0600, as in the legacy). Best-effort on hosts without POSIX perms;
+  answers true when the call did not throw."
+  [path mode]
+  (try
+    #?(:lpy (do (.chmod os (str path) (int mode)) true)
+       :clj (let [f (java.io.File. (str path))]
+              (.setReadable f true true)
+              (.setWritable f true true)
+              (.setExecutable f false false)
+              true)
+       :cljs (do (.chmodSync fs (str path) (int mode)) true))
+    (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ false)))
+
 (defn utf8-bytes
   "The UTF-8 byte length of `s`."
   [s]

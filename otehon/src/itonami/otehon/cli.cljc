@@ -65,7 +65,9 @@
             [itonami.otehon.market :as market]
             [itonami.otehon.queue :as queue]
             [itonami.otehon.ledger :as ledger]
-            [itonami.otehon.delivery :as delivery]))
+            [itonami.otehon.delivery :as delivery]
+            [itonami.otehon.drain :as drain]
+            [itonami.otehon.gateway :as gateway]))
 
 ;; ---------------------------------------------------------------- canonical print
 
@@ -126,7 +128,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -159,6 +161,8 @@
     :queue (ops-queue c scratch)
     :ledger (ops-ledger c scratch)
     :delivery (ops-delivery c)
+    :drain (ops-drain c scratch)
+    :gateway (ops-gateway c)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -2024,6 +2028,140 @@
               "token" (delivery/parse-bot-chat-token arg)
               "classify" (delivery/classify-outcome arg)
               (throw (ex-info (str "delivery: unknown call " verb) {:verb verb})))}))
+
+;; ---------------------------------------------------------------- drain / gateway case ops
+;; S5b: the drain rail runs against a fresh cron dir per case (DBs,
+;; jobs.json, jsonl and output docs all start empty). Adapter behavior
+;; is declarative: for-lane maps lane names to "ok", "err:<msg>",
+;; "false" or "throw:<msg>" specs, and the op builds the stub fns.
+
+(defn- stub-adapter [spec calls]
+  (cond (= spec "ok") (fn [job lane content opts]
+                        (swap! calls conj {"lane" (str lane) "content" (str content)})
+                        nil)
+        (= spec "false") (fn [job lane content opts]
+                           (swap! calls conj {"lane" (str lane) "content" (str content)})
+                           false)
+        (str/starts-with? (str spec) "err:") (fn [job lane content opts]
+                                               (swap! calls conj {"lane" (str lane) "content" (str content)})
+                                               {:error (subs (str spec) 4)})
+        (str/starts-with? (str spec) "throw:") (fn [job lane content opts]
+                                                 (swap! calls conj {"lane" (str lane) "content" (str content)})
+                                                 (throw (ex-info (subs (str spec) 6) {})))
+        :else (throw (ex-info (str "drain: unknown adapter spec " spec) {:spec spec}))))
+
+(defn- stub-gateway-send [spec calls]
+  (let [rec (fn [chat-id text meta]
+              (swap! calls conj {"chat" (str chat-id) "text" (str text) "meta" meta}))]
+    (cond (= spec "ok") (fn [chat-id text meta] (rec chat-id text meta) nil)
+          (= spec "false") (fn [chat-id text meta] (rec chat-id text meta) false)
+          (str/starts-with? (str spec) "err:") (fn [chat-id text meta] (rec chat-id text meta) {:error (subs (str spec) 4)})
+          (str/starts-with? (str spec) "throw:") (fn [chat-id text meta] (rec chat-id text meta) (throw (ex-info (subs (str spec) 6) {})))
+          :else (throw (ex-info (str "gateway: unknown adapter spec " spec) {:spec spec})))))
+
+(defn- run-drain-step [home prof calls warns for-lane delivery-fn config [verb & args]]
+  (case verb
+    "deliver" (let [[exec-id job-id content failed? t] args
+                    job (drain/job-row home (str job-id))]
+                (drain/deliver-output home (str exec-id) job (str content) (boolean failed?)
+                                      delivery-fn config for-lane (str t)))
+    "drain" (let [[t] args]
+              {:drained (drain/drain-queued! prof for-lane (str t))})
+    "settle" (let [[exec-id job-id error status] args]
+               (drain/settle-queued-delivery! home (str exec-id) (str job-id)
+                                              (when error (str error)) (str status)))
+    "abandoned" (let [[t] args]
+                  {:recovered (drain/tick-abandoned! home (str t))})
+    "finish" (let [[job-id result t-start t-finished] args
+                   job (drain/job-row home (str job-id))]
+               (drain/finish-run! home job result (str t-start) (str t-finished)
+                                  delivery-fn config for-lane))
+    "job" (drain/job-row home (str (first args)))
+    "queue" (let [r (queue/get-status home (str (first args)))]
+              (when r (dissoc r "owner_process_id" "owner_pid" "owner_started_at")))
+    "exec" (let [row (ledger/get-execution home (str (first args)))]
+             (when row (dissoc row "process_id" "pid" "process_started_at")))
+    "incidents" (ledger/incidents home)
+    "run-line" (let [p (str home "/cron/itonami-runs.jsonl")]
+                 (when (hio/file? p)
+                   (let [lines (str/split-lines (hio/slurp-utf8 p))
+                         row (hio/parse-json (last (filter (complement str/blank?) lines)))]
+                     (select-keys row ["job_id" "status" "execution_id"]))))
+    "usage-line" (let [p (str home "/cron/usage_audit.jsonl")]
+                   (when (hio/file? p)
+                     (let [lines (str/split-lines (hio/slurp-utf8 p))
+                           row (hio/parse-json (last (filter (complement str/blank?) lines)))]
+                       (select-keys row ["job_id" "deliver_target" "delivery_error" "response_silent" "duration_ms" "error"]))))
+    "calls" @calls
+    "doc" (let [[job-id t-start] args
+                s (subs (str t-start) 0 19)
+                fname (str (subs s 0 10) "_" (str/replace (subs s 11) ":" "-") ".md")
+                p (str home "/cron/output/" (str job-id) "/" fname)]
+            (when (hio/file? p) (hio/slurp-utf8 p)))
+    (throw (ex-info (str "drain: unknown step " verb) {:verb verb}))))
+
+(defn- ops-drain [c scratch]
+  (let [dir (scratch-case-dir scratch c)
+        req (:request c {})
+        home (str dir "/profiles/" (or (:profile req) "p1"))
+        cron (str home "/cron")
+        calls (atom [])
+        for-lane (let [specs (or (:for-lane req) {})]
+                   (when (seq specs)
+                     (fn [lane config]
+                       (when-let [s (get specs (str lane))]
+                         (stub-adapter s calls)))))
+        delivery-fn (when-let [s (:delivery-fn req)]
+                      (stub-adapter s calls))
+        config (or (:config req) {})
+        prof {:home home :config config}]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (hio/wipe-dir! cron)
+    (hio/mkdirs! cron)
+    (when (seq (:jobs req))
+      (hio/write-text! (str cron "/jobs.json") (hio/json-str {"jobs" (vec (:jobs req))})))
+    (when (seq (:setup-sql req))
+      (queue/open-db home)
+      (ledger/open-db home)
+      (doseq [[db-file script] (:setup-sql req)]
+        (hio/sqlite-exec! (str cron "/" (str db-file)) (str/join ";\n" script))))
+    {:results (mapv #(run-drain-step home prof calls nil for-lane delivery-fn config %) (:steps req []))}))
+
+(defn- run-gateway-step [adapters platforms calls warns [verb & args]]
+  (case verb
+    "resolve" (let [[platform] args
+                    t (gateway/resolve-delivery-transport (str platform) platforms adapters)]
+                (when t {"transport-platform" (str (:transport-platform t))
+                         "config" (:config t)}))
+    "inject" (let [[platform] args]
+               {:found (boolean (gateway/resolve-injection-adapter platforms adapters (str platform)))})
+    "send" (let [[platform chat-id thread-id text] args
+                 warns-atom warns]
+             (gateway/send-watcher-message!
+              {:platforms platforms :adapters adapters
+               :warn-fn (fn [m] (swap! warns-atom conj (str m)))}
+              (str platform) (when (some? chat-id) (str chat-id))
+              (when (some? thread-id) (str thread-id)) (str text)))
+    "calls" @calls
+    "warns" @warns
+    (throw (ex-info (str "gateway: unknown step " verb) {:verb verb}))))
+
+(defn- ops-gateway [c]
+  (let [req (:request c {})
+        calls (atom [])
+        warns (atom [])
+        adapters (into {} (for [[lane spec] (or (:adapters req) {})]
+                             [(gateway/platform-value (str lane))
+                              {:send (stub-gateway-send spec calls)}]))
+        adapters (if-let [fronts (:relay-fronts req)]
+                   (assoc adapters gateway/relay-platform
+                          {:send (stub-gateway-send (or (:relay-send req) "ok") calls)
+                           :fronts-platform (let [s (set (map str fronts))]
+                                              (fn [p] (contains? s (gateway/platform-value p))))})
+                   adapters)
+        platforms (or (:platforms req) {})]
+    {:results (mapv #(run-gateway-step adapters platforms calls warns %) (:steps req []))}))
 
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))

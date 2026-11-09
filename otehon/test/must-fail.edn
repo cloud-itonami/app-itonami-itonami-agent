@@ -176,4 +176,28 @@
   {:id :must-fail/ledger-ack-unknown :op :ledger
    :request {:profile "p1"
              :steps [["ack" "nope" "2026-11-08T10:00:01.000000+09:00"]]}
-   :expect {:results [{:closed true}]}}]}]
+   :expect {:results [{:closed true}]}}
+  ;; S5b: settling a non-latest execution answers nil (proves the fence)
+  {:id :must-fail/drain-settle-stale :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j1" "name" "J1" "deliver" "telegram"}]
+             :setup-sql {"executions.db" ["INSERT INTO executions(id,job_id,source,process_id,pid,status,claimed_at) VALUES ('exec-old','j1','cron','seed',1,'claimed','2026-11-08T09:00:00.000000+09:00')"]}
+             :steps [["settle" "exec-new" "j1" nil "delivered"]]}
+   :expect {:results [true]}}
+  ;; S5b: a failing adapter answers its error (proves the row is marked)
+  {:id :must-fail/drain-deliver-error :op :drain
+   :request {:profile "p1"
+             :jobs [{"id" "j2" "name" "J2" "deliver" "sms"}]
+             :delivery-fn "err:down"
+             :steps [["deliver" "exec-2" "j2" "x" false "2026-11-08T10:00:01.000000+09:00"]]}
+   :expect {:results [nil]}}
+  ;; S5b: an empty queue drains zero rows (proves the drain reads)
+  {:id :must-fail/drain-empty :op :drain
+   :request {:profile "p1"
+             :steps [["drain" "2026-11-08T10:00:01.000000+09:00"]]}
+   :expect {:results [{:drained 1}]}}
+  ;; S5b: a blind send answers nil when nothing is sent (proves the guard)
+  {:id :must-fail/gateway-send-blind :op :gateway
+   :request {:adapters {"telegram" "ok"}
+             :steps [["send" "telegram" "" "" "hi"]]}
+   :expect {:results ["sent"]}}]}
