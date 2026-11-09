@@ -120,7 +120,7 @@ from source, the rest follow the module name until their slice lands.
 | `quiet.cljk` | `quiet.cljc` (warn/diag/wake predicates, linger budget, turn-failed?, sync linger loop) | partial (predicates + 35 S2c cases JUN-1036 S2c; sync linger loop with injected fns JUN-1036 S5c; live registry waits stay host-side) |
 | `rails.cljk` | — | planned S3b |
 | `soul.cljk` | `soul.cljc` (world/unit/role render + splice, limit, body guard) | done (JUN-1036 S4d) |
-| `tools.cljk` *tool registry* | — | planned S6 |
+| `tools.cljk` *tool registry* | `tools.cljc` (schemas table + toolsets + name/unsupported/approval/enabled/execution-disabled/runtime predicates) | partial (registry core done S6a; tool implementations + servers/processes + CLIs stay S6c/d) |
 | `tts.cljk` | — | planned S6 |
 | `vault.cljk` | — | planned S6 |
 | `watcher.cljk` | — | planned S5 |
@@ -274,4 +274,13 @@ from source, the rest follow the module name until their slice lands.
   - the run-poll done/failed dissoc branches have no case (no step
     can complete a run in the shared `:runs` atom); the 202 running
     read, 404, requester and poll-name checks are covered.
-- S6 tools: backends + bridge/chat/vault/mcp/dapps CLIs.
+- S6a tool registry core — done (JUN-1036: `tools.cljc`
+  schemas table (58 tool schemas) + toolsets + name/unsupported/
+  approval/enabled/execution-disabled/runtime predicates.
+  8 cases + 5 must-fail; 495 cases + 62 must-fail green on the
+  union on basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon
+  byte-identical — see the evidence doc. Verified divergences:
+  `runtime-tool-names` ports only the explicit 5-arity (the 4-arity
+  reads the host PATH); the `computer_use` schema rides as inlined
+  static data. Next: S6b clarify/collect/tts-shape/webguard-pure.
+- S6 tools (rest): backends + bridge/chat/vault/mcp/dapps CLIs.
