@@ -62,7 +62,10 @@
             [itonami.otehon.ed25519 :as ed]
             [itonami.otehon.cas :as cas]
             [itonami.otehon.peer :as peer]
-            [itonami.otehon.market :as market]))
+            [itonami.otehon.market :as market]
+            [itonami.otehon.queue :as queue]
+            [itonami.otehon.ledger :as ledger]
+            [itonami.otehon.delivery :as delivery]))
 
 ;; ---------------------------------------------------------------- canonical print
 
@@ -123,7 +126,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -153,6 +156,9 @@
     :profile (ops-profile c scratch)
     :runs (ops-runs c scratch)
     :incidents (ops-incidents c scratch)
+    :queue (ops-queue c scratch)
+    :ledger (ops-ledger c scratch)
+    :delivery (ops-delivery c)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -1878,6 +1884,146 @@
                                                   (:setup-sql req)))))
       (let [r (incidents-for dir (or (:profile req) "default") (:sub req) (:id req))]
         (assoc r :messages (:lines r))))))
+
+;; ---------------------------------------------------------------- queue / ledger case ops
+;; S5a state-plane coverage: the queue and ledger write paths run against a
+;; fresh scratch home per case (both db files removed first, so a previous
+;; run's rows can never leak in). Every step returns deterministic data:
+;; random ids, pids and live stamps never appear in results — volatile
+;; columns are stripped from row projections, and every timestamp is an
+;; explicit step argument. Timestamps below are fixed strings, so the three
+;; runners agree byte for byte.
+
+(defn- stable-queue-row [r]
+  (when r (dissoc r "owner_process_id" "owner_pid" "owner_started_at")))
+
+(defn- stable-exec-row [r]
+  (when r (dissoc r "process_id" "pid" "process_started_at")))
+
+(defn- queue-home [dir req]
+  (str dir "/profiles/" (or (:profile req) "p1")))
+
+(defn- fresh-state-home! [home]
+  (doseq [f [(str home "/cron/deliveries.db") (str home "/cron/executions.db")]]
+    (when (hio/file? f) (hio/delete-file! f)))
+  (hio/mkdirs! (str home "/cron")))
+
+(defn- run-queue-step [home [verb & args]]
+  (case verb
+    "enqueue" (let [[exec-id job content for-failure? t] args]
+                (stable-queue-row (queue/enqueue! home (str exec-id) job (str content) (boolean for-failure?) (str t))))
+    "status" (stable-queue-row (queue/get-status home (str (first args))))
+    "claim" (let [[exec-id t-ms pid] args]
+              {:claimed (queue/claim-row! home (str exec-id) (long (or t-ms 0)) (long (or pid (hio/process-id))))})
+    "claim-next" (let [[t-ms pid] args]
+                   (stable-queue-row (queue/claim-next! home (long (or t-ms 0)) (long (or pid (hio/process-id))))))
+    "finish" (let [[exec-id status error t] args]
+               {:finished (queue/finish! home (str exec-id) (str status) (when error (str error)) (str t))})
+    "recover" {:recovered (mapv stable-queue-row (queue/recover-abandoned! home (str (first args))))}
+    "tombstones" (hio/sqlite-rows (queue/db-path home)
+                   "SELECT execution_id,terminal_status,finished_at FROM delivery_tombstones ORDER BY execution_id" [])
+    "deliveries" (mapv #(get % "execution_id")
+                   (hio/sqlite-rows (queue/db-path home) "SELECT execution_id FROM deliveries ORDER BY execution_id" []))
+    "seed-terminal" (let [[prefix n t] args]
+                      (queue/open-db home)
+                      (hio/sqlite-exec! (queue/db-path home)
+                        (str/join ";\n"
+                          (for [i (range (long (or n 0)))]
+                            (str "INSERT INTO deliveries(execution_id,job_json,content,for_failure,status,created_at,finished_at)"
+                                 " VALUES ('" prefix (let [s (str i)] (str (subs "0000" 0 (- 4 (count s))) s))
+                                 "','{}','',0,'delivered','" t "','" t "')"))))
+                      {:seeded (long (or n 0))})
+    (throw (ex-info (str "queue: unknown step " verb) {:verb verb}))))
+
+(defn- ops-queue [c scratch]
+  (let [dir (scratch-case-dir scratch c)
+        req (:request c {})
+        home (queue-home dir req)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (fresh-state-home! home)
+    (when (seq (:setup-sql req))
+      (queue/open-db home)
+      (hio/sqlite-exec! (queue/db-path home) (str/join ";\n" (:setup-sql req))))
+    {:results (mapv #(run-queue-step home %) (:steps req []))}))
+
+(defn- run-ledger-step [home [verb & args]]
+  ;; "claim" is handled by ops-ledger (it records the live id alias).
+  (case verb
+    "handoff" (let [[id t-sec] args]
+                {:pending (ledger/mark-handoff-pending! home (str id) (double (or t-sec 0)))})
+    "adopt" (let [[id t] args]
+              {:adopted (ledger/adopt-claimed! home (str id) (str t))})
+    "run" (let [[id t] args]
+            {:running (ledger/mark-running! home (str id) (str t))})
+    "finish" (let [[id success? outcome t] args]
+               {:finished (ledger/finish! home (str id) (boolean success?) (str outcome) (str t))})
+    "outcome" (let [[id outcome] args]
+                {:settled (ledger/set-delivery-outcome! home (str id) (str outcome))})
+    "upsert" (let [[job-id error output-file t] args]
+               (ledger/upsert-incident! home (str job-id) (str error) (when output-file (str output-file)) (str t)))
+    "incident" (let [[id] args]
+                 (ledger/get-incident home (str id)))
+    "incidents" (ledger/incidents home)
+    "ack" (let [[id t] args]
+            {:closed (ledger/ack-incident! home (str id) (str t))})
+    "alerted" (let [[id t] args]
+                {:alerted (ledger/mark-incident-alerted! home (str id) (str t))})
+    "resolve" (let [[job-id t] args]
+                {:resolved (ledger/resolve-incidents! home (str job-id) (str t))})
+    "withhold" (let [[job-id config error output-file t] args]
+                 (ledger/upsert-incident-for-failure! home {"id" (str job-id)} (or config {}) (str error)
+                                                         (when output-file (str output-file)) (str t)))
+    "rows" (mapv stable-exec-row (ledger/rows home (when-let [j (first args)] (str j))))
+    "terminal-count" {:terminal (count (filter #(contains? #{"completed" "failed" "unknown"} (str (get % "status")))
+                                               (ledger/rows home nil)))}
+    "seed-terminal" (let [[prefix n t] args]
+                      (ledger/open-db home)
+                      (hio/sqlite-exec! (ledger/db-path home)
+                        (str/join ";\n"
+                          (for [i (range (long (or n 0)))]
+                            (str "INSERT INTO executions(id,job_id,source,process_id,pid,status,claimed_at,finished_at)"
+                                 " VALUES ('" prefix (let [s (str i)] (str (subs "0000" 0 (- 4 (count s))) s))
+                                 "','seed-job','cron','seed',1,'completed','" t "','" t "')"))))
+                      {:seeded (long (or n 0))})
+    (throw (ex-info (str "ledger: unknown step " verb) {:verb verb}))))
+
+(defn- run-ledger-case
+  ;; One ledger step. Live claim ids are random per run: later steps name
+  ;; them "$live", and results never contain them (boolean steps only),
+  ;; so every runner agrees byte for byte.
+  [home live-id [verb & args]]
+  (if (= (str verb) "claim")
+    (let [[job-id source t] args]
+      (try
+        (reset! live-id (ledger/claim! home {"id" (str job-id)} (str source) (str t)))
+        {:claimed true}
+        (catch #?(:lpy python/Exception :clj Exception :cljs :default) _
+          {:claimed false :reason "active-exists"})))
+    (let [resolve-live (fn [a] (if (and (string? a) (= "$live" a)) @live-id a))]
+      (run-ledger-step home (into [(str verb)] (map resolve-live args))))))
+
+(defn- ops-ledger [c scratch]
+  (let [dir (scratch-case-dir scratch c)
+        req (:request c {})
+        home (queue-home dir req)
+        live-id (atom nil)]
+    (hio/mkdirs! dir)
+    (seed-files! dir (:seed c {}))
+    (fresh-state-home! home)
+    (when (seq (:setup-sql req))
+      (ledger/open-db home)
+      (hio/sqlite-exec! (ledger/db-path home) (str/join ";\n" (:setup-sql req))))
+    {:results (mapv #(run-ledger-case home live-id %) (:steps req []))}))
+
+(defn- ops-delivery [c]
+  (let [[verb arg] (:call c)]
+    {:value (case verb
+              "normalize" (delivery/normalize-deliver-value arg)
+              "lanes" (delivery/lanes arg)
+              "token" (delivery/parse-bot-chat-token arg)
+              "classify" (delivery/classify-outcome arg)
+              (throw (ex-info (str "delivery: unknown call " verb) {:verb verb})))}))
 
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
