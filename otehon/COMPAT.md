@@ -86,7 +86,7 @@ from source, the rest follow the module name until their slice lands.
 | `browser.cljk` *browser tools* | — | planned S6 |
 | `browser_cloud.cljk` | — | planned S6 |
 | `browser_provider.cljk` | — | planned S6 |
-| `chat_platform.cljk` | — | planned S5 |
+| `chat_platform.cljk` | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply, sync) | done (JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in) |
 | `clarify.cljk` | — | planned S6 |
 | `code_rpc.cljk` | — | planned S6 |
 | `collect.cljk`, `collect_io.cljk` | — | planned S6 |
@@ -99,7 +99,7 @@ from source, the rest follow the module name until their slice lands.
 | `delivery_queue.cljk` | `queue.cljc` (`cron/deliveries.db`, `deliveries` + bounded `delivery_tombstones`, enqueue/get-status/claim-row/claim-next/finish/recover) | done (JUN-1036 S5a; fencing answers verified by follow-up SELECT — same outcome single-writer; `job_json` keeps the legacy indent-2 layout, key order is the map's iteration order) |
 | `execution_ledger.cljk` *reads* | `cli.cljc` (runs-for, incidents-for: rows/incidents/ack over `cron/executions.db`) | done reads (JUN-1036 S4b; claim/finish/upsert/resolve writes stay S5) |
 | `execution_ledger.cljk` *writes* | `ledger.cljc` (`cron/executions.db`, executions + incidents DDL verbatim; claim (throws on active)/mark-handoff-pending/adopt-claimed/mark-running/finish (completed\|failed + 1000-row overflow drop)/set-delivery-outcome/incident upsert/get/ack/alerted/list/resolve/withheld gate) | done (JUN-1036 S5a; fencing verified by follow-up SELECT; no BEGIN IMMEDIATE — single-writer oracle, see notes) |
-| `gateway.cljk` | `gateway.cljc` (platform values, delivery transport, adapter/injection resolution, watcher send seam — pure core) | done transport core (JUN-1036 S5b; batching/timers fan-in and the serve loop need process.cljk + a live runtime and stay open) |
+| `gateway.cljk` | `gateway.cljc` (platform values, delivery transport, adapter/injection resolution, watcher send seam, send-transport!/route-key/identities/admission/coalesced/fan-in — pure core) | done (JUN-1036 S5b transport core + S5c fan-in with explicit flushes; background timers stay host-side) |
 | `homeassistant.cljk` | — | planned S6 |
 | `host.cljk` *node/file/env/process* | `io.cljc` | partial (files/env/clock/listing/pids/spawn done JUN-1036 S2a; + S5a: `now-micros-iso` (host-zone 6-digit fraction, the `iso-local` micros shape), `json-str-2` (indent-2, iteration order), `parse-iso-ms`, `kill-probe-alive?` (legacy kill(0) probe semantics), `sqlite-literal` numbers inline bare so REAL columns read back numeric) |
 | `identity.cljk` ( FleetSeed/KDF/derive-key/did-of/parse-seed/key-id ) | `ed25519.cljc` (KDF + RFC 8032 expansion + clamped base-point multiply + did:key:z; host SHA-512/UTF-8 in `io.cljc` ) | done (JUN-1036 S4e; node `createPrivateKey` expansion reproduced exactly, oracle-checked) |
@@ -111,7 +111,7 @@ from source, the rest follow the module name until their slice lands.
 | `oauth.cljk` | — | planned S6 |
 | `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; serve/run S5) |
 | `pause.cljk` * | `pause.cljc` | done (JUN-1036 S3a) |
-| `platform_adapters.cljk` *lane adapters* | — | planned S5 |
+| `platform_adapters.cljk` *lane adapters* | `adapters.cljc` (per-lane request builders + token-env/for-lane resolution + sync sends, error strings verbatim) | done (JUN-1036 S5c; env-only secrets, injected `:fetch`) |
 | `process.cljk` | — | planned S2 |
 | `profile.cljk` *store layout* | `profile.cljc`, `status.cljc` (names), `store.cljc` | partial (verbs S4) |
 | `profile.cljk` *bundle/manifest lifecycle* | `bundle.cljc` (bundle-files/manifest/cid, default-manifest, with-inference-rail, write-manifest!, with-bundle, refresh-bundle-cid, copy-profile!) + `manifest.cljc` (with-org) + `cli.cljc` (set-parked!, release/transfer/adopt/organize/hy lines) | done itonamify/refresh/rail/bundle/refresh-bundle/release/import/export/adopt/organize/hy-stage/hy-migrate/did (JUN-1036 S4b/S4c/S4d/S4e) |

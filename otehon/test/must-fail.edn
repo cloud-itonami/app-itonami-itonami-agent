@@ -200,4 +200,34 @@
   {:id :must-fail/gateway-send-blind :op :gateway
    :request {:adapters {"telegram" "ok"}
              :steps [["send" "telegram" "" "" "hi"]]}
-   :expect {:results ["sent"]}}]}
+   :expect {:results ["sent"]}}
+{:id :must-fail/watcher-max-ticks :op :watcher
+   :request {:watcher {"session_id" "s1"}
+             :sessions {"s1" {"state" "running"}}
+             :session-seq ["s1" "s1" "s1" "s1" "s1"]
+             :max-ticks 2
+             :steps [["watch"]]}
+   :expect {:results [nil]}}
+  {:id :must-fail/watcher-silent-sends-nothing :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100"}
+             :config {"display" {"background_process_notifications" "off"}}
+             :sessions {"s1" {"state" "exited" "exit-code" 0 "output" "done"}}
+             :session-seq ["s1"]
+             :steps [["watch"] ["sends"]]}
+   :expect {:results [nil [{"chat" "-100"}]]}}
+  {:id :must-fail/watcher-consumed-skips-inject :op :watcher
+   :request {:watcher {"session_id" "s1" "platform" "telegram" "chat_id" "-100" "notify_on_complete" true}
+             :sessions {"s1" {"state" "exited" "exit-code" 0 "output" "done"}}
+             :session-seq ["s1"]
+             :consumed-ids ["s1"]
+             :enqueue ["ok"]
+             :steps [["watch"] ["enqueues"]]}
+   :expect {:results [nil [{"session" "s1"}]]}}
+  ;; S5c unit 2: unknown lanes/steps/verbs throw -----------------------
+  {:id :must-fail/adapters-build-unknown :op :adapters :request {:steps [["build" "sms" {}]]} :expect {:results [{}]}}
+    {:id :must-fail/adapters-unknown-step :op :adapters :request {:steps [["frobnicate"]]} :expect {:results [nil]}}
+    {:id :must-fail/gateway-unknown-fan-in :op :gateway :request {:steps [["fan-in" "bogus"]]} :expect {:results [nil]}}
+    {:id :must-fail/gateway-producer-invalid :op :gateway :request {:steps [["producer-identity" {"type" "nope"}]]} :expect {:results ["x"]}}
+    {:id :must-fail/chat-chunk-zero :op :chat :request {:steps [["chunk" "x" 0]]} :expect {:results [["x"]]}}
+    {:id :must-fail/chat-unknown-step :op :chat :request {:steps [["bogus"]]} :expect {:results [nil]}}
+]}

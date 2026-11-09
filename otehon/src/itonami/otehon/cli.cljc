@@ -67,7 +67,12 @@
             [itonami.otehon.ledger :as ledger]
             [itonami.otehon.delivery :as delivery]
             [itonami.otehon.drain :as drain]
-            [itonami.otehon.gateway :as gateway]))
+            [itonami.otehon.gateway :as gateway]
+            [itonami.otehon.process :as process]
+            [itonami.otehon.quiet :as quiet]
+            [itonami.otehon.watcher :as watcher]
+            [itonami.otehon.adapters :as adapters]
+            [itonami.otehon.chat :as chat]))
 
 ;; ---------------------------------------------------------------- canonical print
 
@@ -128,7 +133,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -163,6 +168,9 @@
     :delivery (ops-delivery c)
     :drain (ops-drain c scratch)
     :gateway (ops-gateway c)
+    :watcher (ops-watcher c)
+    :adapters (ops-adapters c)
+    :chat (ops-chat c scratch)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -2128,24 +2136,122 @@
         (hio/sqlite-exec! (str cron "/" (str db-file)) (str/join ";\n" script))))
     {:results (mapv #(run-drain-step home prof calls nil for-lane delivery-fn config %) (:steps req []))}))
 
-(defn- run-gateway-step [adapters platforms calls warns [verb & args]]
-  (case verb
-    "resolve" (let [[platform] args
-                    t (gateway/resolve-delivery-transport (str platform) platforms adapters)]
-                (when t {"transport-platform" (str (:transport-platform t))
-                         "config" (:config t)}))
-    "inject" (let [[platform] args]
-               {:found (boolean (gateway/resolve-injection-adapter platforms adapters (str platform)))})
-    "send" (let [[platform chat-id thread-id text] args
-                 warns-atom warns]
-             (gateway/send-watcher-message!
-              {:platforms platforms :adapters adapters
-               :warn-fn (fn [m] (swap! warns-atom conj (str m)))}
-              (str platform) (when (some? chat-id) (str chat-id))
-              (when (some? thread-id) (str thread-id)) (str text)))
-    "calls" @calls
-    "warns" @warns
-    (throw (ex-info (str "gateway: unknown step " verb) {:verb verb}))))
+(defn- stub-fetch [calls specs]
+  (let [s (atom (vec specs))]
+    (fn [url opts]
+      (swap! calls conj {"url" (str url) "method" (str (:method opts)) "body" (str (:body opts))})
+      (let [spec (first @s)]
+        (when (nil? spec) (throw (ex-info "stub-fetch: exhausted" {})))
+        (reset! s (vec (rest @s)))
+        (case (str (get spec "kind"))
+          "updates" {:ok true :status 200
+                     :body-text (hio/json-str {"ok" true "result" (vec (get spec "updates" []))})}
+          "json" {:ok true :status (or (get spec "status") 200) :json (get spec "json")}
+          "http" {:ok false :status (get spec "status") :json (get spec "json") :body-text ""}
+          "throw" (throw (ex-info (str (get spec "message" "bang")) {}))
+          (throw (ex-info (str "stub-fetch: unknown kind " (get spec "kind")) {})))))))
+
+(defn- fanin-surface [calls req surface-spec]
+  (let [deliver-answers (atom (vec (or (:deliver req) [])))
+        deliver! (fn [text cand]
+                   (swap! calls conj {"fanin-deliver"
+                                      (subs (str text) 0 (min 120 (count (str text))))})
+                   (let [a (first @deliver-answers)]
+                     (reset! deliver-answers (vec (rest @deliver-answers)))
+                     a))
+        record! (when (get surface-spec "record")
+                  (fn [evts]
+                    (swap! calls conj {"coalesced" (mapv #(str (get % "session_id")) evts)})
+                    nil))
+        authority (get surface-spec "authority")]
+    (cond-> {:deliver! deliver!
+             :surface-child? (boolean (get surface-spec "surface-child?"))
+             :batch-window (or (get surface-spec "window") 0.1)}
+      record! (assoc :record-coalesced-siblings! record!)
+      (get surface-spec "redact")
+      (assoc :redact (let [k (str (get surface-spec "redact"))]
+                       (if (= k "upper") (fn [t] (str/upper-case (str t))) (fn [t] (str t)))))
+      authority (assoc :session-authority (str authority)
+                       :lookup-session (let [m (or (get surface-spec "sessions") {})]
+                                         (fn [k] (get m (str k))))
+                       :list-admissions (let [rows (vec (or (get surface-spec "admissions") []))]
+                                          (fn [_ _] rows))
+                       :route-owner (fn [_ _] (str (get surface-spec "owner" "")))))))
+
+(defn- run-gateway-step [ctx [verb & args]]
+  (let [{:keys [adapters platforms calls warns fans settled next-hid]} ctx]
+    (case verb
+      "resolve" (let [[platform] args
+                      t (gateway/resolve-delivery-transport (str platform) platforms adapters)]
+                  (when t {"transport-platform" (str (:transport-platform t))
+                           "config" (:config t)}))
+      "inject" (let [[platform] args]
+                 {:found (boolean (gateway/resolve-injection-adapter platforms adapters (str platform)))})
+      "send" (let [[platform chat-id thread-id text] args
+                   warns-atom warns]
+               (gateway/send-watcher-message!
+                {:platforms platforms :adapters adapters
+                 :warn-fn (fn [m] (swap! warns-atom conj (str m)))}
+                (str platform) (when (some? chat-id) (str chat-id))
+                (when (some? thread-id) (str thread-id)) (str text)))
+      "send-transport" (let [[spec logical chat-id text meta] args
+                             answer (atom (get spec "answer"))
+                             rec (fn [label a]
+                                   (swap! calls conj {"transport-send" label "chat" (str a)})
+                                   (let [r @answer] (reset! answer nil) r))]
+                         (if (= "relay" (str (get spec "kind")))
+                           (gateway/send-transport!
+                            {:transport-platform "relay"
+                             :adapter {:send-for-platform (fn [p c t m] (rec "relay" c))}}
+                            (str logical) (str chat-id) (str text) meta)
+                           (gateway/send-transport!
+                            {:adapter {:send (fn [c t m] (rec "native" c))}}
+                            (str logical) (str chat-id) (str text) meta)))
+      "route-key" (let [[evt fields] args]
+                    (gateway/event-route-key evt (mapv str fields)))
+      "delivery-identity" (let [[evt] args]
+                            (gateway/completion-delivery-identity evt))
+      "producer-identity" (let [[evt] args]
+                            (gateway/producer-identity evt))
+      "admit" (let [[surface-spec event] args
+                    surface (fanin-surface calls {} surface-spec)]
+                (gateway/completion-admission surface event))
+      "format-coalesced" (let [[redact-kind entries] args
+                               redact (if (= "upper" (str redact-kind))
+                                        (fn [t] (str/upper-case (str t)))
+                                        (fn [t] (str t)))]
+                           (gateway/format-coalesced-process-completions redact entries))
+      "fan-in" (let [[which & rest-args] args]
+                 (case (str which)
+                   "new" (let [hid @next-hid]
+                           (swap! next-hid inc)
+                           (swap! fans assoc hid
+                                  (gateway/completion-fan-in
+                                   (fanin-surface calls (:req ctx) (first rest-args))))
+                           hid)
+                   "enqueue" (let [[hid text evt] rest-args
+                                   fan (get @fans hid)
+                                   r (gateway/enqueue-process-completion-notification!
+                                      fan (str text) evt)]
+                               (if (or (nil? r) (false? r))
+                                 r
+                                 (let [idx (count @settled)]
+                                   (swap! settled conj r)
+                                   idx)))
+                   "flush" (let [[hid key] rest-args]
+                             (gateway/flush-batch! (get @fans hid) (mapv str key)))
+                   "settled" (let [[idx] rest-args]
+                                @(nth @settled idx))
+                   "batches" (let [[hid] rest-args]
+                               (into {} (for [[k v] @(get (get @fans hid) :batches)]
+                                          [(vec k) (count v)])))
+                   "cancel" (let [[hid] rest-args]
+                              (gateway/cancel-completion-batches! (get @fans hid))
+                              nil)
+                   (throw (ex-info (str "gateway: unknown fan-in step " which) {}))))
+      "calls" @calls
+      "warns" @warns
+      (throw (ex-info (str "gateway: unknown step " verb) {:verb verb})))))
 
 (defn- ops-gateway [c]
   (let [req (:request c {})
@@ -2160,8 +2266,276 @@
                            :fronts-platform (let [s (set (map str fronts))]
                                               (fn [p] (contains? s (gateway/platform-value p))))})
                    adapters)
-        platforms (or (:platforms req) {})]
-    {:results (mapv #(run-gateway-step adapters platforms calls warns %) (:steps req []))}))
+        platforms (or (:platforms req) {})
+        ctx {:req req :adapters adapters :platforms platforms :calls calls :warns warns
+             :fans (atom {}) :settled (atom []) :next-hid (atom 0)}]
+    {:results (mapv #(run-gateway-step ctx %) (:steps req []))}))
+
+(defn- make-test-session [data]
+  {:started-at (get data "started-at")
+   :command (str (get data "command" ""))
+   :exit-code (atom (get data "exit-code" 0))
+   :output (atom (str (get data "output" "")))
+   :owner-task-id (atom (str (get data "owner-task-id" "")))
+   :task-id (atom (str (get data "task-id" "")))
+   :state (atom (keyword (str (get data "state" "running"))))
+   :completion-reason (atom (get data "completion-reason"))
+   :termination-source (atom (str (get data "termination-source" "")))
+   :parent-session-id (atom (str (get data "parent-session-id" "")))})
+
+(defn- whole-number [v]
+  (if (and (number? v) (== v (long v))) (long v) v))
+
+(defn- run-watcher-step [ctx [verb & args]]
+  (let [{:keys [sessions calls enqueues warns sleeps waits]} ctx
+        {:keys [watcher config env consumed-ids launching-turn admission
+                enqueue-answers max-ticks now-ms]} ctx]
+    (case verb
+      "watch" (let [seq-atom (atom (vec (:session-seq ctx)))
+                    session-fn (fn [_id]
+                                 (let [s @seq-atom]
+                                   (if (empty? s)
+                                     nil
+                                     (do (reset! seq-atom (vec (rest s)))
+                                         (when-let [id (first s)]
+                                           (get sessions (str id)))))))
+                    eq-atom (atom (vec enqueue-answers))
+                    enqueue! (fn [text evt]
+                               (swap! enqueues conj
+                                      {"session" (str (get evt "session_id"))
+                                       "head" (subs (str text) 0 (min 200 (count (str text))))})
+                               (let [a @eq-atom]
+                                 (if (empty? a)
+                                   nil
+                                   (do (reset! eq-atom (vec (rest a)))
+                                       (when (= "refuse" (str (first a))) false)))))
+                    send! (fn [platform chat-id thread-id text _watcher]
+                            (swap! calls conj {"chat" (str chat-id) "text" (str text)
+                                               "thread" (str thread-id)})
+                            nil)]
+                (watcher/run-process-watcher!
+                 watcher
+                 {:config config :env env
+                  :session-fn session-fn :send! send!
+                  :enqueue! enqueue!
+                  :launching-turn-active? (fn [_ _] (boolean launching-turn))
+                  :admission-recheck (when (some? admission)
+                                       (fn [_] (boolean admission)))
+                  :sleep-fn (fn [s] (swap! sleeps conj (whole-number s)) nil)
+                  :now-fn (fn [] now-ms)
+                  :consumed?-fn (fn [id] (contains? (set (map str consumed-ids)) (str id)))
+                  :warn-fn (fn [m] (swap! warns conj (str m)) nil)
+                  :max-ticks (or max-ticks 10000)}))
+      "sends" @calls
+      "enqueues" @enqueues
+      "sleeps" @sleeps
+      "warns" @warns
+      "waits" @waits
+      "mode" (process/background-notifications-mode (first args) (second args))
+      "backoff" (whole-number (process/jittered-backoff (first args) (second args) (nth args 2)))
+      "age" (process/format-age (first args))
+      "notify" (process/format-completion-notification (first args))
+      "short-command" (process/short-command (first args))
+      "display-text" (process/process-completion-display-text (first args))
+      "final" (let [[id mode now] args]
+                (process/format-process-final-message (str id) (get sessions (str id)) (str mode) now))
+      "running" (process/format-process-running-message (get sessions (str (first args))))
+      "completion-event" (let [[w id] args]
+                           (process/build-process-completion-event w (get sessions (str id)) (str id)))
+      "batch" (process/notification-batch-text (first args) (set (map str (or (second args) []))))
+      "drain" (process/drain-notifications!
+               (let [o (first args)]
+                 {:session-key (get o "session-key")
+                  :skip-poll-observed? (if (contains? o "skip-poll-observed?") (boolean (get o "skip-poll-observed?")) true)
+                  :surface-child? (boolean (get o "surface-child?"))
+                  :queue (get o "queue") :consumed (set (map str (or (get o "consumed") [])))
+                  :poll-observed (set (map str (or (get o "poll-observed") [])))}))
+      "pending" (process/pending-notification-messages
+                 (let [o (first args)]
+                   {:session-key (get o "session-key")
+                    :skip-poll-observed? (if (contains? o "skip-poll-observed?") (boolean (get o "skip-poll-observed?")) true)
+                    :surface-child? (boolean (get o "surface-child?"))
+                    :queue (get o "queue") :consumed (set (map str (or (get o "consumed") [])))
+                    :poll-observed (set (map str (or (get o "poll-observed") [])))}))
+      "linger" (whole-number (quiet/quiet-notify-linger-seconds (first args)))
+      "suppress" (quiet/warning-notifications-enabled? (str (first args)) (second args))
+      "diag" (quiet/diagnostic-process-event? (first args))
+      "wake-muted" (quiet/diagnostic-only-wake-muted? (first args) (second args))
+      "turn-failed" (quiet/turn-failed? (first args))
+      "oneshot" (do (quiet/oneshot-exit-linger!
+                     (first args) (boolean (second args))
+                     {:wait-fn (fn [o] (swap! waits conj o) nil)})
+                    nil)
+      "continue" (let [[run-results drain-pairs wait-maps now] args
+                       rr (atom (vec run-results))
+                       dp (atom (vec drain-pairs))
+                       wm (atom (vec wait-maps))]
+                   (quiet/continue-quiet-notify-completions!
+                    "sk"
+                    (fn [texts] (let [r (first @rr)] (reset! rr (vec (rest @rr))) r))
+                    {:config (:config ctx)
+                     :linger-budget 600
+                     :max-rounds (or (:max-rounds ctx) 8)
+                     :surface-child? false
+                     :now-fn (fn [] (or now 0))
+                     :wait-fn (fn [_ _] (let [w (first @wm)] (reset! wm (vec (rest @wm))) (or w {})))
+                     :drain-fn (fn [_] (let [d (first @dp)] (reset! dp (vec (rest @dp))) (or d [])))}))
+      (throw (ex-info (str "watcher: unknown step " verb) {:verb verb})))))
+
+(defn- ops-watcher [c]
+  (let [req (:request c {})
+        sessions (into {} (for [[id data] (or (:sessions req) {})]
+                             [(str id) (make-test-session data)]))
+        ctx {:watcher (or (:watcher req) {})
+             :config (or (:config req) {})
+             :env (or (:env req) {})
+             :sessions sessions
+             :session-seq (vec (or (:session-seq req) []))
+             :consumed-ids (or (:consumed-ids req) [])
+             :launching-turn (:launching-turn req)
+             :admission (:admission req)
+             :enqueue-answers (vec (or (:enqueue req) []))
+             :max-ticks (:max-ticks req)
+             :max-rounds (:max-rounds req)
+             :now-ms (or (:now req) 0)
+             :calls (atom []) :enqueues (atom []) :warns (atom [])
+             :sleeps (atom []) :waits (atom [])}]
+    {:results (mapv #(run-watcher-step ctx %) (:steps req []))}))
+
+(defn- run-adapters-step [ctx [verb & args]]
+  (let [{:keys [calls env fetch]} ctx]
+    (case verb
+      "build" (let [[lane params] args
+                    p (or params {})
+                    built (case (str lane)
+                  "telegram" (adapters/telegram-request (str (get p "token")) (str (get p "chat")) (str (get p "text")))
+                  "telegram-thread" (adapters/telegram-request (str (get p "token")) (str (get p "chat")) (str (get p "text")) (get p "thread"))
+                  "slack" (adapters/slack-request (str (get p "token")) (str (get p "channel")) (str (get p "text")))
+                  "discord" (adapters/discord-request (str (get p "webhook")) (str (get p "text")))
+                  "discord-bot" (adapters/discord-bot-request (str (get p "token")) (str (get p "channel")) (str (get p "text")))
+                  "mattermost" (adapters/mattermost-request (str (get p "webhook")) (str (get p "text")))
+                  "matrix" (adapters/matrix-request (str (get p "home")) (str (get p "token")) (str (get p "room")) (str (get p "text")))
+                  "feishu" (adapters/feishu-request (str (get p "token")) (str (get p "chat")) (str (get p "text")))
+                  "dingtalk" (adapters/dingtalk-request (str (get p "token")) (str (get p "robot")) (str (get p "user")) (str (get p "text")))
+                  "wecom" (adapters/wecom-request (str (get p "token")) (str (get p "to")) (get p "agent") (str (get p "text")))
+                  "whatsapp" (adapters/whatsapp-request (str (get p "token")) (str (get p "phone")) (str (get p "to")) (str (get p "text")))
+                  (throw (ex-info (str "adapters: unknown lane " lane) {})))]
+                ;; the matrix txn id is random per send (legacy); normalize
+                ;; for golden comparison (core behavior unchanged).
+                (if (= "matrix" (str lane))
+                  (update built :url (fn [u] (str/replace u #"/[0-9a-f]{24}$" "/TXN")))
+                  built))
+      "token-env" (let [[lane config] args]
+                    (adapters/token-env-name (str lane) config))
+      "token-defaults" adapters/token-env-defaults
+      "resolve" (let [[lane config] args]
+                  (boolean (adapters/for-lane (str lane) config env)))
+      "send" (let [[lane config content opts] args
+                   f (adapters/for-lane (str lane) config env)]
+               (if (nil? f)
+                 (str "no adapter for " (str lane))
+                 (f {} (str lane) (str content) (assoc (or opts {}) :fetch fetch))))
+      "calls" @calls
+      (throw (ex-info (str "adapters: unknown step " verb) {:verb verb})))))
+
+(defn- ops-adapters [c]
+  (let [req (:request c {})
+        calls (atom [])
+        env (or (:env req) {})
+        ctx {:calls calls :env env :fetch (stub-fetch calls (vec (or (:fetches req) [])))}]
+    {:results (mapv #(run-adapters-step ctx %) (:steps req []))}))
+
+(defn- ops-chat [c scratch]
+  (let [req (:request c {})
+        dir (scratch-case-dir scratch c)
+        ;; every chat case starts from an empty directory: history jsonl
+        ;; and the serve offset would otherwise leak from a previous run
+        _ (hio/wipe-dir! dir)
+        _ (hio/mkdirs! dir)
+        calls (atom [])
+        events (atom [])
+        env (or (:env req) {})
+        fetch (stub-fetch calls (vec (or (:fetches req) [])))
+        turns (atom (vec (or (:turns req) [])))
+        seen (atom #{})
+        executor (fn [_prof _prompt _opts]
+                   (let [t (first @turns)]
+                     (reset! turns (vec (rest @turns)))
+                     (if (and (map? t) (some? (get t "throw")))
+                       (throw (ex-info (str (get t "throw")) {}))
+                       t)))
+        send! (fn [prof msg text]
+                (chat/send-reply! prof msg (str text) fetch env))
+        profiles (mapv (fn [p]
+                         {:name (str (:name p))
+                          :config (or (:config p) {})
+                          :home (str dir "/profiles/" (str (:name p)))})
+                       (or (:profiles req) []))
+        dispatcher (chat/make-dispatcher
+                    {:profiles profiles
+                     :executor executor
+                     :run-opts (fn [_ _] {})
+                     :send! send!
+                     :on-event (fn [e] (swap! events conj e))})]
+    {:results
+     (mapv
+      (fn [[verb & args]]
+        (case verb
+          "normalize" (let [[platform raw] args]
+                        (chat/normalize (str platform) raw))
+          "guard" (let [[msg] args]
+                    (chat/guard-message seen msg))
+          "route" (let [[msg] args]
+                    (chat/route-chat profiles msg))
+          "history" (let [[platform chat-id] args]
+                      (chat/load-history (str dir "/profiles/" (str (or (:home-profile req) "p1")))
+                                         (str platform) (str chat-id)))
+          "append" (let [[platform chat-id rows] args
+                         home (str dir "/profiles/" (str (or (:home-profile req) "p1")))]
+                      (chat/append-history! home (str platform) (str chat-id) rows)
+                      (chat/load-history home (str platform) (str chat-id)))
+          "dispatch" (let [[platform raw] args]
+                       (dispatcher (str platform) raw))
+          "events" @events
+          "sends" @calls
+          "token" (chat/telegram-token (or (:token-config req) {}) env)
+          "backoff" (chat/backoff-ms (first args))
+          "write-offset" (let [[n] args
+                               f (str dir "/offset.json")]
+                           (hio/replace-file! f (hio/json-str {"offset" n}))
+                           n)
+          "read-offset" (let [f (str dir "/offset.json")]
+                          (if (hio/file? f)
+                            (get (hio/parse-json (hio/slurp-utf8 f)) "offset")
+                            "nofile"))
+          "poll" (let [[token offset timeout] args]
+                   (chat/telegram-poll! {:fetch fetch :token (str token)
+                                         :offset offset :timeout timeout}))
+          "serve" (let [[max-ticks stop-after] args
+                        tick (atom 0)]
+                    (chat/serve! {:fetch fetch :token (str (or (:serve-token req) "TOK"))
+                                  :dispatch (fn [raw] (dispatcher "telegram" raw))
+                                  :on-error (fn [e] (swap! events conj {:event :serve-error :error (str e)}))
+                                  :interval (or (:serve-interval req) 5000)
+                                  :max-ticks max-ticks
+                                  :poll-timeout 25
+                                  :offset-file (str dir "/offset.json")
+                                  :sleep-fn (fn [ms] (swap! calls conj {"sleep-ms" ms}) nil)
+                                  :stop? (if stop-after
+                                           (fn [] (let [t (swap! tick inc)] (>= t stop-after)))
+                                           (fn [] false))}))
+          "chunk" (let [[text limit] args]
+                    (if (some? limit)
+                      (chat/chunk-text (str text) limit)
+                      (chat/chunk-text (str text))))
+          "prepare" (let [[platform chat-id] args
+                          prof {:name "p1" :config (or (:profile-config req) {})}]
+                      (chat/prepare-send-profile prof (str platform) (str chat-id)))
+          "send-reply" (let [[msg text] args
+                              prof {:name "p1" :config (or (:profile-config req) {})}]
+                          (chat/send-reply! prof msg (str text) fetch env))
+          (throw (ex-info (str "chat: unknown step " verb) {:verb verb}))))
+      (:steps req []))}))
 
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
