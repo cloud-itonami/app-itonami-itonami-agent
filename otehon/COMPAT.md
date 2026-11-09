@@ -234,9 +234,10 @@ from source, the rest follow the module name until their slice lands.
   auth header, peers.edn read/write/add, ensure-rail, rebase-paths,
   bundle materialize/fetch, service-record projection/overlay,
   http-json mapping + `cli.cljc` run-send-step/ops-send.
-  15 cases + 7 must-fail; 433 cases + 48 must-fail green on
-  basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon byte-identical —
-  see the evidence doc. Verified divergences:
+  15 cases + 7 must-fail; 468 cases + 50 must-fail green on the
+  rebased union (incl. S2c) on basilisp 0.5.1 / bb 1.12.218 /
+  nbb 1.4.208, canon byte-identical — see the evidence doc.
+  Verified divergences:
   - crypto/time/nonces/fetch ride injected seams (`:sign` `:verify`
     `:now-ms` `:random-hex` `:nonces` `:fetch`); the live send /
     gateway-serve / peer socket commands stay host-side (S6).

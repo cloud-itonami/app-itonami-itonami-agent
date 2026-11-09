@@ -28,18 +28,24 @@ rm -rf test/scratch
 
 ## Result (2026-11-09)
 
+Pre-rebase (unit-1 branch on f5646bd): 433 cases / 48 must-fail,
+all green on all three runners, canon byte-identical.
+
+Post-rebase union with main f544ca0 (S2c confine + quiet, +35 cases
++2 must-fail), re-run from a clean `test/scratch`:
+
 ```
-PASS  basilisp cases: {:cases 433, :fail [], :negative-controls 27, :pass 433, :runner "basilisp 0.5.1 / python 3.14.7"}
-PASS  basilisp must-fail: 48/48 reported FAIL
-PASS  bb cases: {:cases 433, :fail [], :negative-controls 27, :pass 433, :runner "babashka 1.12.218"}
-PASS  bb must-fail: 48/48 reported FAIL
-PASS  nbb cases: {:cases 433, :fail [], :negative-controls 27, :pass 433, :runner "nbb on node v26.0.0"}
-PASS  nbb must-fail: 48/48 reported FAIL
+PASS  basilisp cases: {:cases 468, :fail [], :negative-controls 27, :pass 468, :runner "basilisp 0.5.1 / python 3.14.7"}
+PASS  basilisp must-fail: 50/50 reported FAIL
+PASS  bb cases: {:cases 468, :fail [], :negative-controls 27, :pass 468, :runner "babashka 1.12.218"}
+PASS  bb must-fail: 50/50 reported FAIL
+PASS  nbb cases: {:cases 468, :fail [], :negative-controls 27, :pass 468, :runner "nbb on node v26.0.0"}
+PASS  nbb must-fail: 50/50 reported FAIL
 PASS  bb output identical to basilisp
 PASS  nbb output identical to basilisp
 ```
 
-433 cases (was 418): +2 send (ok-and-errors incl. slack-adapter /
+Unit-1 contribution: 15 cases + 7 must-fail (was 418 / 41): +2 send (ok-and-errors incl. slack-adapter /
 --chat-id / empty-text / HTTP-500 paths, platform case-fold + thread
 routing) +13 peer (did roundtrip incl. bad-alphabet/short rejects,
 peers.edn read/add/write/read, envelope sign/open roundtrip incl.
