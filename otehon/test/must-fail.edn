@@ -236,4 +236,12 @@
    :expect {:value nil}}
   {:id :must-fail/quiet-linger-expects-zero :op :quiet
    :call ["linger-seconds" {}]
-   :expect {:value 0}}]}]
+   :expect {:value 0}}
+{:id :must-fail/peer-parse-bad-char :op :peer :request {:steps [["parse" "did:key:z!"]]} :expect {:results [[]]}}
+    {:id :must-fail/peer-materialize-unsafe :op :peer :request {:cid "c" :steps [["materialize" "c" {"../x" "hi"}]]} :expect {:results ["ok"]}}
+    {:id :must-fail/peer-fetch-500 :op :peer :request {:node {:did "did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c"} :sig "SIG" :now 1000 :nonce "ab" :fetches [{"kind" "http" "status" 500}] :steps [["fetch-bundle" "https://o" "bafkreibphr7jfrpgyavbxq6aa3z5jb5zropg2gtfb3pimjblrjwjcjeg7a"]]} :expect {:results [{}]}}
+    {:id :must-fail/peer-fetch-bad-cid :op :peer :request {:node {:did "did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c"} :sig "SIG" :now 1000 :nonce "ab" :fetches [{"kind" "json" "json" {"files" {"a.txt" "WRONG"}}}] :steps [["fetch-bundle" "https://o" "bafkreibphr7jfrpgyavbxq6aa3z5jb5zropg2gtfb3pimjblrjwjcjeg7a"]]} :expect {:results [{}]}}
+    {:id :must-fail/peer-http-throw :op :peer :request {:fetches [{"kind" "throw" "message" "down"}] :steps [["http" "https://x" {}]]} :expect {:results [{}]}}
+    {:id :must-fail/peer-unknown-verb :op :peer :request {:steps [["bogus"]]} :expect {:results [nil]}}
+    {:id :must-fail/peer-open-garbage :op :peer :request {:node {:did "did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c"} :now 1000 :trusted #{} :verify true :steps [["open" {"payload" "not-json" "did" "did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c" "sig" "SIG"}]]} :expect {:results [{}]}}
+]}

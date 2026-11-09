@@ -135,7 +135,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -175,6 +175,8 @@
     :chat (ops-chat c scratch)
     :quiet (ops-quiet c)
     :confine (ops-confine c scratch)
+    :send (ops-send c)
+    :peer (ops-peer c scratch)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick (let [prof (load-dir dir read-text)
@@ -2150,7 +2152,8 @@
         (case (str (get spec "kind"))
           "updates" {:ok true :status 200
                      :body-text (hio/json-str {"ok" true "result" (vec (get spec "updates" []))})}
-          "json" {:ok true :status (or (get spec "status") 200) :json (get spec "json")}
+          "json" {:ok true :status (or (get spec "status") 200) :json (get spec "json")
+                     :body (get spec "json") :body-text (hio/json-str (get spec "json"))}
           "http" {:ok false :status (get spec "status") :json (get spec "json") :body-text ""}
           "throw" (throw (ex-info (str (get spec "message" "bang")) {}))
           (throw (ex-info (str "stub-fetch: unknown kind " (get spec "kind")) {})))))))
@@ -2597,6 +2600,89 @@
                                                            :scan-fn (when (contains? arg2 :found)
                                                                       (constantly (mapv rel (:found arg2))))}) :env)
                    (throw (ex-info (str "confine: unknown call " verb) {:verb verb}))))}))))
+
+(defn- run-send-step [ctx [_ platform chat-id thread-id text]]
+  (let [{:keys [profile-config env fetch]} ctx
+        platform (str/lower-case (str (or platform "telegram")))]
+    (cond
+      (nil? chat-id)
+      {:error "send: --chat-id is required"}
+      (or (boolean? chat-id)
+          (contains? #{"true" "false"} (str chat-id))
+          (str/blank? (str chat-id)))
+      {:error "send: --chat-id needs a chat id value (e.g. --chat-id -100123)"}
+      (str/blank? (str text))
+      {:error "send: message text is required"}
+      :else
+      (let [prof {:name "p1" :config (or profile-config {})}
+            prepared (chat/prepare-send-profile prof platform (str chat-id))]
+        (if-let [e (:error prepared)]
+          {:error (str "send: " e)}
+          (let [res (chat/send-reply! (:prof prepared)
+                                      {"platform" platform
+                                       "chat_id" (str chat-id)
+                                       "thread_id" (str (or thread-id ""))}
+                                      (str text) fetch env)]
+            (if (nil? res)
+              {:sent (str platform ":" chat-id)}
+              {:error (str "send failed: " res)})))))))
+
+(defn- ops-send [c]
+  (let [req (:request c {})
+        calls (atom [])
+        env (or (:env req) {})
+        fetch (stub-fetch calls (vec (or (:fetches req) [])))
+        ctx {:profile-config (or (:profile-config req) {}) :env env :fetch fetch}]
+    {:results (mapv #(run-send-step ctx %) (:steps req []))}))
+
+(defn- run-peer-step [ctx [verb & args]]
+  (let [{:keys [dir req fetch node now-ms random-hex sign verify nonces]} ctx
+        verify-fn (cond (= verify "throw") (fn [& _] (throw (ex-info "peer verify failed" {})))
+                        (false? verify) (fn [& _] false)
+                        :else (fn [& _] true))]
+    (case (str verb)
+      "read" (peer/read-peers dir)
+      "write" (let [[m] args] (peer/write-peers! dir m))
+      "add" (let [[entry] args] (peer/add-peer! dir entry))
+      "did" (let [[raw] args] (peer/pub->did (vec raw)))
+      "parse" (let [[did] args] (peer/parse-did (str did)))
+      "valid?" (let [[did] args] (peer/valid-did? (str did)))
+      "sign" (let [[payload] args]
+               (peer/sign-envelope node payload {:now-ms now-ms :random-hex random-hex :sign sign}))
+      "open" (let [[envelope] args]
+               (peer/open-envelope envelope {:trusted (or (:trusted req) #{})
+                                             :verify verify-fn :now-ms now-ms :nonces nonces}))
+      "auth" (let [[payload] args]
+               (peer/auth-header node payload {:now-ms now-ms :random-hex random-hex :sign sign}))
+      "materialize" (let [[cid files] args] (peer/materialize-bundle! dir (str cid) files))
+      "file" (let [[rel] args]
+               (let [p (str dir "/peer-runs/" (:cid req) "/home/" rel)]
+                 (when (hio/file? p) (hio/slurp-utf8 p))))
+      "fetch-bundle" (let [[origin-url cid] args]
+                       (peer/fetch-bundle node (str origin-url) (str cid)
+                                           {:fetch fetch :sign sign}))
+      "ensure" (let [[config rail] args] (peer/ensure-rail config (when (some? rail) (str rail))))
+      "rebase" (let [[text opts] args] (peer/rebase-paths (str text) opts))
+      "records" (let [[services] args] (peer/service-records->peer-infos services))
+      "overlay" (let [[infos services] args] (peer/overlay-service-records infos services))
+      "http" (let [[url opts] args] (peer/http-json fetch (str url) opts))
+      (throw (ex-info (str "peer: unknown step " verb) {:verb verb})))))
+
+(defn- ops-peer [c scratch]
+  (let [req (:request c {})
+        dir (scratch-case-dir scratch c)
+        _ (hio/wipe-dir! dir)
+        _ (hio/mkdirs! dir)
+        calls (atom [])
+        fetch (stub-fetch calls (vec (or (:fetches req) [])))
+        node (or (:node req) {:did "did:key:zStub"})
+        ctx {:dir dir :req req :fetch fetch :node node
+             :now-ms (fn [] (long (or (:now req) 0)))
+             :random-hex (fn [_] (str (or (:nonce req) "000000000000000000000000")))
+             :sign (fn [_payload] (str (or (:sig req) "SIG")))
+             :verify (:verify req)
+             :nonces (atom {})}]
+    {:results (mapv #(run-peer-step ctx %) (:steps req []))}))
 
 (defn run-case [c fixtures scratch]
   (let [dir (when (:profile c) (str fixtures "/" (:profile c)))
