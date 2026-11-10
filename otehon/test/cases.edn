@@ -4332,4 +4332,74 @@ Output since last heartbeat:
   {:id :vault/base32-tolerant :op :vault
    :call ["base32" "gezdgnbvgy3tqojq====\n"]
    :expect {:value [49 50 51 52 53 54 55 56 57 48]}}
+  ;; ------------------------------------------------------------ browser policy units (S6b-16)
+  {:id :browser/secret-raw :op :browser
+   :call ["secret" "token sk-abcdefghij1234567890 end"]
+   :expect {:value "sk-abcdefghij1234567890"}}
+  {:id :browser/secret-encoded :op :browser
+   :call ["secret" "key=sk%2Dabcdefghij1234567890"]
+   :expect {:value "sk-abcdefghij1234567890"}}
+  {:id :browser/secret-clean :op :browser
+   :call ["secret" "https://example.com/plain"]
+   :expect {:value nil}}
+  {:id :browser/secret-malformed :op :browser
+   :call ["secret" "100%zz top"]
+   :expect {:value false}}
+  {:id :browser/allowed-wild :op :browser
+   :call ["allowed" ["*.example.com"] "A.example.com"]
+   :expect {:value true}}
+  {:id :browser/allowed-meta :op :browser
+   :call ["allowed" nil "metadata.google.internal"]
+   :expect {:value false}}
+  {:id :browser/allowed-open :op :browser
+   :call ["allowed" nil "example.com"]
+   :expect {:value true}}
+  {:id :browser/connect-v4 :op :browser
+   :call ["connect" "example.com:8080" nil]
+   :expect {:value {:host "example.com" :port 8080}}}
+  {:id :browser/connect-v6 :op :browser
+   :call ["connect" "[::1]:443" nil]
+   :expect {:value {:host "::1" :port 443}}}
+  {:id :browser/connect-prefix-port :op :browser
+   :call ["connect" "h:12x" nil]
+   :expect {:value {:host "h" :port 12}}}
+  {:id :browser/connect-denied :op :browser
+   :call ["connect" "example.com:80" ["other.com"]]
+   :expect {:value nil}}
+  {:id :browser/connect-bad-port :op :browser
+   :call ["connect" "h:99999" nil]
+   :expect {:value nil}}
+  {:id :browser/scrub-multi :op :browser
+   :call ["scrub" "call sk-abcdefghij1234567890 with password=xyz done"]
+   :expect {:value "call [REDACTED] with password=[REDACTED] done"}}
+  {:id :browser/scrub-auth :op :browser
+   :call ["scrub" "Authorization: Bearer tok123 rest"]
+   :expect {:value "Authorization: Bearer [REDACTED] rest"}}
+  {:id :browser/scrub-query :op :browser
+   :call ["scrub" "go?api_key=ABC123&x=1"]
+   :expect {:value "go?api_key=[REDACTED]"}}
+  {:id :browser/redact-nested :op :browser
+   :call ["redact" {"t" "sk-abcdefghij1234567890" "n" 1 "v" ["x" "ok"]}]
+   :expect {:value {"t" "[redacted]" "n" 1 "v" ["x" "ok"]}}}
+  {:id :browser/clamp-str :op :browser
+   :call ["clamp" "30"]
+   :expect {:value 30}}
+  {:id :browser/clamp-bad :op :browser
+   :call ["clamp" "x"]
+   :expect {:value 300}}
+  {:id :browser/clamp-zero :op :browser
+   :call ["clamp" 0]
+   :expect {:value 1}}
+  {:id :browser/clamp-max :op :browser
+   :call ["clamp" 9999]
+   :expect {:value 1800}}
+  {:id :browser/shot-all :op :browser
+   :call ["shot" "see /tmp/a.png and /tmp/b.jpg" "all"]
+   :expect {:value "/tmp/b.jpg"}}
+  {:id :browser/shot-png-only :op :browser
+   :call ["shot" "see /tmp/a.png and /tmp/b.jpg" "png-only"]
+   :expect {:value "/tmp/a.png"}}
+  {:id :browser/shot-none :op :browser
+   :call ["shot" "see /tmp/a.png" "none"]
+   :expect {:value nil}}
 ]}]

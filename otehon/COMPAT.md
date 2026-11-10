@@ -83,7 +83,7 @@ from source, the rest follow the module name until their slice lands.
 
 | module | twin | status |
 |---|---|---|
-| `browser.cljk` *browser tools* | — | planned S6 |
+| `browser.cljk` *browser tools* | `browser.cljc` (secret-url? / allowed-host? / parse-connect-target / scrub-output / redact-cdp-output / clamp-timeout / screenshot-path, `:browser` op; DNS pinning, sockets, servers, spawn, config write, clock, file check stay S6) | partial (policy core done JUN-1036 S6b-16, shared cases; proxy/CDP/CLI wiring stays S6) |
 | `browser_cloud.cljk` | — | planned S6 |
 | `browser_provider.cljk` | — | planned S6 |
 | `chat_platform.cljk` | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply, sync) | done (JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in) |
@@ -477,4 +477,21 @@ from source, the rest follow the module name until their slice lands.
   AES-256-GCM file, 0600 key file, `vh-` + random handle
   generation, the stdin password read, the default clock and the
   `vault` command wiring stay S6.)
+- S6b-16 browser policy units — done (JUN-1036: `secret-url?`
+  (raw + percent-encoded, fail-closed on malformed input) /
+  `allowed-host?` / `parse-connect-target` (`[v6]:port` + `host:port`,
+  `parseInt`-prefix ports) / `scrub-output` / `redact-cdp-output` /
+  `clamp-timeout` / `screenshot-path` (injected `file?`), with
+  `:browser` verbs. 19 cases + 2 must-fail; 894 cases + 102
+  must-fail green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon
+  byte-identical — see the evidence doc. Verified divergences
+  (all found by the gate, fixed before merge): `(int \3)` is the
+  codepoint on bb/basilisp but the digit value on nbb — digits now
+  convert via alphabet index, `[0-9]` everywhere; replacement fns
+  get `[full group]` on bb/nbb but the bare string on basilisp —
+  normalized before slicing; `$1` replacement syntax left literal
+  on basilisp and fn replacement unsupported on bb/SCI — the group
+  splice is explicit with a plain-string replacement. DNS pinning,
+  sockets, the proxy/CDP servers, process spawn, the config-file
+  write, clock reads and the `browser` wiring stay S6.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.
