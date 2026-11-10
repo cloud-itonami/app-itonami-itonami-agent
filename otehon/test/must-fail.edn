@@ -400,4 +400,13 @@
   {:id :must-fail/bprovider-wrong-resolve :op :browser-provider
    :call ["resolve" {"browser-use" {} "browserbase" {}} {"browser-use" true "browserbase" true} nil]
    :expect {:value "browserbase"}}
+  {:id :must-fail/oauth-wrong-challenge :op :oauth
+   :call ["challenge" "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"]
+   :expect {:value "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}
+  {:id :must-fail/oauth-wrong-expiry :op :oauth
+   :call ["token-record" {"access_token" "a" "expires_in" "100"} {"issuer" "iss"} 1000]
+   :expect {:value {"access_token" "a" "expires_in" "100" "expires_at" 9999 "hermes_issuer" "iss"}}}
+  {:id :must-fail/oauth-wrong-discovery :op :oauth
+   :call ["discovery" nil "https://m.example"]
+   :expect {:value {"issuer" "https://m.example" "authorization_endpoint" "https://m.example/authorize" "token_endpoint" "https://m.example/token" "registration_endpoint" "https://m.example/register" "device_authorization_endpoint" "https://m.example/device"}}}
 ]}]
