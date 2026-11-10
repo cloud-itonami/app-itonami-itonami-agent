@@ -87,9 +87,9 @@ from source, the rest follow the module name until their slice lands.
 | `browser_cloud.cljk` | `browser_cloud.cljc` (session-name / bb/bu-config / payload / downgrade / features / session records / close specs) | partial (shapes done JUN-1036 S6b-17, shared cases; env reads, fetch, 402 loop, registration stay S6) |
 | `browser_provider.cljk` | `browser_provider.cljc` (normalize / resolve over explicit registry + availability witness) | partial (resolution done JUN-1036 S6b-17, shared cases; registry atom, probes, lifecycle dispatch stay S6) |
 | `chat_platform.cljk` | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply, sync) | done (JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in) |
-| `clarify.cljk` | — | planned S6 |
+| `clarify.cljk` | `clarify.cljc` (strip-recommended, mark-recommended, clean-answer, normalize-questions, response-status, result-json) | partial (pure question/answer shapes done JUN-1036 S6b pure-units, 15 shared cases + 2 must-fail; readline chat loop + host clarify-fn wiring stay S6) |
 | `code_rpc.cljk` | `code_rpc.cljc` (tool-error, result-error, tool-errors-since, sandbox-tools-for, terminal-blocked-params, missing-import-hint, failure-hint-rules, failure-hint, hint-on-failure) | partial (shaping + hints done JUN-1036 S6b-8, shared cases; shim-header/tool-stubs/generate-hermes-tools, token check, dispatch, budget, log, serve loop stay S6) |
-| `collect.cljk`, `collect_io.cljk` | `collect.cljc` (done) + `collect_io.cljc` (`receipt` mapping, `:collect-io` op; signer/DID/transport stay S6) | partial (shapes done JUN-1036 S6b, shared cases; SDK wiring stays S6) |
+| `collect.cljk`, `collect_io.cljk` | `collect.cljc` (certify-row, certify, reconcile — outbox shadow-write core) + `collect_io.cljc` (`receipt` mapping, `:collect-io` op) | partial (pure certify/reconcile done JUN-1036 S6b pure-units, 11 shared cases; receipt done S6b-19; signing-key custody + SDK wiring stay S6) |
 | `computer_use.cljk` | `computer_use.cljc` (canon-keys, blocked-input?, select-window, build-request, content-text, image-parts, result-error, structured, error/success-result, action-request) | partial (arg shapes done JUN-1036 S6b-7, shared cases; driver spawn, capture/list flows, approval, call dispatch stay S6) |
 | `confine.cljk` *OS sandbox* | `confine.cljc` (policy, secret-paths, read-denial, confine-env, seatbelt-profile, bwrap-args, command) | partial (pure policy core done JUN-1036 S2c; `backend` probe and `audit*!` writers stay host-side) |
 | `connections.cljk` | `connections.cljc` (connection-status + auth-status, read-only) | done (JUN-1036 S6b-2, shared cases; install/authorize is slice 2, hosted answers the named error) |
@@ -121,10 +121,10 @@ from source, the rest follow the module name until their slice lands.
 | `rails.cljk` | `rails.cljc` (small-model? / normalize-model-ids / detect-entries / all-models / agent-models / select-candidates) | partial (selection core done JUN-1036 S6b-3, shared cases; rails.edn read/write, the loopback probe, detect fan-out and complete's fetch loop stay S6) |
 | `soul.cljk` | `soul.cljc` (world/unit/role render + splice, limit, body guard) | done (JUN-1036 S4d) |
 | `tools.cljk` *tool registry* | `tools.cljc` (schemas table + toolsets + name/unsupported/approval/enabled/execution-disabled/runtime predicates) | partial (registry core done S6a; tool implementations + servers/processes + CLIs stay S6c/d) |
-| `tts.cljk` | — | planned S6 |
+| `tts.cljk` | `tts.cljc` (configured, speech-request, safe-format, clamp-timeout-s) | partial (pure request shapes done JUN-1036 S6b pure-units, 15 shared cases + 2 must-fail; provider hop resolution, fetch + audio write stay S6) |
 | `vault.cljk` | `vault.cljc` (store core + TOTP: login-meta / add / remove / secret / list / format / totp / base32 verbs) | partial (store core done JUN-1036 S6b-14, TOTP done S6b-15, shared cases; AES file, handle generation, CLI wiring stay S6) |
 | `watcher.cljk` | — | planned S5 |
-| `webguard.cljk` | — | planned S6 |
+| `webguard.cljk` | `webguard.cljc` (blocked-address?, host-allowed?, query-refusal) | partial (pure boundary checks done JUN-1036 S6b pure-units, 26 shared cases + 2 must-fail; DNS, sockets + fetching stay S6) |
 | `yaml.cljk` | `yaml.cljc` | done |
 
 ## Slices
@@ -297,7 +297,7 @@ from source, the rest follow the module name until their slice lands.
   byte-identical — see the evidence doc. Verified divergences:
   `runtime-tool-names` ports only the explicit 5-arity (the 4-arity
   reads the host PATH); the `computer_use` schema rides as inlined
-  static data. Next: S6b clarify/collect/tts-shape/webguard-pure.
+  static data. Next: S6c tool implementations + servers/processes + CLIs.
 - S6b-2 connections/dapps status surface — done (JUN-1036:
   `dapps.cljc` registry pin + server table + resolve-checkout + status,
   `oauth.cljc` store-name, `connections.cljc` connection-status +
@@ -513,6 +513,12 @@ from source, the rest follow the module name until their slice lands.
   pinned; an explicit-but-unavailable name still wins, pinned.
   Env reads, random-hex, fetch, the 402 retry loop, registration
   and lifecycle dispatch stay S6.)
+- S6b pure-units clarify/collect/tts/webguard — done (JUN-1036:
+  `clarify.cljc` question/answer shapes (15 cases), `collect.cljc`
+  outbox certify/reconcile core (11 cases), `tts.cljc` request
+  shapes + format guard + timeout clamp (15 cases), `webguard.cljc`
+  boundary checks (26 cases); 8 must-fail controls. Host-side fetch,
+  sockets, signing custody, readline chat + provider hops stay S6.)
 - S6b-18 oauth pure units — done (JUN-1036: pure SHA-256 /
   `verify-challenge` (RFC 7636, independent oracle: node:crypto) /
   `pkce-pair` / `auth-params` / `discovery-record` /
