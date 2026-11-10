@@ -60,6 +60,7 @@
             [itonami.otehon.collect :as collect]
             [itonami.otehon.clarify :as clarify]
             [itonami.otehon.webguard :as webguard]
+            [itonami.otehon.vault :as vault]
             [itonami.otehon.dapps :as dapps]
             [itonami.otehon.oauth :as oauth]
             [itonami.otehon.connections :as connections]
@@ -150,7 +151,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -195,6 +196,7 @@
     :collect (ops-collect c)
     :clarify (ops-clarify c)
     :webguard (ops-webguard c)
+    :vault (ops-vault c)
     :process (ops-process c)
     :dapps (ops-dapps c scratch)
     :connections (ops-connections c scratch)
@@ -2818,6 +2820,17 @@
               "allowed" (webguard/host-allowed? arg arg2)
               "refusal" (webguard/query-refusal arg)
               (throw (ex-info (str "webguard: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-vault [c]
+  (let [[verb arg arg2 arg3] (:call c)]
+    {:value (case verb
+              "meta" (vault/login-meta arg arg2)
+              "add" (vault/add-login arg arg2 arg3)
+              "remove" (vault/remove-login arg arg2)
+              "secret" (vault/secret arg arg2 arg3)
+              "list" (vault/list-rows arg)
+              "format" (vault/format-row arg)
+              (throw (ex-info (str "vault: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-process [c]
   (let [[verb arg] (:call c)]
