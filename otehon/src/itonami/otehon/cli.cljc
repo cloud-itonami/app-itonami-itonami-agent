@@ -2927,7 +2927,7 @@
       (throw (ex-info (str "dapps: unknown call " verb) {:verb verb})))))
 
 (defn- ops-mcp [c]
-  (let [[verb arg arg2 arg3] (:call c)
+  (let [[verb arg arg2 arg3 arg4 arg5 arg6 arg7] (:call c)
         req (:request c {})
         env (or (:env req) (hio/all-env))]
     {:value (case verb
@@ -2942,6 +2942,7 @@
               "collect-call-results" (mcp/collect-call-results arg)
               "collect-exchange-result" (mcp/collect-exchange-result arg)
               "render-result" (mcp/render-result arg)
+              "cache-status" (mcp/cache-status arg arg2 arg3 arg4 arg5 arg6 arg7)
               (throw (ex-info (str "mcp: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-connections [c scratch]
