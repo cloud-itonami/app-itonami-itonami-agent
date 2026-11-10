@@ -106,7 +106,7 @@ from source, the rest follow the module name until their slice lands.
 | `loop.cljk` *agent turn loop* | `turn.cljc` (gate), `assembly.cljc` (history, wrap-up, turn limits) | partial (S2d assembly done; turn execution S2) |
 | `main.cljk` *CLI dispatch* | `cli.cljc` | partial (this table) |
 | `manifest.cljk` | `manifest.cljc` | done |
-| `mcp.cljk` | `mcp.cljc` (protocol-version, enabled?, names-for, command-for, server-env, tool-name, tool-allowed?, handshake-lines, call-line, collect-call-results, collect-exchange-result, render-result + private rpc/expand/object-schema/glob/finite?/parse-float, cache-status `:mcp` verb) | partial (config selection + naming + allowlist + message shapes + cache decision done JUN-1036 S6b-4/S6b-5/S6b-20, shared cases; stdio/HTTP exchange spawn, discover projection/call dispatch stay S6) |
+| `mcp.cljk` | `mcp.cljc` (protocol-version, enabled?, names-for, command-for, server-env, tool-name, tool-allowed?, handshake-lines, call-line, collect-call-results, collect-exchange-result, render-result + private rpc/expand/object-schema/glob/finite?/parse-float, cache-status + project-discovery `:mcp` verbs) | partial (config selection + naming + allowlist + message shapes + cache decision + discover projection done JUN-1036 S6b-4/S6b-5/S6b-20/S6b-21, shared cases; stdio/HTTP exchange spawn, call dispatch stay S6) |
 | `notepad.cljk` | `notepad.cljc` | done (JUN-1036 S4a; clear is ported, unwired — no CLI surface) |
 | `oauth.cljk` | `oauth.cljc` (store-name + PKCE S256 + auth params + discovery/registration/token-cache shapes, `:oauth` op) | partial (pure heads done JUN-1036 S6b-2/S6b-18, shared cases; fetch, loopback listener, URL serialization, token endpoint, file writes, clock, login/device flows stay S6) |
 | `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; + S5d unit 1: did:key parse/valid/pub->did, signed envelopes + auth header, peers.edn read/write/add, ensure-rail, path rebase, bundle materialize/fetch, service-record projection/overlay, fetch mapping; + S5d unit 2: peer-info/discover/pick-peer/infer-peers/infer-via-peers/remote-run, seven serve routes + dispatch, local-gateway-complete, placement; socket/child-process/agent-loop/rails reads/health syscalls stay host-side) |
@@ -544,4 +544,16 @@ from source, the rest follow the module name until their slice lands.
   ##Inf/NaN handled without host predicates. Token-file reads,
   stdio/HTTP exchange spawn, discover projection/call dispatch
   stay S6.)
+- S6b-21 mcp discover projection — done (JUN-1036:
+  `project-discovery` over exchange-selected outcomes: schemas +
+  dispatch index + errors, alias rows only for unclaimed native
+  names, disabled servers skipped, missing results are errors.
+  5 cases + 2 must-fail; 946 cases + 114 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical — see
+  the evidence doc. Verified divergence: exchange envelopes are
+  keyword (`:error`) while tool payloads are string-keyed
+  (`"tools"`) — the first draft used keyword tools and the gate
+  rejected all four positive cases on every runner; the exchange
+  sources prove the mixed convention. Exchange spawn and call
+  dispatch stay S6.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

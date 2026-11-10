@@ -4547,4 +4547,20 @@ Output since last heartbeat:
   {:id :mcp/cache-prefix-expiry :op :mcp
    :call ["cache-status" {"access_token" "a" "expires_at" "2000x"} {} {} {} 1000 0 false]
    :expect {:value {:fresh? true :issuer-bound? false :ready? true}}}
+  ;; ------------------------------------------------------------ mcp discover projection (S6b-21)
+  {:id :mcp/discover-basic :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {"command" "k"}}} ["x"] {"x" {"tools" [{"name" "a" "description" "Ad" "inputSchema" {"type" "object" "properties" {"q" {}}}} {"name" "clarify"}]}}]
+   :expect {:value {:schemas [{"type" "function" "function" {"name" "mcp__x__a" "description" "Ad" "parameters" {"type" "object" "properties" {"q" {}} "required" []}}} {"type" "function" "function" {"name" "mcp__x__clarify" "description" "MCP tool clarify from x" "parameters" {"type" "object" "properties" {} "required" []}}} {"type" "function" "function" {"name" "clarify" "description" "MCP tool clarify from x" "parameters" {"type" "object" "properties" {} "required" []}}}] :index {"mcp__x__a" ["x" "a"] "mcp__x__clarify" ["x" "clarify"] "clarify" ["x" "clarify"]} :errors []}}}
+  {:id :mcp/discover-collide :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {} "y" {}}} ["x" "y"] {"x" {"tools" [{"name" "clarify"}]} "y" {"tools" [{"name" "clarify"}]}}]
+   :expect {:value {:schemas [{"type" "function" "function" {"name" "mcp__x__clarify" "description" "MCP tool clarify from x" "parameters" {"type" "object" "properties" {} "required" []}}} {"type" "function" "function" {"name" "mcp__y__clarify" "description" "MCP tool clarify from y" "parameters" {"type" "object" "properties" {} "required" []}}}] :index {"mcp__x__clarify" ["x" "clarify"] "mcp__y__clarify" ["y" "clarify"]} :errors []}}}
+  {:id :mcp/discover-errors :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {} "z" {"enabled" false}}} ["x" "z" "w"] {"x" {:error "down"}}]
+   :expect {:value {:schemas [] :index {} :errors [{"server" "x" "error" "down"} {"server" "w" "error" "no exchange result"}]}}}
+  {:id :mcp/discover-allowlist :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {"tools" {"exclude" ["s*"]}}}} ["x"] {"x" {"tools" [{"name" "secret"} {"name" "ok"}]}}]
+   :expect {:value {:schemas [{"type" "function" "function" {"name" "mcp__x__ok" "description" "MCP tool ok from x" "parameters" {"type" "object" "properties" {} "required" []}}}] :index {"mcp__x__ok" ["x" "ok"]} :errors []}}}
+  {:id :mcp/discover-input-schema :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {}}} ["x"] {"x" {"tools" [{"name" "t" "input_schema" {"properties" {"p" {}}}}]}}]
+   :expect {:value {:schemas [{"type" "function" "function" {"name" "mcp__x__t" "description" "MCP tool t from x" "parameters" {"type" "object" "properties" {"p" {}} "required" []}}}] :index {"mcp__x__t" ["x" "t"]} :errors []}}}
 ]}]

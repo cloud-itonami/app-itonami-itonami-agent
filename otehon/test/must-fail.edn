@@ -421,4 +421,10 @@
   {:id :must-fail/mcp-wrong-cache-bound :op :mcp
    :call ["cache-status" {"refresh_token" "r" "hermes_issuer" "i"} {"issuer" "i" "token_endpoint" "https://h/t"} {"client_id" "c"} {} 99999 0 false]
    :expect {:value {:fresh? true :issuer-bound? true :ready? true}}}
+  {:id :must-fail/mcp-wrong-discover-count :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {"command" "k"}}} ["x"] {"x" {"tools" [{"name" "a"}]}}]
+   :expect {:value {:schemas [] :index {} :errors []}}}
+  {:id :must-fail/mcp-wrong-discover-errors :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {}}} ["x"] {"x" {:error "down"}}]
+   :expect {:value {:schemas [] :index {} :errors []}}}
 ]}]
