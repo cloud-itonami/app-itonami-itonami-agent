@@ -22,7 +22,7 @@ covered by shared cases on all three runners.
 | `chat` | `chat` | — | S6 |
 | `vault` | `vault-cmd` | — | S6 |
 | `mcp` | `mcp-cmd` | — | S6 |
-| `dapps` | `dapps-cmd` | — | S6 |
+| `dapps` | `dapps-cmd` | `dapps/status` surface (resolve + rows, shared `:dapps` cases) | partial (JUN-1036 S6b-2; the product `dapps` command wiring stays S6) |
 | `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor), `notepad` (KV verbatim), `runs`/`incidents` (ledger reads: rows list, ack) | done run/tick-exec + notepad + ledger reads (JUN-1036 S2a/S2b/S4a/S4b; ledger/queue writes S5) |
 | `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check` (job-level readiness: the legacy command reads active jobs only; model/state.db/pause findings stay doctor-only), `store-plan` (import/export copy plan), `profile list/show/check/readiness/refresh/itonamify/rail/bundle/refresh-bundle/release/import/export/adopt/soul/organize/hy-stage/hy-migrate/did` (import/export executes the plan: definition byte copy + Hermes-side park on export; adopt flips scheduler + parks + refreshes CID; soul renders registry/worlds blocks with backup+receipt; organize projects the registry entry; hy-stage checks and stages the Hy payload; hy-migrate rewrites `.py` refs under the tick lock; did derives the fleet did:key; bundle prints CID + manifest) | S4 verbs complete (S6-owned check/readiness finding kinds deferred, recorded below) |
 | `doctor` | `doctor-cmd` | `doctor` (store verbs; S6-owned finding kinds deferred, recorded below) | done (JUN-1036 S3b) |
@@ -88,27 +88,27 @@ from source, the rest follow the module name until their slice lands.
 | `browser_provider.cljk` | — | planned S6 |
 | `chat_platform.cljk` | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply, sync) | done (JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in) |
 | `clarify.cljk` | — | planned S6 |
-| `code_rpc.cljk` | — | planned S6 |
+| `code_rpc.cljk` | `code_rpc.cljc` (tool-error, result-error, tool-errors-since, sandbox-tools-for, terminal-blocked-params, missing-import-hint, failure-hint-rules, failure-hint, hint-on-failure) | partial (shaping + hints done JUN-1036 S6b-8, shared cases; shim-header/tool-stubs/generate-hermes-tools, token check, dispatch, budget, log, serve loop stay S6) |
 | `collect.cljk`, `collect_io.cljk` | — | planned S6 |
-| `computer_use.cljk` | — | planned S6 |
+| `computer_use.cljk` | `computer_use.cljc` (canon-keys, blocked-input?, select-window, build-request, content-text, image-parts, result-error, structured, error/success-result, action-request) | partial (arg shapes done JUN-1036 S6b-7, shared cases; driver spawn, capture/list flows, approval, call dispatch stay S6) |
 | `confine.cljk` *OS sandbox* | `confine.cljc` (policy, secret-paths, read-denial, confine-env, seatbelt-profile, bwrap-args, command) | partial (pure policy core done JUN-1036 S2c; `backend` probe and `audit*!` writers stay host-side) |
-| `connections.cljk` | — | planned S6 |
+| `connections.cljk` | `connections.cljc` (connection-status + auth-status, read-only) | done (JUN-1036 S6b-2, shared cases; install/authorize is slice 2, hosted answers the named error) |
 | `cron.cljk` *jobs/schedules* | `cron.cljc`, `tick.cljc`, `run.cljc`, `exec.cljc` | partial (plans + `run-job` host side and finished-turn apply done, JUN-1036 S2a/S2b; ledger/queue rows S5a; drain rail — deliver/drain/settle/abandoned/finish-run — S5b; the live run-job loop + watcher fan-in stay open) |
-| `dapps.cljk` | — | planned S6 |
+| `dapps.cljk` | `dapps.cljc` (registry pin + server table + resolve-checkout + status) | partial (status surface done JUN-1036 S6b-2, shared cases; `with-servers` / `select-servers` need the MCP allowlist, stay S6) |
 | `delivery.cljk` | `delivery.cljc` (normalize/lanes/bot-chat token/adapter registry/classify-outcome, pure) | done (JUN-1036 S5a; shared cases assert the vocabulary incl. the outcome table) |
 | `delivery_queue.cljk` | `queue.cljc` (`cron/deliveries.db`, `deliveries` + bounded `delivery_tombstones`, enqueue/get-status/claim-row/claim-next/finish/recover) | done (JUN-1036 S5a; fencing answers verified by follow-up SELECT — same outcome single-writer; `job_json` keeps the legacy indent-2 layout, key order is the map's iteration order) |
 | `execution_ledger.cljk` *reads* | `cli.cljc` (runs-for, incidents-for: rows/incidents/ack over `cron/executions.db`) | done reads (JUN-1036 S4b; claim/finish/upsert/resolve writes stay S5) |
 | `execution_ledger.cljk` *writes* | `ledger.cljc` (`cron/executions.db`, executions + incidents DDL verbatim; claim (throws on active)/mark-handoff-pending/adopt-claimed/mark-running/finish (completed\|failed + 1000-row overflow drop)/set-delivery-outcome/incident upsert/get/ack/alerted/list/resolve/withheld gate) | done (JUN-1036 S5a; fencing verified by follow-up SELECT; no BEGIN IMMEDIATE — single-writer oracle, see notes) |
 | `gateway.cljk` | `gateway.cljc` (platform values, delivery transport, adapter/injection resolution, watcher send seam, send-transport!/route-key/identities/admission/coalesced/fan-in — pure core) | done (JUN-1036 S5b transport core + S5c fan-in with explicit flushes; background timers stay host-side) |
-| `homeassistant.cljk` | — | planned S6 |
-| `host.cljk` *node/file/env/process* | `io.cljc` | partial (files/env/clock/listing/pids/spawn done JUN-1036 S2a; + S5a: `now-micros-iso` (host-zone 6-digit fraction, the `iso-local` micros shape), `json-str-2` (indent-2, iteration order), `parse-iso-ms`, `kill-probe-alive?` (legacy kill(0) probe semantics), `sqlite-literal` numbers inline bare so REAL columns read back numeric) |
+| `homeassistant.cljk` | `homeassistant.cljc` (entity/service validators, blocked-domain gate, data coercion, payload builder, state/service/affected projections) | partial (shapes done JUN-1036 S6b-6, shared cases; fetch, JSON envelopes, tool dispatch stay S6) |
+| `host.cljk` *node/file/env/process* | `io.cljc` | partial (files/env/clock/listing/pids/spawn done JUN-1036 S2a; + S5a: `now-micros-iso` (host-zone 6-digit fraction, the `iso-local` micros shape), `json-str-2` (indent-2, iteration order), `parse-iso-ms`, `kill-probe-alive?` (legacy kill(0) probe semantics), `sqlite-literal` numbers inline bare so REAL columns read back numeric; bb sqlite3 goes over stdin (`spawn-sync!` `:input`) since Linux caps one argv at 128 KiB) |
 | `identity.cljk` ( FleetSeed/KDF/derive-key/did-of/parse-seed/key-id ) | `ed25519.cljc` (KDF + RFC 8032 expansion + clamped base-point multiply + did:key:z; host SHA-512/UTF-8 in `io.cljc` ) | done (JUN-1036 S4e; node `createPrivateKey` expansion reproduced exactly, oracle-checked) |
 | `loop.cljk` *agent turn loop* | `turn.cljc` (gate), `assembly.cljc` (history, wrap-up, turn limits) | partial (S2d assembly done; turn execution S2) |
 | `main.cljk` *CLI dispatch* | `cli.cljc` | partial (this table) |
 | `manifest.cljk` | `manifest.cljc` | done |
-| `mcp.cljk`, `mcp_http_client.mjs` | — | planned S6 |
+| `mcp.cljk` | `mcp.cljc` (protocol-version, enabled?, names-for, command-for, server-env, tool-name, tool-allowed?, handshake-lines, call-line, collect-call-results, collect-exchange-result, render-result + private rpc/expand/object-schema/glob) | partial (config selection + naming + allowlist + message shapes done JUN-1036 S6b-4/S6b-5, shared cases; stdio/HTTP exchange spawn, oauth-cache-ready, discover projection/call dispatch stay S6) |
 | `notepad.cljk` | `notepad.cljc` | done (JUN-1036 S4a; clear is ported, unwired — no CLI surface) |
-| `oauth.cljk` | — | planned S6 |
+| `oauth.cljk` | `oauth.cljc` (store-name only) | partial (JUN-1036 S6b-2; discovery/registration/token flows stay S6) |
 | `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; + S5d unit 1: did:key parse/valid/pub->did, signed envelopes + auth header, peers.edn read/write/add, ensure-rail, path rebase, bundle materialize/fetch, service-record projection/overlay, fetch mapping; + S5d unit 2: peer-info/discover/pick-peer/infer-peers/infer-via-peers/remote-run, seven serve routes + dispatch, local-gateway-complete, placement; socket/child-process/agent-loop/rails reads/health syscalls stay host-side) |
 | `pause.cljk` * | `pause.cljc` | done (JUN-1036 S3a) |
 | `platform_adapters.cljk` *lane adapters* | `adapters.cljc` (per-lane request builders + token-env/for-lane resolution + sync sends, error strings verbatim) | done (JUN-1036 S5c; env-only secrets, injected `:fetch`) |
@@ -118,7 +118,7 @@ from source, the rest follow the module name until their slice lands.
 | `provider.cljk` *chain/resolution* | `rail.cljc` (job target), `model.cljc` (display chain) | partial (live calls S2) |
 | `profile.cljk` *set-model-text* | `model.cljc` (verbatim port, throws as ex-info) | done for model/provider keys (JUN-1036 S3b) |
 | `quiet.cljk` | `quiet.cljc` (warn/diag/wake predicates, linger budget, turn-failed?, sync linger loop) | partial (predicates + 35 S2c cases JUN-1036 S2c; sync linger loop with injected fns JUN-1036 S5c; live registry waits stay host-side) |
-| `rails.cljk` | — | planned S3b |
+| `rails.cljk` | `rails.cljc` (small-model? / normalize-model-ids / detect-entries / all-models / agent-models / select-candidates) | partial (selection core done JUN-1036 S6b-3, shared cases; rails.edn read/write, the loopback probe, detect fan-out and complete's fetch loop stay S6) |
 | `soul.cljk` | `soul.cljc` (world/unit/role render + splice, limit, body guard) | done (JUN-1036 S4d) |
 | `tools.cljk` *tool registry* | `tools.cljc` (schemas table + toolsets + name/unsupported/approval/enabled/execution-disabled/runtime predicates) | partial (registry core done S6a; tool implementations + servers/processes + CLIs stay S6c/d) |
 | `tts.cljk` | — | planned S6 |
@@ -293,4 +293,150 @@ from source, the rest follow the module name until their slice lands.
   `runtime-tool-names` ports only the explicit 5-arity (the 4-arity
   reads the host PATH); the `computer_use` schema rides as inlined
   static data. Next: S6b clarify/collect/tts-shape/webguard-pure.
+- S6b-2 connections/dapps status surface — done (JUN-1036:
+  `dapps.cljc` registry pin + server table + resolve-checkout + status,
+  `oauth.cljc` store-name, `connections.cljc` connection-status +
+  auth-status; `:dapps` / `:connections` shared-case ops.
+  11 cases + 2 must-fail; 640 cases + 75 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon byte-identical —
+  see the evidence doc. Verified divergences:
+  - `store-name` clamps the 128-char cut (`subs` to the min length):
+    the legacy host (.cljk on Node) runs JS substring semantics, which
+    keep a short string whole; the clamping port matches on every
+    runner (bare `subs` throws on bb/JVM for short names).
+  - `env` is one merged map (the CLI passes the case env or the whole
+    process env, so production keeps the host fallbacks and cases stay
+    hermetic); `~` expands against HOME from that same map; the west
+    sibling joins with `/../..` (POSIX resolves it; only parsed
+    content is asserted).
+  - a configured server is answered as `mcp` even with `"mcp": false`
+    (the flag only admits unconfigured names), verbatim from the
+    legacy `or`.
+  Product `dapps`/`connections` command wiring, `with-servers` /
+  `select-servers` (MCP allowlist), install/authorize (config writes +
+  human approval) and the OAuth flows stay S6.)
+- S6b-3 local rail selection core — done (JUN-1036: `rails.cljc`
+  small-model? / normalize-model-ids / detect-entries / all-models /
+  agent-models / select-candidates with a `:rails` shared-case op.
+  19 cases + 2 must-fail; 659 cases + 77 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon byte-identical —
+  see the evidence doc. Verified divergences:
+  - `small-model?` answers a boolean (the legacy answers the re-find
+    match; every caller branches on truthiness, so values agree).
+  - the trailing `\b` is an explicit `[^A-Za-z0-9_]`-or-end guard:
+    regex `\b` never matches on bb (PORTABILITY.md); the legacy
+    leading position is unchanged (re-find, no anchor).
+  - `detect-entries` takes probed [port base ids] rows (injected, as
+    elsewhere); the live fan-out, probe, rails.edn IO and complete's
+    fetch loop stay S6.)
+- S6b-4 mcp config + allowlist + dapps run-wiring — done (JUN-1036:
+  `mcp.cljc` enabled? / names-for / command-for / server-env /
+  sanitize / tool-name / object-schema / filter-patterns / glob-match? /
+  tool-allowed? with a `:mcp` case op; `dapps.cljc` gains
+  with-servers / select-servers with `:dapps` verbs. 28 cases +
+  2 must-fail; 693 cases + 79 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon byte-identical —
+  see the evidence doc. Verified divergences:
+  - `with-servers` success path is FIXED, not verbatim: the legacy
+    threads `acc` twice (`(update acc ...)` inside `->`), so its
+    resolvable-server path always crashes with a 3-arg keyword call.
+    Only the keep/error branches ever ran in the legacy.
+  - `expand-string` is a hand scan, not str/replace-with-fn: what the
+    replacement fn receives is not the groups vector on every runner
+    (on Basilisp the key arrives nil and every variable renders
+    `${}`). Single pass, no rescan — the legacy replaceAll semantics.
+  - `names-for` sort/vec shape and the `mcp-` strip are verbatim; a
+    configured server stays `mcp` under `"mcp": false` (dapps rule).
+  Message shapes (rpc/handshake/call inputs, collect-results,
+  render-result, discover projection), exchange, oauth-cache-ready
+  and the dispatch stay S6 — shapes now done in S6b-5 below.)
+- S6b-5 mcp message shapes — done (JUN-1036: `mcp.cljc`
+  handshake-lines / call-line / collect-call-results /
+  collect-exchange-result / render-result with five `:mcp` verbs.
+  20 cases + 2 must-fail; 713 cases + 81 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon byte-identical —
+  see the evidence doc. Verified divergences: none — pure shape
+  port; error maps stay string-keyed like the legacy, collect fns
+  take string-keyed req maps (EDN-passed args have string keys).
+  Authoring notes (not divergences): unescaped `"` inside a
+  docstring breaks loading on every runner (fixed by rewording);
+  expected JSON strings are compact, Python-default spaced
+  separators fail identically everywhere. Exchange spawn,
+  oauth-cache-ready, discover projection and call dispatch stay S6.)
+- S6b-6 homeassistant arg shapes — done (JUN-1036:
+  `homeassistant.cljc` entity-id-error / service-error /
+  blocked-error / coerce-data / build-payload / project-states /
+  project-state / project-services / project-affected with a
+  `:homeassistant` case op. 26 cases + 2 must-fail; 739 cases +
+  83 must-fail green on basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208,
+  canon byte-identical — see the evidence doc. Verified
+  divergences: throwing guards answer reason strings (nil when
+  fine) instead of throwing, so refusals pin as data with no
+  host-dependent ex-message; validation order verbatim. Fetch,
+  JSON envelopes and tool dispatch stay S6.)
+- S6b-7 computer-use arg shapes — done (JUN-1036:
+  `computer_use.cljc` canon-keys / blocked-input? / select-window /
+  build-request / content-text / image-parts / result-error /
+  structured / error+success-result / action-request with a
+  `:computer-use` case op (ctx atom built from case data).
+  31 cases + 2 must-fail; 770 cases + 85 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon byte-identical —
+  see the evidence doc. Verified divergences: blocked-input?
+  answers a boolean (legacy answers the match; callers branch on
+  truthiness); throws pin as `{:crash static-message}`. Verbatim
+  quirks pinned: alt reports as option (alias table), empty text
+  wins over the result-error fallback. Driver spawn, capture/list
+  flows, approval and call dispatch stay S6.)
+- S6b-8 code-rpc shaping + hints — done (JUN-1036: `code_rpc.cljc`
+  tool-error / result-error / tool-errors-since / sandbox-tools-for /
+  terminal-blocked-params / missing-import-hint / failure-hint-rules /
+  failure-hint / hint-on-failure with a `:code-rpc` case op.
+  21 cases + 2 must-fail; 791 cases + 87 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon byte-identical —
+  see the evidence doc. Verified divergences: none — pure shape
+  port; the `…` marker is the literal U+2026. Shim-header /
+  tool-stubs / generate-hermes-tools, token check, dispatch, budget,
+  log and the serve loop stay S6.)
+- S6b-9 hermes_tools stub generation — done (JUN-1036:
+  `shim-header` / `tool-stubs` (byte-exact copy, BOM spliced as
+  `(char 65279)` — no `\u` escape in source) /
+  `generate-hermes-tools` with a `:code-rpc` verb. 2 full-output
+  cases + 1 must-fail; 793 cases + 88 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb 1.4.208, canon byte-identical —
+  see the evidence doc. Byte-identity to the legacy literals proven
+  by independent evaluation (`=` on both values). Token check,
+  dispatch, budget, log and the serve loop stay S6.)
+- S6b-10 finish-call dispatch tail — done (JUN-1036: `token-str` /
+  `make-state` / `finish-call!` (+ `args-preview`, `round-half-up`)
+  with `:code-rpc` verbs. 11 cases + 2 must-fail; 804 cases +
+  90 must-fail green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon
+  byte-identical — see the evidence doc. Verified divergences:
+  `round-half-up` is per-runner by construction (`Math/round` /
+  `js/Math.round` / `math.floor(x + 0.5)`); non-negative durations
+  only, where all three agree. Clock-derived durations are stripped
+  from shared-case comparisons; pinned are result, count, tool name
+  and the 80-char args preview (74-char truncation boundary pinned).
+  Token check, dispatch, budget enforcement and the serve loop
+  stay S6.)
+- S6b-11 transport-name + token-check tail — done (JUN-1036:
+  `token-ok?` / `duration-seconds` / `int-seq?` / `req-file?` /
+  `res-name` with `:code-rpc` verbs; `finish-call!` refactored onto
+  `duration-seconds`. 29 cases + 2 must-fail; 833 cases + 92
+  must-fail green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon
+  byte-identical — see the evidence doc. Verified divergences:
+  `int-seq?` uses numeric `==` (bb/SCI `=` is strict across
+  Long/Double); `token-ok?` accumulates with no early exit, NUL pad
+  via `(char 0)`; `res-name` width counts the sign, overflow never
+  truncates; half-up duration boundary pinned. Dispatch, budget
+  enforcement and the serve loop stay S6.)
+- S6b-12 handle-request gates + message-text — done (JUN-1036:
+  `refusal` / `terminal-args` / `message-text` with `:code-rpc`
+  verbs. 10 cases + 2 must-fail; 843 cases + 94 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical — see
+  the evidence doc. Verified divergences: `refusal` returns the
+  `tool-error` JSON envelope (bare-message expects rejected by all
+  three); allow-list gate precedes budget gate; `""` stays `""`.
+  `finish-call!`'s catch still uses `(str e)` — no EDN value makes
+  `json-str` throw, so that path awaits a host-side probe. Async
+  `dispatch-call!` branching and the serve loop stay S6.)
 - S6 tools (rest): backends + bridge/chat/vault/mcp/dapps CLIs.

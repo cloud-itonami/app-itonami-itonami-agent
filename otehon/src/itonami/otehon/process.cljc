@@ -337,14 +337,35 @@
        (str (subs one-line 0 (dec limit)) "…")
        one-line))))
 
-(defn- redact-command
-  "Mask inline credentials so they never reach transcripts."
+(defn redact-command
+  "Mask inline credentials so they never reach transcripts. Public so
+  the shared cases can pin the masking on every runner: token edges
+  avoid word-boundary `\\b` (never matches on the bb runner) and use
+  explicit guards instead."
   [command]
   (-> (str command)
       (str/replace #"://[^/@\s]+:[^/@\s]*@" "://[redacted]@")
-      (str/replace #"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+" "Bearer [redacted]")
-      (str/replace #"(?i)(^|[?&\s])([A-Za-z0-9_-]*(?:token|api[-_]?key|secret|password|passwd|pwd)[A-Za-z0-9_-]*[=:\s]+)[^\s\"']+"
-                   "$1$2[redacted]")))
+      ;; The replacement fn takes the whole match (a vector on most
+      ;; runners, the bare string on bb/SCI): never `$1` (unexpanded on
+      ;; bb) and never `\b` (never matches on bb). Boundaries are
+      ;; parsed by hand below (char sets only) for the same reason.
+      (str/replace #"(?i)(?:^|[^A-Za-z0-9_])Bearer\s+[A-Za-z0-9._~+/=-]+"
+                   (fn [m] (let [s (if (sequential? m) (first m) m)
+                                  b (re-find #"^[^A-Za-z0-9_]" s)]
+                              (str (or b "") "Bearer [redacted]"))))
+      (str/replace #"(?i)(?:^|[?&\s])[A-Za-z0-9_-]*(?:token|api[-_]?key|secret|password|passwd|pwd)[A-Za-z0-9_-]*[=:\s]+[^\s\"']+"
+                   (fn [m] (let [s (if (sequential? m) (first m) m)
+                                  n (count s)
+                                  pre-end (if (contains? #{\? \& \space \tab \newline \return} (nth s 0)) 1 0)
+                                  sep? (fn [ch] (contains? #{\= \: \space \tab \newline \return} ch))]
+                              (loop [i pre-end]
+                                (if (>= i n)
+                                  (str s "[redacted]")
+                                  (if (sep? (nth s i))
+                                    (let [j (loop [k (inc i)]
+                                              (if (and (< k n) (sep? (nth s k))) (recur (inc k)) k))]
+                                      (str (subs s 0 j) "[redacted]"))
+                                    (recur (inc i))))))))))
 
 (defn- redacted-output-tail
   "The last `limit` chars of the output buffer through the redactors."

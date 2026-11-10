@@ -515,11 +515,12 @@
 (defn spawn-sync!
   "Run argv with no shell, capturing stdout/stderr as text. `opts`:
   :cwd, :timeout-ms (default 180000), :env (merged over this process's
-  env unless :exact-env?). Returns {:exit :stdout :stderr :timed-out?}.
+  env unless :exact-env?), :input (string fed on stdin; absent inherits).
+  Returns {:exit :stdout :stderr :timed-out?}.
   Never throws on a non-zero exit; a spawn failure reads exit -1 with the
   error message in stderr (the legacy run-process contract: ETIMEDOUT
   marks :timed-out?, anything else does not)."
-  [argv {:keys [cwd timeout-ms env exact-env?]}]
+  [argv {:keys [cwd timeout-ms env exact-env? input]}]
   (let [ms (or timeout-ms 180000)
         full-env (if exact-env? (or env {}) (merge (all-env) (or env {})))]
     #?(:lpy (let [merged (python/dict)]
@@ -529,7 +530,9 @@
                                  ** :capture_output true :text true
                                  :encoding "utf-8" :errors "replace"
                                  :timeout (/ ms 1000.0)
-                                 :cwd cwd :env merged)]
+                                 :cwd cwd :env merged
+                                 ;; nil (absent) inherits stdin, as before.
+                                 :input (if (nil? input) nil (str input)))]
                   {:exit (.-returncode r) :stdout (str (.-stdout r)) :stderr (str (.-stderr r)) :timed-out? false})
                 (catch python/Exception e
                   (let [expired? (boolean (re-find #"TimeoutExpired" (str (type e))))]
@@ -544,7 +547,8 @@
                 (try
                   (let [p (start (vec argv) (cond-> {:out :string :err :string}
                                              cwd (assoc :dir (str cwd))
-                                             true (assoc :env full-env)))
+                                             true (assoc :env full-env)
+                                             (some? input) (assoc :in (str input))))
                         r (deref p ms ::timeout)]
                     (if (= ::timeout r)
                       (do (destroy p)
@@ -555,7 +559,8 @@
        :cljs (let [cp (js/require "child_process")
                    r (try (.spawnSync cp (first argv) (clj->js (rest argv))
                                       (clj->js (cond-> {:encoding "utf8" :timeout ms :env full-env}
-                                                 cwd (assoc :cwd (str cwd)))))
+                                                 cwd (assoc :cwd (str cwd))
+                                                 (some? input) (assoc :input (str input)))))
                           (catch :default e {:error e}))]
                (if-let [err (:error r)]
                  {:exit -1 :stdout "" :stderr (str (.-message err)) :timed-out? false}
@@ -613,9 +618,12 @@
                                  (js->clj (.keys js/Object r)))))
                        (js->clj rows)))
                (finally (.close db))))
-     :clj (let [r (spawn-sync! ["sqlite3" "-json" "-readonly" (str db-path)
-                                (sqlite-inline sql params)]
-                               {:timeout-ms 30000})]
+     :clj (let [r (spawn-sync! ["sqlite3" "-json" "-readonly" (str db-path)]
+                               {:timeout-ms 30000
+                                ;; The whole script as one argv hits the
+                                ;; Linux 128 KiB single-argument cap on
+                                ;; large seeds; stdin has no such cap.
+                                :input (sqlite-inline sql params)})]
             (if (zero? (:exit r))
               (let [out (str/trim (:stdout r))]
                 (if (str/blank? out) [] (parse-json out)))
@@ -638,7 +646,8 @@
              (try
                (.exec db script)
                (finally (.close db))))
-     :clj (let [r (spawn-sync! ["sqlite3" (str db-path) script] {:timeout-ms 30000})]
+     :clj (let [r (spawn-sync! ["sqlite3" (str db-path)]
+                               {:timeout-ms 30000 :input script})]
             (when-not (zero? (:exit r))
               (throw (ex-info (str "sqlite3 failed: " (str/trim (:stderr r)))
                               {:db db-path}))))))
@@ -659,8 +668,9 @@
                (let [stmt (.prepare db sql)]
                  (.apply (.-run stmt) stmt (clj->js (vec params))))
                (finally (.close db))))
-     :clj (let [r (spawn-sync! ["sqlite3" (str db-path) (sqlite-inline sql params)]
-                               {:timeout-ms 30000})]
+     :clj (let [r (spawn-sync! ["sqlite3" (str db-path)]
+                               {:timeout-ms 30000
+                                :input (sqlite-inline sql params)})]
             (when-not (zero? (:exit r))
               (throw (ex-info (str "sqlite3 failed: " (str/trim (:stderr r)))
                               {:db db-path}))))))
