@@ -150,7 +150,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -203,6 +203,7 @@
     :homeassistant (ops-homeassistant c)
     :computer-use (ops-computer-use c)
     :code-rpc (ops-code-rpc c)
+    :doctor-kinds (ops-doctor-kinds c)
     :confine (ops-confine c scratch)
     :send (ops-send c)
     :peer (ops-peer c scratch)
@@ -930,6 +931,15 @@
                        :hy-deps (hy-deps prof env)
                        :probes {:file? hio/file? :symlink? hio/symlink?}})]
         (doctor/render findings)))))
+
+(defn- ops-doctor-kinds [c]
+  (let [[verb arg arg2 arg3 arg4 arg5 arg6 arg7] (:call c)]
+    {:value (case verb
+              "toolsets" (doctor/toolset-findings arg arg2 arg3 arg4)
+              "tools" (doctor/tool-findings arg arg2 arg3 arg4 arg5 arg6 arg7)
+              "browser" (doctor/browser-findings arg arg2 arg3)
+              "oauth" (doctor/oauth-findings arg arg2 arg3)
+              (throw (ex-info (str "doctor-kinds: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-doctor [c scratch]
   (let [dir (scratch-case-dir scratch c)]

@@ -4,10 +4,14 @@
   kotoba-job-issues) plus platform_adapters/token-env-name and
   cron.cljk (script-runtime-issues, hy-dependencies shape).
   Read-only: nothing is started and no profile changes.
-  Toolset/browser/oauth finding kinds stay slice S6 (they need the S6
-  registries); only their S6-free neighbours are reported here."
+  The toolset/tool/browser/oauth finding kinds below are the pure S6
+  units (S6d): host availability (CDP endpoint, browser/computer CLIs,
+  oauth cache) arrives as explicit inputs, exactly as the runners'
+  probes arrive for script checks. Wiring them into job-findings
+  stays S6 (host probes undecided)."
   (:require [clojure.string :as str]
-            [itonami.otehon.exec :as exec]))
+            [itonami.otehon.exec :as exec]
+            [itonami.otehon.tools :as tools]))
 
 (def token-env-defaults
   "The env var each lane's token comes from when delivery.<lane>.token_env
@@ -136,6 +140,68 @@
     (vec (concat readiness
                  (keep identity [model-issue db-issue pause-note])
                  token-issues))))
+
+(defn toolset-findings
+  "Unsupported-toolset findings for one job's requested toolsets.
+  Verbatim from main.cljk (kotoba-job-issues): unknown sets are named,
+  `no-agent?` jobs skip the check (a peer turn runs no tools)."
+  [requested-sets server-names dapps-toolset no-agent?]
+  (when-not no-agent?
+    (let [bad (tools/unsupported-toolsets
+               (vec requested-sets)
+               (conj (set server-names) dapps-toolset))]
+      (when (seq bad)
+        [{:code :unsupported_toolset :detail (str/join ", " bad)}]))))
+
+(defn tool-findings
+  "Unsupported-tool findings for one job. Verbatim from main.cljk
+  (kotoba-job-issues) via loop.cljk: the runtime tool names plus the
+  MCP names, minus the MCP names again (a tool the MCP index serves
+  is supported by definition), then the unsupported remainder.
+  Availability arrives as plain booleans (host probes, S6)."
+  [requested disabled cdp? browser-cli? computer-cli? mcp-names no-agent?]
+  (when-not no-agent?
+    (let [names (into (tools/runtime-tool-names
+                       (vec requested) (vec disabled)
+                       (boolean cdp?) (boolean browser-cli?)
+                       (boolean computer-cli?))
+                      (vec mcp-names))
+          bad (tools/unsupported-tools (remove (set mcp-names) names))]
+      (when (seq bad)
+        [{:code :unsupported_tools :detail (str/join ", " bad)}]))))
+
+(defn browser-findings
+  "Backend findings for browser tool use. Verbatim from main.cljk
+  (kotoba-job-issues): only local Chrome is supported, so a selected
+  browser tool on any other backend (or a non-auto/chrome engine) is
+  named. `cdp?` is the configured-endpoint boolean (host, S6)."
+  [enabled-tools browser-config cdp?]
+  (let [browser-config (or browser-config {})
+        selected? (boolean (some (set tools/browser-tools)
+                                 (or enabled-tools [])))
+        backend (or (get browser-config "backend") "local")
+        provider (get browser-config "cloud_provider")
+        engine (get browser-config "engine")]
+    (when (and selected?
+               (or (not= backend "local") provider cdp?
+                   (and engine (not (contains? #{"auto" "chrome"} engine)))))
+      [{:code :unsupported_browser_backend
+        :detail "Kotoba browser supports local Chrome only"}])))
+
+(defn oauth-findings
+  "OAuth findings for the selected MCP servers. Verbatim from
+  main.cljk (kotoba-job-issues): a selected server whose config has a
+  URL with oauth auth but no ready cache entry is named. Readiness
+  arrives as the set of ready server names (host disk reads, S6)."
+  [selected-mcp servers ready-names]
+  (let [ready (set ready-names)
+        unready (filter #(let [s (get servers % {})]
+                           (and (get s "url")
+                                (= "oauth" (get s "auth"))
+                                (not (contains? ready %))))
+                        (or selected-mcp []))]
+    (when (seq unready)
+      [{:code :oauth_cache_unavailable :detail (str/join ", " unready)}])))
 
 (defn render
   "Findings to CLI lines + exit: named lines plus the count, or \"ok\"."
