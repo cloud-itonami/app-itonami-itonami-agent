@@ -61,6 +61,8 @@
             [itonami.otehon.clarify :as clarify]
             [itonami.otehon.webguard :as webguard]
             [itonami.otehon.browser :as browser]
+            [itonami.otehon.browser-cloud :as browser-cloud]
+            [itonami.otehon.browser-provider :as browser-provider]
             [itonami.otehon.vault :as vault]
             [itonami.otehon.dapps :as dapps]
             [itonami.otehon.oauth :as oauth]
@@ -152,7 +154,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -199,6 +201,8 @@
     :webguard (ops-webguard c)
     :vault (ops-vault c)
     :browser (ops-browser c)
+    :browser-cloud (ops-browser-cloud c)
+    :browser-provider (ops-browser-provider c)
     :process (ops-process c)
     :dapps (ops-dapps c scratch)
     :connections (ops-connections c scratch)
@@ -2858,6 +2862,28 @@
               "clamp" (browser/clamp-timeout arg)
               "shot" (browser/screenshot-path arg (browser-file-stub arg2))
               (throw (ex-info (str "browser: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-browser-cloud [c]
+  (let [[verb arg arg2 arg3 arg4 arg5] (:call c)]
+    {:value (case verb
+              "name" (browser-cloud/session-name arg arg2)
+              "bb-config" (browser-cloud/browserbase-config arg arg2 arg3)
+              "bu-config" (browser-cloud/browser-use-config arg)
+              "payload" (browser-cloud/browserbase-payload arg arg2)
+              "downgrade" (browser-cloud/downgrade-payload arg)
+              "features" (browser-cloud/browserbase-features arg arg2 arg3 arg4 arg5)
+              "bb-session" (browser-cloud/browserbase-session arg arg2 arg3)
+              "bu-session" (browser-cloud/browser-use-session arg arg2)
+              "bb-close" (browser-cloud/browserbase-close arg arg2)
+              "bu-close" (browser-cloud/browser-use-close arg arg2)
+              (throw (ex-info (str "browser-cloud: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-browser-provider [c]
+  (let [[verb arg arg2 arg3] (:call c)]
+    {:value (case verb
+              "normalize" (browser-provider/normalize-provider arg)
+              "resolve" (browser-provider/resolve-provider arg arg2 arg3)
+              (throw (ex-info (str "browser-provider: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-process [c]
   (let [[verb arg] (:call c)]

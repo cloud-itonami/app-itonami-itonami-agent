@@ -84,8 +84,8 @@ from source, the rest follow the module name until their slice lands.
 | module | twin | status |
 |---|---|---|
 | `browser.cljk` *browser tools* | `browser.cljc` (secret-url? / allowed-host? / parse-connect-target / scrub-output / redact-cdp-output / clamp-timeout / screenshot-path, `:browser` op; DNS pinning, sockets, servers, spawn, config write, clock, file check stay S6) | partial (policy core done JUN-1036 S6b-16, shared cases; proxy/CDP/CLI wiring stays S6) |
-| `browser_cloud.cljk` | — | planned S6 |
-| `browser_provider.cljk` | — | planned S6 |
+| `browser_cloud.cljk` | `browser_cloud.cljc` (session-name / bb/bu-config / payload / downgrade / features / session records / close specs) | partial (shapes done JUN-1036 S6b-17, shared cases; env reads, fetch, 402 loop, registration stay S6) |
+| `browser_provider.cljk` | `browser_provider.cljc` (normalize / resolve over explicit registry + availability witness) | partial (resolution done JUN-1036 S6b-17, shared cases; registry atom, probes, lifecycle dispatch stay S6) |
 | `chat_platform.cljk` | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply, sync) | done (JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in) |
 | `clarify.cljk` | — | planned S6 |
 | `code_rpc.cljk` | `code_rpc.cljc` (tool-error, result-error, tool-errors-since, sandbox-tools-for, terminal-blocked-params, missing-import-hint, failure-hint-rules, failure-hint, hint-on-failure) | partial (shaping + hints done JUN-1036 S6b-8, shared cases; shim-header/tool-stubs/generate-hermes-tools, token check, dispatch, budget, log, serve loop stay S6) |
@@ -494,4 +494,18 @@ from source, the rest follow the module name until their slice lands.
   splice is explicit with a plain-string replacement. DNS pinning,
   sockets, the proxy/CDP servers, process spawn, the config-file
   write, clock reads and the `browser` wiring stay S6.)
+- S6b-17 cloud provider shapes — done (JUN-1036:
+  `browser-cloud`: session-name / bb/bu-config / payload /
+  downgrade-payload (one 402 step) / features / session records /
+  close specs; `browser-provider`: normalize-provider /
+  resolve-provider over an explicit registry snapshot + availability
+  witness (names resolve; records stay host-side). `:browser-cloud`
+  + `:browser-provider` verbs. 24 cases + 3 must-fail; 918 cases +
+  105 must-fail green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon
+  byte-identical — see the evidence doc. Verified divergences:
+  none — "Local" (capital) falls to auto-detect while "local" is
+  nil, pinned; explicit-but-unregistered falls back to auto-detect,
+  pinned; an explicit-but-unavailable name still wins, pinned.
+  Env reads, random-hex, fetch, the 402 retry loop, registration
+  and lifecycle dispatch stay S6.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.
