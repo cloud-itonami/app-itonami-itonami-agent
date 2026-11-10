@@ -51,6 +51,11 @@ CLI route は selfhost 資格未取得であり、移行完了まで起動手順
 
 ## awai fs storage — local agent 共通退避先（2026-11-08〜）
 
+> 位置づけ（2026-11-10、[AWAI-161](https://linear.app/kotobalabs/issue/AWAI-161)）:
+> 以下は legacy **Awai Object Storage**（JuiceFS + B2 + restic による退避経路）の
+> 運用メモであり、Awai FS native format（Storage v2）の設計ではない。
+> 運用自体の変更は含まない（[AWAI-1512](https://linear.app/kotobalabs/issue/AWAI-1512)）。
+
 ローカル開発の容量枯渇に使う共通 storage。local agent（itonami-agent 含む）は
 退避先としてここを記録し、個別の B2 prefix や restic repo を増やさない:
 
