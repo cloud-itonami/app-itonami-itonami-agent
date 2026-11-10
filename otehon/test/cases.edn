@@ -4597,4 +4597,120 @@ Output since last heartbeat:
   {:id :mcp/discover-input-schema :op :mcp
    :call ["discover" {"mcp_servers" {"x" {}}} ["x"] {"x" {"tools" [{"name" "t" "input_schema" {"properties" {"p" {}}}}]}}]
    :expect {:value {:schemas [{"type" "function" "function" {"name" "mcp__x__t" "description" "MCP tool t from x" "parameters" {"type" "object" "properties" {"p" {}} "required" []}}}] :index {"mcp__x__t" ["x" "t"]} :errors []}}}
+  ;; ------------------------------------------------------------ AWAI-543 store-fs (hot stays local)
+  {:id :store-fs/storage-ok :op :store-fs
+   :call ["storage-verdict" "awai-fs"]
+   :expect {:value "storage/ok"}}
+  {:id :store-fs/storage-local :op :store-fs
+   :call ["storage-verdict" ""]
+   :expect {:value "storage/local-only"}}
+  {:id :store-fs/storage-unknown :op :store-fs
+   :call ["storage-verdict" "b2-direct"]
+   :expect {:value "storage/unknown-backend"}}
+  {:id :store-fs/fs-status :op :store-fs
+   :call ["fs-route-code" "status"]
+   :expect {:value 2}}
+  {:id :store-fs/fs-usage :op :store-fs
+   :call ["fs-route-code" ""]
+   :expect {:value 1}}
+  {:id :store-fs/fs-unknown :op :store-fs
+   :call ["fs-route-code" "mountpoint"]
+   :expect {:value 0}}
+  {:id :store-fs/tier-hot :op :store-fs
+   :call ["tier-for" "worktree"]
+   :expect {:value "tier/hot"}}
+  {:id :store-fs/tier-warm :op :store-fs
+   :call ["tier-for" "evidence"]
+   :expect {:value "tier/warm"}}
+  {:id :store-fs/tier-cold :op :store-fs
+   :call ["tier-for" "snapshot"]
+   :expect {:value "tier/cold"}}
+  {:id :store-fs/tier-unknown :op :store-fs
+   :call ["tier-for" "socket"]
+   :expect {:value "tier/unknown"}}
+  {:id :store-fs/mount-hot-false :op :store-fs
+   :call ["mount-required?" "tier/hot"]
+   :expect {:value false}}
+  {:id :store-fs/mount-warm-true :op :store-fs
+   :call ["mount-required?" "tier/warm"]
+   :expect {:value true}}
+  {:id :store-fs/placement-hot-local :op :store-fs
+   :call ["placement-verdict" "worktree" "awai-fs"]
+   :expect {:value "placement/hot-local"}}
+  {:id :store-fs/placement-awai-fs :op :store-fs
+   :call ["placement-verdict" "evidence" "awai-fs"]
+   :expect {:value "placement/awai-fs"}}
+  {:id :store-fs/placement-needs-fs :op :store-fs
+   :call ["placement-verdict" "evidence" ""]
+   :expect {:value "placement/needs-awai-fs"}}
+  {:id :store-fs/placement-unknown-backend :op :store-fs
+   :call ["placement-verdict" "evidence" "b2-direct"]
+   :expect {:value "placement/unknown-backend"}}
+  ;; ------------------------------------------------------------ AWAI-543 query-plan (sqlite over awai fs)
+  {:id :qplan/notepad-point :op :query-plan
+   :q {"table" "cron_notepad" "where" {"job_id" "j1" "key" "k1"}}
+   :expect {:plan {"layer" "point" "reason" "pk" "table" "cron_notepad"}}}
+  {:id :qplan/delivery-point :op :query-plan
+   :q {"table" "deliveries" "where" {"execution_id" "e1"}}
+   :expect {:plan {"layer" "point" "reason" "pk" "table" "deliveries"}}}
+  {:id :qplan/ledger-point :op :query-plan
+   :q {"table" "executions" "where" {"id" "x1"}}
+   :expect {:plan {"layer" "point" "reason" "pk" "table" "executions"}}}
+  {:id :qplan/pending-index :op :query-plan
+   :q {"table" "deliveries" "where" {"status" "pending"} "order" ["status" "created_at" "execution_id"]}
+   :expect {:plan {"layer" "index-scan" "reason" "covering-index" "table" "deliveries" "index" "pending-created"}}}
+  {:id :qplan/job-claimed-index :op :query-plan
+   :q {"table" "executions" "where" {"job_id" "j1"} "order" ["job_id" "claimed_at" "id"]}
+   :expect {:plan {"layer" "index-scan" "reason" "covering-index" "table" "executions" "index" "job-claimed"}}}
+  {:id :qplan/range-prune :op :query-plan
+   :q {"table" "executions" "where" {"job_id" "j1"} "range" {"col" "claimed_at" "op" ">="}}
+   :expect {:plan {"layer" "range-prune" "reason" "declared-range" "table" "executions" "col" "claimed_at"}}}
+  {:id :qplan/range-without-index :op :query-plan
+   :q {"table" "cron_notepad" "where" {"job_id" "j1"} "range" {"col" "value" "op" ">="}}
+   :expect {:plan {"layer" "refused" "reason" "range-without-index" "table" "cron_notepad" "col" "value"}}}
+  {:id :qplan/full-scan-refused :op :query-plan
+   :q {"table" "executions" "where" {"error" "boom"}}
+   :expect {:plan {"layer" "refused" "reason" "full-scan" "table" "executions"}}}
+  {:id :qplan/unknown-table :op :query-plan
+   :q {"table" "sessions" "where" {"id" "s1"}}
+   :expect {:plan {"layer" "refused" "reason" "unknown-table" "table" "sessions"}}}
+  ;; ------------------------------------------------------------ AWAI-543 scan-budget (counts, never wall clock)
+  {:id :budget/within :op :scan-budget
+   :call ["check"]
+   :budget {"max-blocks" 10 "max-bytes" 1000 "max-matches" 10}
+   :stats {"blocks" 2 "bytes" 200 "matches" 3 "round-trips" 2}
+   :expect {"ok" true "reason" "within-budget"}}
+  {:id :budget/exact-max-ok :op :scan-budget
+   :call ["check"]
+   :budget {"max-blocks" 2 "max-bytes" 200 "max-matches" 3}
+   :stats {"blocks" 2 "bytes" 200 "matches" 3 "round-trips" 2}
+   :expect {"ok" true "reason" "within-budget"}}
+  {:id :budget/over-blocks :op :scan-budget
+   :call ["check"]
+   :budget {"max-blocks" 1 "max-bytes" 1000 "max-matches" 10}
+   :stats {"blocks" 2 "bytes" 200 "matches" 1 "round-trips" 2}
+   :expect {"ok" false "reason" "over-blocks"}}
+  {:id :budget/over-bytes :op :scan-budget
+   :call ["check"]
+   :budget {"max-blocks" 10 "max-bytes" 100 "max-matches" 10}
+   :stats {"blocks" 2 "bytes" 200 "matches" 1 "round-trips" 2}
+   :expect {"ok" false "reason" "over-bytes"}}
+  {:id :budget/over-matches :op :scan-budget
+   :call ["check"]
+   :budget {"max-blocks" 10 "max-bytes" 1000 "max-matches" 2}
+   :stats {"blocks" 2 "bytes" 200 "matches" 3 "round-trips" 2}
+   :expect {"ok" false "reason" "over-matches"}}
+  {:id :budget/add-read :op :scan-budget
+   :call ["add-read" 1 200]
+   :stats {"blocks" 1 "bytes" 100 "matches" 0 "round-trips" 1}
+   :expect {"blocks" 2 "bytes" 300 "matches" 0 "round-trips" 2}}
+  {:id :budget/add-matches :op :scan-budget
+   :call ["add-matches" 3]
+   :stats {"blocks" 2 "bytes" 300 "matches" 0 "round-trips" 2}
+   :expect {"blocks" 2 "bytes" 300 "matches" 3 "round-trips" 2}}
+  {:id :budget/over-flag :op :scan-budget
+   :call ["over-budget?"]
+   :budget {"max-blocks" 1 "max-bytes" 1000 "max-matches" 10}
+   :stats {"blocks" 2 "bytes" 10 "matches" 0 "round-trips" 2}
+   :expect {:value true}}
 ]}]

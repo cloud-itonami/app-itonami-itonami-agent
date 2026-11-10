@@ -427,4 +427,15 @@
   {:id :must-fail/mcp-wrong-discover-errors :op :mcp
    :call ["discover" {"mcp_servers" {"x" {}}} ["x"] {"x" {:error "down"}}]
    :expect {:value {:schemas [] :index {} :errors []}}}
+  {:id :must-fail/store-fs-wrong-tier :op :store-fs
+   :call ["tier-for" "evidence"]
+   :expect {:value "tier/hot"}}
+  {:id :must-fail/qplan-wrong-layer :op :query-plan
+   :q {"table" "executions" "where" {"error" "boom"}}
+   :expect {:plan {"layer" "point" "reason" "pk" "table" "executions"}}}
+  {:id :must-fail/budget-wrong-ok :op :scan-budget
+   :call ["check"]
+   :budget {"max-blocks" 1 "max-bytes" 1000 "max-matches" 10}
+   :stats {"blocks" 2 "bytes" 200 "matches" 1 "round-trips" 2}
+   :expect {"ok" true "reason" "within-budget"}}
 ]}]

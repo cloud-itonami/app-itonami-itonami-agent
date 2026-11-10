@@ -98,7 +98,10 @@
             [itonami.otehon.watcher :as watcher]
             [itonami.otehon.adapters :as adapters]
             [itonami.otehon.chat :as chat]
-            [itonami.otehon.tools :as tools]))
+            [itonami.otehon.tools :as tools]
+            [itonami.otehon.store-fs :as store-fs]
+            [itonami.otehon.query-plan :as query-plan]
+            [itonami.otehon.scan-budget :as scan-budget]))
 
 ;; ---------------------------------------------------------------- canonical print
 
@@ -313,7 +316,24 @@
                       "split" (text/split (first args) (second args))
                       "split-lines" (text/split-lines (first args))
                       "replace" (text/replace (first args) (second args) (nth args 2))
-                      (throw (ex-info (str "text: unknown fn " f) {:fn f})))})))
+                      (throw (ex-info (str "text: unknown fn " f) {:fn f})))})
+    :store-fs (let [[f & args] (:call c)]
+                {:value (case f
+                          "storage-verdict" (store-fs/storage-verdict (first args))
+                          "fs-route-code" (store-fs/fs-route-code (first args))
+                          "fs-usage-line-count" (store-fs/fs-usage-line-count (first args))
+                          "tier-for" (store-fs/tier-for (first args))
+                          "mount-required?" (store-fs/mount-required? (first args))
+                          "placement-verdict" (store-fs/placement-verdict (first args) (second args))
+                          (throw (ex-info (str "store-fs: unknown fn " f) {:fn f})))})
+    :query-plan {:plan (query-plan/plan (:q c {}))}
+    :scan-budget (let [[f & args] (:call c)]
+                   (case f
+                     "check" (scan-budget/check (:budget c {}) (:stats c {}))
+                     "over-budget?" {:value (scan-budget/over-budget? (:budget c {}) (:stats c {}))}
+                     "add-read" (scan-budget/add-read (:stats c {}) (first args) (second args))
+                     "add-matches" (scan-budget/add-matches (:stats c {}) (first args))
+                     (throw (ex-info (str "scan-budget: unknown fn " f) {:fn f}))))))
 
 (defn- satisfied? [c got]
   (let [want (:expect c)]
