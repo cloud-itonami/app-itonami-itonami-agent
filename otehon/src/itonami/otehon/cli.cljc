@@ -2830,6 +2830,8 @@
               "secret" (vault/secret arg arg2 arg3)
               "list" (vault/list-rows arg)
               "format" (vault/format-row arg)
+              "totp" (vault/mint-totp arg arg2)
+              "base32" (vault/base32-decode arg)
               (throw (ex-info (str "vault: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-process [c]

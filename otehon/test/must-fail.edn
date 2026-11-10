@@ -379,4 +379,10 @@
   {:id :must-fail/vault-wrong-remove :op :vault
    :call ["remove" {"vh-a" {"label" "Work"}} "vh-a"]
    :expect {:value {:store {} :removed false}}}
+  {:id :must-fail/vault-wrong-totp :op :vault
+   :call ["totp" "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" 59000]
+   :expect {:value "000000"}}
+  {:id :must-fail/vault-bad-seed :op :vault
+   :call ["totp" "NOT-BASE32!!" 59000]
+   :expect {:value "287082"}}
 ]}]

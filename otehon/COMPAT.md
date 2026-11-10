@@ -122,7 +122,7 @@ from source, the rest follow the module name until their slice lands.
 | `soul.cljk` | `soul.cljc` (world/unit/role render + splice, limit, body guard) | done (JUN-1036 S4d) |
 | `tools.cljk` *tool registry* | `tools.cljc` (schemas table + toolsets + name/unsupported/approval/enabled/execution-disabled/runtime predicates) | partial (registry core done S6a; tool implementations + servers/processes + CLIs stay S6c/d) |
 | `tts.cljk` | — | planned S6 |
-| `vault.cljk` | `vault.cljc` (store core: login-meta / add / remove / secret / list / format verbs) | partial (store core done JUN-1036 S6b-14, shared cases; AES file, handle generation, TOTP minting, CLI wiring stay S6) |
+| `vault.cljk` | `vault.cljc` (store core + TOTP: login-meta / add / remove / secret / list / format / totp / base32 verbs) | partial (store core done JUN-1036 S6b-14, TOTP done S6b-15, shared cases; AES file, handle generation, CLI wiring stay S6) |
 | `watcher.cljk` | — | planned S5 |
 | `webguard.cljk` | — | planned S6 |
 | `yaml.cljk` | `yaml.cljc` | done |
@@ -464,4 +464,17 @@ from source, the rest follow the module name until their slice lands.
   no-such-handle contract. AES-256-GCM file, 0600 key file, `vh-` +
   random handle generation, the stdin password read, TOTP minting and
   the `vault` command wiring stay S6.)
+- S6b-15 vault TOTP minting — done (JUN-1036: pure SHA-1 /
+  HMAC-SHA1 / base32-decode / `mint-totp` (RFC 6238, 6 digits, 30s
+  step, explicit `now-ms`) with `:vault` verbs (`totp` / `base32`).
+  4 cases + 2 must-fail; 871 cases + 100 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical — see
+  the evidence doc. Verified divergences: none — RFC 6238 vectors
+  cross-checked against node:crypto HMAC-SHA1; host bit-op
+  sign-extension (nbb int32 coercion) neutralized by masked word
+  ops (`land` / `lor` / `lxor`) and a product-split `rotl32`, all
+  products below 2^32; invalid seeds throw the legacy message.
+  AES-256-GCM file, 0600 key file, `vh-` + random handle
+  generation, the stdin password read, the default clock and the
+  `vault` command wiring stay S6.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

@@ -4320,4 +4320,16 @@ Output since last heartbeat:
   {:id :vault/format :op :vault
    :call ["format" ["vh-a" {"username" "ako" "origin" "https://x" "label" "Work"}]]
    :expect {:value "vh-a          ako                 https://x  Work"}}
+  {:id :vault/totp-59 :op :vault
+   :call ["totp" "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" 59000]
+   :expect {:value "287082"}}
+  {:id :vault/totp-1111111109 :op :vault
+   :call ["totp" "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" 1111111109000]
+   :expect {:value "081804"}}
+  {:id :vault/totp-1234567890 :op :vault
+   :call ["totp" "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" 1234567890000]
+   :expect {:value "005924"}}
+  {:id :vault/base32-tolerant :op :vault
+   :call ["base32" "gezdgnbvgy3tqojq====\n"]
+   :expect {:value [49 50 51 52 53 54 55 56 57 48]}}
 ]}]
