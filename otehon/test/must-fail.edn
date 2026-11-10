@@ -391,4 +391,13 @@
   {:id :must-fail/browser-wrong-connect :op :browser
    :call ["connect" "h:99999" nil]
    :expect {:value {:host "h" :port 99999}}}
+  {:id :must-fail/bcloud-wrong-payload :op :browser-cloud
+   :call ["payload" "pid" {:keep-alive? true :proxies? true :stealth? false :timeout 60}]
+   :expect {:value {"projectId" "pid" "keepAlive" true "timeout" 30 "proxies" true}}}
+  {:id :must-fail/bcloud-wrong-close :op :browser-cloud
+   :call ["bb-close" {"base_url" "https://api.browserbase.com" "api_key" "k" "project_id" "p"} "sid"]
+   :expect {:value {:method "DELETE" :url "https://api.browserbase.com/v1/sessions/sid" :headers {"X-BB-API-Key" "k" "Content-Type" "application/json"} :body {"projectId" "p" "status" "REQUEST_RELEASE"}}}}
+  {:id :must-fail/bprovider-wrong-resolve :op :browser-provider
+   :call ["resolve" {"browser-use" {} "browserbase" {}} {"browser-use" true "browserbase" true} nil]
+   :expect {:value "browserbase"}}
 ]}]

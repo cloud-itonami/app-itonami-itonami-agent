@@ -4402,4 +4402,77 @@ Output since last heartbeat:
   {:id :browser/shot-none :op :browser
    :call ["shot" "see /tmp/a.png" "none"]
    :expect {:value nil}}
+  ;; ------------------------------------------------------------ browser cloud/provider (S6b-17)
+  {:id :bcloud/name :op :browser-cloud
+   :call ["name" "t1" "abcd"]
+   :expect {:value "itonami_t1_abcd"}}
+  {:id :bcloud/bb-config :op :browser-cloud
+   :call ["bb-config" "k" "p" "https://x/"]
+   :expect {:value {"api_key" "k" "project_id" "p" "base_url" "https://x"}}}
+  {:id :bcloud/bb-config-blank :op :browser-cloud
+   :call ["bb-config" "" "p" nil]
+   :expect {:value nil}}
+  {:id :bcloud/bu-config :op :browser-cloud
+   :call ["bu-config" "k"]
+   :expect {:value {"api_key" "k" "base_url" "https://api.browser-use.com/api/v3"}}}
+  {:id :bcloud/payload-full :op :browser-cloud
+   :call ["payload" "pid" {:keep-alive? true :proxies? true :stealth? false :timeout 60}]
+   :expect {:value {"projectId" "pid" "keepAlive" true "timeout" 60 "proxies" true}}}
+  {:id :bcloud/payload-stealth :op :browser-cloud
+   :call ["payload" "pid" {:keep-alive? false :proxies? false :stealth? true :timeout -5}]
+   :expect {:value {"projectId" "pid" "browserSettings" {"advancedStealth" true}}}}
+  {:id :bcloud/downgrade-keepalive :op :browser-cloud
+   :call ["downgrade" {"keepAlive" true "proxies" true}]
+   :expect {:value [{"proxies" true} #{"keepAlive"}]}}
+  {:id :bcloud/downgrade-proxies :op :browser-cloud
+   :call ["downgrade" {"proxies" true}]
+   :expect {:value [{} #{"proxies"}]}}
+  {:id :bcloud/downgrade-done :op :browser-cloud
+   :call ["downgrade" {"projectId" "p"}]
+   :expect {:value [{"projectId" "p"} #{}]}}
+  {:id :bcloud/features :op :browser-cloud
+   :call ["features" true false true true #{}]
+   :expect {:value {"basic_stealth" true "proxies" true "advanced_stealth" false "keep_alive" true "custom_timeout" true}}}
+  {:id :bcloud/features-dropped :op :browser-cloud
+   :call ["features" true false true true #{"keepAlive"}]
+   :expect {:value {"basic_stealth" true "proxies" true "advanced_stealth" false "keep_alive" false "custom_timeout" true}}}
+  {:id :bcloud/bb-session :op :browser-cloud
+   :call ["bb-session" "n" {"id" "s1" "connectUrl" "wss://x"} {"a" true}]
+   :expect {:value {"session_name" "n" "bb_session_id" "s1" "cdp_url" "wss://x" "features" {"a" true}}}}
+  {:id :bcloud/bu-session :op :browser-cloud
+   :call ["bu-session" "n" {"id" "s2" "cdpUrl" "wss://y" "timeoutAt" "T"}]
+   :expect {:value {"session_name" "n" "bb_session_id" "s2" "cdp_url" "wss://y" "expires_at" "T" "features" {"browser_use" true}}}}
+  {:id :bcloud/bu-session-fallback :op :browser-cloud
+   :call ["bu-session" "n" {"id" "s2" "connectUrl" "wss://z"}]
+   :expect {:value {"session_name" "n" "bb_session_id" "s2" "cdp_url" "wss://z" "expires_at" nil "features" {"browser_use" true}}}}
+  {:id :bcloud/bb-close :op :browser-cloud
+   :call ["bb-close" {"base_url" "https://api.browserbase.com" "api_key" "k" "project_id" "p"} "sid"]
+   :expect {:value {:method "POST" :url "https://api.browserbase.com/v1/sessions/sid" :headers {"X-BB-API-Key" "k" "Content-Type" "application/json"} :body {"projectId" "p" "status" "REQUEST_RELEASE"}}}}
+  {:id :bcloud/bu-close :op :browser-cloud
+   :call ["bu-close" {"base_url" "https://api.browser-use.com/api/v3" "api_key" "k"} "sid"]
+   :expect {:value {:method "PATCH" :url "https://api.browser-use.com/api/v3/browsers/sid" :headers {"Content-Type" "application/json" "X-Browser-Use-API-Key" "k"} :body {"action" "stop"}}}}
+  {:id :bprovider/normalize :op :browser-provider
+   :call ["normalize" "  Browser-Use "]
+   :expect {:value "browser-use"}}
+  {:id :bprovider/normalize-blank :op :browser-provider
+   :call ["normalize" " "]
+   :expect {:value "local"}}
+  {:id :bprovider/resolve-auto :op :browser-provider
+   :call ["resolve" {"browser-use" {} "browserbase" {}} {"browser-use" true "browserbase" true} nil]
+   :expect {:value "browser-use"}}
+  {:id :bprovider/resolve-second :op :browser-provider
+   :call ["resolve" {"browser-use" {} "browserbase" {}} {"browser-use" false "browserbase" true} nil]
+   :expect {:value "browserbase"}}
+  {:id :bprovider/resolve-explicit-unavailable :op :browser-provider
+   :call ["resolve" {"browser-use" {}} {"browser-use" false} "browser-use"]
+   :expect {:value "browser-use"}}
+  {:id :bprovider/resolve-unregistered :op :browser-provider
+   :call ["resolve" {"browser-use" {}} {"browser-use" false} "browserbase"]
+   :expect {:value nil}}
+  {:id :bprovider/resolve-capital-local :op :browser-provider
+   :call ["resolve" {"browser-use" {} "browserbase" {}} {"browser-use" true} "Local"]
+   :expect {:value "browser-use"}}
+  {:id :bprovider/resolve-local :op :browser-provider
+   :call ["resolve" {"browser-use" {}} {"browser-use" true} "local"]
+   :expect {:value nil}}
 ]}]
