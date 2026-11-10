@@ -415,4 +415,10 @@
   {:id :must-fail/collect-io-error-is-receipt :op :collect-io
    :call ["receipt" {"error" "down"} "did:key:z1"]
    :expect {:value {:transfer-id nil :signed-by "did:key:z1" :appended-at nil}}}
+  {:id :must-fail/mcp-wrong-cache-fresh :op :mcp
+   :call ["cache-status" {"access_token" "a" "expires_at" 2000} {"issuer" "i" "token_endpoint" "https://h/t"} {} {} 1000 0 false]
+   :expect {:value {:fresh? false :issuer-bound? false :ready? false}}}
+  {:id :must-fail/mcp-wrong-cache-bound :op :mcp
+   :call ["cache-status" {"refresh_token" "r" "hermes_issuer" "i"} {"issuer" "i" "token_endpoint" "https://h/t"} {"client_id" "c"} {} 99999 0 false]
+   :expect {:value {:fresh? true :issuer-bound? true :ready? true}}}
 ]}]
