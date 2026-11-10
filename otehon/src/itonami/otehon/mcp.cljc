@@ -301,3 +301,43 @@
                                    (contains? #{"none" "client_secret_post" "client_secret_basic"} auth-method)
                                    (or (= "none" auth-method) client-secret)))]
     {:fresh? fresh? :issuer-bound? issuer-bound? :ready? (boolean (or fresh? issuer-bound?))}))
+
+(defn project-discovery
+  "The pure projection half of discover: exchange results in, schemas
+  + dispatch index + errors out. `results` maps server names to the
+  exchange-selected outcomes, keyword-enveloped like the legacy
+  ({:tools [...]} / {:error ...}; tool payloads stay string-keyed).
+  A server with no result counts as an exchange error. Disabled
+  servers are skipped silently. Alias rows only fire for native
+  names no other server claimed."
+  [config servers results]
+  (let [rows (vec
+              (mapcat
+               (fn [server]
+                 (let [spec (get-in config ["mcp_servers" server])]
+                   (if (not (enabled? spec))
+                     []
+                     (let [result (get results server)]
+                       (if-let [error (or (:error result) (when (nil? result) "no exchange result"))]
+                         [{:error-entry {"server" server "error" error}}]
+                         (for [tool (get result "tools" [])
+                               :let [raw (get tool "name")]
+                               :when (and raw (tool-allowed? spec raw))]
+                           [(tool-name server raw)
+                            {"type" "function"
+                             "function" {"name" (tool-name server raw)
+                                         "description" (or (get tool "description") (str "MCP tool " raw " from " server))
+                                         "parameters" (object-schema (or (get tool "inputSchema") (get tool "input_schema")))}}
+                            [server raw]]))))))
+               servers))
+        data-rows (vec (filter vector? rows))
+        alias-rows (for [[_ schema target] data-rows
+                         :let [[_ raw] target
+                               same-name (filter #(= raw (second (nth % 2))) data-rows)]
+                         :when (and (contains? hermes-native-aliases raw)
+                                    (= 1 (count same-name)))]
+                     [raw (assoc-in schema ["function" "name"] raw) target])
+        all-rows (into data-rows alias-rows)]
+    {:schemas (mapv second all-rows)
+     :index (into {} (map (fn [[name _ target]] [name target]) all-rows))
+     :errors (mapv :error-entry (filter map? rows))}))
