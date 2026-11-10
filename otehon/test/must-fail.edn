@@ -367,4 +367,10 @@
   {:id :must-fail/rpc-wrong-term-args :op :code-rpc
    :call ["terminal-args" "terminal" {"command" "x" "background" true}]
    :expect {:value {"command" "x" "background" true}}}
+  {:id :must-fail/doc-wrong-toolset :op :doctor-kinds
+   :call ["toolsets" ["terminal" "nope"] [] "itonami_dapps" false]
+   :expect {:value [{:code :unsupported_toolset :detail "WRONG"}]}}
+  {:id :must-fail/doc-wrong-oauth :op :doctor-kinds
+   :call ["oauth" ["a" "b"] {"a" {"url" "u" "auth" "oauth"} "b" {"url" "u" "auth" "oauth"}} ["a"]]
+   :expect {:value [{:code :oauth_cache_unavailable :detail "a"}]}}
 ]}]

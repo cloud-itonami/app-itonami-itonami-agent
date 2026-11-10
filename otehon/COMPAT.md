@@ -439,4 +439,15 @@ from source, the rest follow the module name until their slice lands.
   `finish-call!`'s catch still uses `(str e)` — no EDN value makes
   `json-str` throw, so that path awaits a host-side probe. Async
   `dispatch-call!` branching and the serve loop stay S6.)
+- S6b-13 doctor finding units — done (JUN-1036:
+  `toolset-findings` / `tool-findings` / `browser-findings` /
+  `oauth-findings` with a `:doctor-kinds` case op. 14 cases +
+  2 must-fail; 857 cases + 96 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical — see
+  the evidence doc. Verified divergences: none — pure data reads
+  over explicit witness inputs; `:agents?` threaded through
+  `request-id` but unread by the CLI rendering; veto/headless/OOM
+  / carrier / ssrf, the local-Chrome probe, host credential-cache
+  reads, role/capability gating and the evidence-table rendering
+  stay S6.)
 - S6 tools (rest): backends + bridge/chat/vault/mcp/dapps CLIs.

@@ -4243,4 +4243,50 @@ Output since last heartbeat:
   {:id :rpc/msg-empty :op :code-rpc
    :call ["message-text" ""]
    :expect {:value ""}}
+  ;; ------------------------------------------------------------ doctor kinds (S6d)
+  {:id :doc-kinds/toolset-unknown :op :doctor-kinds
+   :call ["toolsets" ["terminal" "nope"] [] "itonami_dapps" false]
+   :expect {:value [{:code :unsupported_toolset :detail "nope"}]}}
+  {:id :doc-kinds/toolset-mcp-prefix :op :doctor-kinds
+   :call ["toolsets" ["mcp-foo" "mcp-bar"] ["foo"] "itonami_dapps" false]
+   :expect {:value [{:code :unsupported_toolset :detail "mcp-bar"}]}}
+  {:id :doc-kinds/toolset-no-agent :op :doctor-kinds
+   :call ["toolsets" ["terminal" "nope"] [] "itonami_dapps" true]
+   :expect {:value nil}}
+  {:id :doc-kinds/toolset-clean :op :doctor-kinds
+   :call ["toolsets" ["terminal"] ["my-mcp"] "itonami_dapps" false]
+   :expect {:value nil}}
+  {:id :doc-kinds/tool-unknown :op :doctor-kinds
+   :call ["tools" ["terminal" "discord"] [] false false false [] false]
+   :expect {:value [{:code :unsupported_tools :detail "discord"}]}}
+  {:id :doc-kinds/tool-clean :op :doctor-kinds
+   :call ["tools" ["terminal"] [] false false false [] false]
+   :expect {:value nil}}
+  {:id :doc-kinds/tool-mcp-covered :op :doctor-kinds
+   :call ["tools" ["terminal" "discord"] [] false false false ["discord"] false]
+   :expect {:value nil}}
+  {:id :doc-kinds/browser-cloud :op :doctor-kinds
+   :call ["browser" ["browser_snapshot"] {"backend" "cloud"} false]
+   :expect {:value [{:code :unsupported_browser_backend
+                     :detail "Kotoba browser supports local Chrome only"}]}}
+  {:id :doc-kinds/browser-local :op :doctor-kinds
+   :call ["browser" ["browser_snapshot"] {} false]
+   :expect {:value nil}}
+  {:id :doc-kinds/browser-engine :op :doctor-kinds
+   :call ["browser" ["browser_snapshot"] {"engine" "firefox"} false]
+   :expect {:value [{:code :unsupported_browser_backend
+                     :detail "Kotoba browser supports local Chrome only"}]}}
+  {:id :doc-kinds/browser-unselected :op :doctor-kinds
+   :call ["browser" ["read_file"] {"backend" "cloud"} false]
+   :expect {:value nil}}
+  {:id :doc-kinds/browser-cdp :op :doctor-kinds
+   :call ["browser" ["browser_snapshot"] {} true]
+   :expect {:value [{:code :unsupported_browser_backend
+                     :detail "Kotoba browser supports local Chrome only"}]}}
+  {:id :doc-kinds/oauth-unready :op :doctor-kinds
+   :call ["oauth" ["a" "b"] {"a" {"url" "u" "auth" "oauth"} "b" {"url" "u" "auth" "oauth"}} ["a"]]
+   :expect {:value [{:code :oauth_cache_unavailable :detail "b"}]}}
+  {:id :doc-kinds/oauth-ok :op :doctor-kinds
+   :call ["oauth" ["a" "b" "c"] {"a" {"url" "u" "auth" "oauth"} "b" {"url" "u" "auth" "header"} "c" {"auth" "oauth"}} ["a"]]
+   :expect {:value nil}}
 ]}]
