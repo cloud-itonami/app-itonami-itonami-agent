@@ -3,6 +3,14 @@
 Status: design proposal (2026-11-08). Not implemented. All measurements cited
 below are single-run values from the JUN-964 JuiceFS trials, not benchmarks.
 
+> Position (2026-11-10, [AWAI-161](https://linear.app/kotobalabs/issue/AWAI-161)):
+> this document describes the legacy **Awai Object Storage** spillover path
+> (JuiceFS + B2 + restic for local disk relief), not the Awai FS native
+> format. The Awai FS format direction is CARv2 / Kotoba Pack / Prolly /
+> WAL (Storage v2, [AWAI-531](https://linear.app/kotobalabs/issue/AWAI-531)–535).
+> Measurements below are retained as-is; only the positioning changed
+> ([AWAI-1512](https://linear.app/kotobalabs/issue/AWAI-1512)).
+
 ## 0. Problem
 
 Local development storage is full: the Mac root filesystem reports 100% used
