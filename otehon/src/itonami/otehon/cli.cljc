@@ -60,6 +60,7 @@
             [itonami.otehon.collect :as collect]
             [itonami.otehon.clarify :as clarify]
             [itonami.otehon.webguard :as webguard]
+            [itonami.otehon.browser :as browser]
             [itonami.otehon.vault :as vault]
             [itonami.otehon.dapps :as dapps]
             [itonami.otehon.oauth :as oauth]
@@ -151,7 +152,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -197,6 +198,7 @@
     :clarify (ops-clarify c)
     :webguard (ops-webguard c)
     :vault (ops-vault c)
+    :browser (ops-browser c)
     :process (ops-process c)
     :dapps (ops-dapps c scratch)
     :connections (ops-connections c scratch)
@@ -2833,6 +2835,29 @@
               "totp" (vault/mint-totp arg arg2)
               "base32" (vault/base32-decode arg)
               (throw (ex-info (str "vault: unknown call " verb) {:verb verb})))}))
+
+(defn- browser-file-stub
+  "The screenshot `file?` witness, by name (mirrors the `:turn-exec`
+  `:via` selection): `all` exists, `none` exists not, `png-only`
+  keeps .png paths."
+  [name]
+  (case (str name)
+    "all" (constantly true)
+    "none" (constantly false)
+    "png-only" (fn [p] (str/ends-with? (str p) ".png"))
+    (throw (ex-info (str "browser: unknown file stub " name) {:stub name}))))
+
+(defn- ops-browser [c]
+  (let [[verb arg arg2] (:call c)]
+    {:value (case verb
+              "secret" (browser/secret-url? arg)
+              "allowed" (browser/allowed-host? arg arg2)
+              "connect" (browser/parse-connect-target arg arg2)
+              "scrub" (browser/scrub-output arg)
+              "redact" (browser/redact-cdp-output arg)
+              "clamp" (browser/clamp-timeout arg)
+              "shot" (browser/screenshot-path arg (browser-file-stub arg2))
+              (throw (ex-info (str "browser: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-process [c]
   (let [[verb arg] (:call c)]

@@ -385,4 +385,10 @@
   {:id :must-fail/vault-bad-seed :op :vault
    :call ["totp" "NOT-BASE32!!" 59000]
    :expect {:value "287082"}}
+  {:id :must-fail/browser-wrong-scrub :op :browser
+   :call ["scrub" "Authorization: Bearer tok123 rest"]
+   :expect {:value "Authorization: Bearer tok123 rest"}}
+  {:id :must-fail/browser-wrong-connect :op :browser
+   :call ["connect" "h:99999" nil]
+   :expect {:value {:host "h" :port 99999}}}
 ]}]
