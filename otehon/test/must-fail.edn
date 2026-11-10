@@ -409,4 +409,10 @@
   {:id :must-fail/oauth-wrong-discovery :op :oauth
    :call ["discovery" nil "https://m.example"]
    :expect {:value {"issuer" "https://m.example" "authorization_endpoint" "https://m.example/authorize" "token_endpoint" "https://m.example/token" "registration_endpoint" "https://m.example/register" "device_authorization_endpoint" "https://m.example/device"}}}
+  {:id :must-fail/collect-io-wrong-receipt :op :collect-io
+   :call ["receipt" {"transfer-id" "t1"} "did:key:z1"]
+   :expect {:value {:transfer-id "t1" :signed-by "WRONG" :appended-at nil}}}
+  {:id :must-fail/collect-io-error-is-receipt :op :collect-io
+   :call ["receipt" {"error" "down"} "did:key:z1"]
+   :expect {:value {:transfer-id nil :signed-by "did:key:z1" :appended-at nil}}}
 ]}]

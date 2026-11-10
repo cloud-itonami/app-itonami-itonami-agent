@@ -58,6 +58,7 @@
             [itonami.otehon.execute :as execute]
             [itonami.otehon.tts :as tts]
             [itonami.otehon.collect :as collect]
+            [itonami.otehon.collect-io :as collect-io]
             [itonami.otehon.clarify :as clarify]
             [itonami.otehon.webguard :as webguard]
             [itonami.otehon.browser :as browser]
@@ -154,7 +155,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -204,6 +205,7 @@
     :browser-cloud (ops-browser-cloud c)
     :browser-provider (ops-browser-provider c)
     :oauth (ops-oauth c)
+    :collect-io (ops-collect-io c)
     :process (ops-process c)
     :dapps (ops-dapps c scratch)
     :connections (ops-connections c scratch)
@@ -2898,6 +2900,12 @@
               "reg-record" (oauth/registration-record arg)
               "token-record" (oauth/token-record arg arg2 arg3)
               (throw (ex-info (str "oauth: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-collect-io [c]
+  (let [[verb arg arg2] (:call c)]
+    {:value (case verb
+              "receipt" (collect-io/receipt arg arg2)
+              (throw (ex-info (str "collect-io: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-process [c]
   (let [[verb arg] (:call c)]
