@@ -2105,12 +2105,18 @@
                    (hio/sqlite-rows (queue/db-path home) "SELECT execution_id FROM deliveries ORDER BY execution_id" []))
     "seed-terminal" (let [[prefix n t] args]
                       (queue/open-db home)
+                      ;; One transaction: 1005 autocommit INSERTs fsync
+                      ;; per row (79s on JuiceFS, over the 30s bb spawn
+                      ;; cap); a single COMMIT fsyncs once (0.17s).
+                      ;; Same rows, same order, same assertions.
                       (hio/sqlite-exec! (queue/db-path home)
-                        (str/join ";\n"
-                          (for [i (range (long (or n 0)))]
-                            (str "INSERT INTO deliveries(execution_id,job_json,content,for_failure,status,created_at,finished_at)"
-                                 " VALUES ('" prefix (let [s (str i)] (str (subs "0000" 0 (- 4 (count s))) s))
-                                 "','{}','',0,'delivered','" t "','" t "')"))))
+                        (str "BEGIN;\n"
+                          (str/join ";\n"
+                            (for [i (range (long (or n 0)))]
+                              (str "INSERT INTO deliveries(execution_id,job_json,content,for_failure,status,created_at,finished_at)"
+                                   " VALUES ('" prefix (let [s (str i)] (str (subs "0000" 0 (- 4 (count s))) s))
+                                   "','{}','',0,'delivered','" t "','" t "')")))
+                          ";\nCOMMIT;"))
                       {:seeded (long (or n 0))})
     (throw (ex-info (str "queue: unknown step " verb) {:verb verb}))))
 
@@ -2158,12 +2164,16 @@
                                                (ledger/rows home nil)))}
     "seed-terminal" (let [[prefix n t] args]
                       (ledger/open-db home)
+                      ;; One transaction: same fsync-per-row reason as
+                      ;; the queue seed above. Same rows, same order.
                       (hio/sqlite-exec! (ledger/db-path home)
-                        (str/join ";\n"
-                          (for [i (range (long (or n 0)))]
-                            (str "INSERT INTO executions(id,job_id,source,process_id,pid,status,claimed_at,finished_at)"
-                                 " VALUES ('" prefix (let [s (str i)] (str (subs "0000" 0 (- 4 (count s))) s))
-                                 "','seed-job','cron','seed',1,'completed','" t "','" t "')"))))
+                        (str "BEGIN;\n"
+                          (str/join ";\n"
+                            (for [i (range (long (or n 0)))]
+                              (str "INSERT INTO executions(id,job_id,source,process_id,pid,status,claimed_at,finished_at)"
+                                   " VALUES ('" prefix (let [s (str i)] (str (subs "0000" 0 (- 4 (count s))) s))
+                                   "','seed-job','cron','seed',1,'completed','" t "','" t "')")))
+                          ";\nCOMMIT;"))
                       {:seeded (long (or n 0))})
     (throw (ex-info (str "ledger: unknown step " verb) {:verb verb}))))
 
