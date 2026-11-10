@@ -89,7 +89,7 @@ from source, the rest follow the module name until their slice lands.
 | `chat_platform.cljk` | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply, sync) | done (JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in) |
 | `clarify.cljk` | — | planned S6 |
 | `code_rpc.cljk` | `code_rpc.cljc` (tool-error, result-error, tool-errors-since, sandbox-tools-for, terminal-blocked-params, missing-import-hint, failure-hint-rules, failure-hint, hint-on-failure) | partial (shaping + hints done JUN-1036 S6b-8, shared cases; shim-header/tool-stubs/generate-hermes-tools, token check, dispatch, budget, log, serve loop stay S6) |
-| `collect.cljk`, `collect_io.cljk` | — | planned S6 |
+| `collect.cljk`, `collect_io.cljk` | `collect.cljc` (done) + `collect_io.cljc` (`receipt` mapping, `:collect-io` op; signer/DID/transport stay S6) | partial (shapes done JUN-1036 S6b, shared cases; SDK wiring stays S6) |
 | `computer_use.cljk` | `computer_use.cljc` (canon-keys, blocked-input?, select-window, build-request, content-text, image-parts, result-error, structured, error/success-result, action-request) | partial (arg shapes done JUN-1036 S6b-7, shared cases; driver spawn, capture/list flows, approval, call dispatch stay S6) |
 | `confine.cljk` *OS sandbox* | `confine.cljc` (policy, secret-paths, read-denial, confine-env, seatbelt-profile, bwrap-args, command) | partial (pure policy core done JUN-1036 S2c; `backend` probe and `audit*!` writers stay host-side) |
 | `connections.cljk` | `connections.cljc` (connection-status + auth-status, read-only) | done (JUN-1036 S6b-2, shared cases; install/authorize is slice 2, hosted answers the named error) |
@@ -522,4 +522,14 @@ from source, the rest follow the module name until their slice lands.
   Random verifiers, fetch, the loopback listener, URL
   serialization, the token endpoint, 0600 writes, clock reads and
   the login/device flows stay S6.)
+- S6b-19 collect-io receipt — done (JUN-1036: `receipt` maps an
+  SDK append result to the collect receipt contract or nil on any
+  doubt, with the `:collect-io` verb. 5 cases + 2 must-fail; 933
+  cases + 110 must-fail green on basilisp 0.5.1 / bb 1.12.218 /
+  nbb, canon byte-identical — see the evidence doc. Verified
+  divergence: the legacy keyword read on JSON-shaped (string-key)
+  input returns nil on every runner — the gate caught the draft
+  cases; the port keeps the accessor verbatim and the cases use
+  keyword keys, with the SDK key convention pinned when the wiring
+  lands. Signer, DID and transport stay S6.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

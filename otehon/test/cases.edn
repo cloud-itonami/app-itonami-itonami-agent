@@ -4506,4 +4506,20 @@ Output since last heartbeat:
   {:id :oauth/token-record-default-expiry :op :oauth
    :call ["token-record" {"access_token" "a" "expires_in" "xx"} {"issuer" "iss"} 1000]
    :expect {:value {"access_token" "a" "expires_in" "xx" "expires_at" 4600 "hermes_issuer" "iss"}}}
+  ;; ------------------------------------------------------------ collect-io receipt (S6b-19)
+  {:id :collect-io/receipt-ok :op :collect-io
+   :call ["receipt" {:transfer-id "t1" :appended-at "2026-11-08T00:00:00+09:00" :extra "drop"} "did:key:z1"]
+   :expect {:value {:transfer-id "t1" :signed-by "did:key:z1" :appended-at "2026-11-08T00:00:00+09:00"}}}
+  {:id :collect-io/receipt-no-stamp :op :collect-io
+   :call ["receipt" {:transfer-id "t1"} "did:key:z1"]
+   :expect {:value {:transfer-id "t1" :signed-by "did:key:z1" :appended-at nil}}}
+  {:id :collect-io/receipt-empty-id :op :collect-io
+   :call ["receipt" {"transfer-id" ""} "did:key:z1"]
+   :expect {:value nil}}
+  {:id :collect-io/receipt-error :op :collect-io
+   :call ["receipt" {"error" "down"} "did:key:z1"]
+   :expect {:value nil}}
+  {:id :collect-io/receipt-no-signer :op :collect-io
+   :call ["receipt" {"transfer-id" "t1"} ""]
+   :expect {:value nil}}
 ]}]
