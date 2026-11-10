@@ -89,7 +89,7 @@ from source, the rest follow the module name until their slice lands.
 | `chat_platform.cljk` | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply, sync) | done (JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in) |
 | `clarify.cljk` | — | planned S6 |
 | `code_rpc.cljk` | `code_rpc.cljc` (tool-error, result-error, tool-errors-since, sandbox-tools-for, terminal-blocked-params, missing-import-hint, failure-hint-rules, failure-hint, hint-on-failure) | partial (shaping + hints done JUN-1036 S6b-8, shared cases; shim-header/tool-stubs/generate-hermes-tools, token check, dispatch, budget, log, serve loop stay S6) |
-| `collect.cljk`, `collect_io.cljk` | — | planned S6 |
+| `collect.cljk`, `collect_io.cljk` | `collect.cljc` (done) + `collect_io.cljc` (`receipt` mapping, `:collect-io` op; signer/DID/transport stay S6) | partial (shapes done JUN-1036 S6b, shared cases; SDK wiring stays S6) |
 | `computer_use.cljk` | `computer_use.cljc` (canon-keys, blocked-input?, select-window, build-request, content-text, image-parts, result-error, structured, error/success-result, action-request) | partial (arg shapes done JUN-1036 S6b-7, shared cases; driver spawn, capture/list flows, approval, call dispatch stay S6) |
 | `confine.cljk` *OS sandbox* | `confine.cljc` (policy, secret-paths, read-denial, confine-env, seatbelt-profile, bwrap-args, command) | partial (pure policy core done JUN-1036 S2c; `backend` probe and `audit*!` writers stay host-side) |
 | `connections.cljk` | `connections.cljc` (connection-status + auth-status, read-only) | done (JUN-1036 S6b-2, shared cases; install/authorize is slice 2, hosted answers the named error) |
@@ -106,9 +106,9 @@ from source, the rest follow the module name until their slice lands.
 | `loop.cljk` *agent turn loop* | `turn.cljc` (gate), `assembly.cljc` (history, wrap-up, turn limits) | partial (S2d assembly done; turn execution S2) |
 | `main.cljk` *CLI dispatch* | `cli.cljc` | partial (this table) |
 | `manifest.cljk` | `manifest.cljc` | done |
-| `mcp.cljk` | `mcp.cljc` (protocol-version, enabled?, names-for, command-for, server-env, tool-name, tool-allowed?, handshake-lines, call-line, collect-call-results, collect-exchange-result, render-result + private rpc/expand/object-schema/glob) | partial (config selection + naming + allowlist + message shapes done JUN-1036 S6b-4/S6b-5, shared cases; stdio/HTTP exchange spawn, oauth-cache-ready, discover projection/call dispatch stay S6) |
+| `mcp.cljk` | `mcp.cljc` (protocol-version, enabled?, names-for, command-for, server-env, tool-name, tool-allowed?, handshake-lines, call-line, collect-call-results, collect-exchange-result, render-result + private rpc/expand/object-schema/glob/finite?/parse-float, cache-status + project-discovery `:mcp` verbs) | partial (config selection + naming + allowlist + message shapes + cache decision + discover projection done JUN-1036 S6b-4/S6b-5/S6b-20/S6b-21, shared cases; stdio/HTTP exchange spawn, call dispatch stay S6) |
 | `notepad.cljk` | `notepad.cljc` | done (JUN-1036 S4a; clear is ported, unwired — no CLI surface) |
-| `oauth.cljk` | `oauth.cljc` (store-name only) | partial (JUN-1036 S6b-2; discovery/registration/token flows stay S6) |
+| `oauth.cljk` | `oauth.cljc` (store-name + PKCE S256 + auth params + discovery/registration/token-cache shapes, `:oauth` op) | partial (pure heads done JUN-1036 S6b-2/S6b-18, shared cases; fetch, loopback listener, URL serialization, token endpoint, file writes, clock, login/device flows stay S6) |
 | `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; + S5d unit 1: did:key parse/valid/pub->did, signed envelopes + auth header, peers.edn read/write/add, ensure-rail, path rebase, bundle materialize/fetch, service-record projection/overlay, fetch mapping; + S5d unit 2: peer-info/discover/pick-peer/infer-peers/infer-via-peers/remote-run, seven serve routes + dispatch, local-gateway-complete, placement; socket/child-process/agent-loop/rails reads/health syscalls stay host-side) |
 | `pause.cljk` * | `pause.cljc` | done (JUN-1036 S3a) |
 | `platform_adapters.cljk` *lane adapters* | `adapters.cljc` (per-lane request builders + token-env/for-lane resolution + sync sends, error strings verbatim) | done (JUN-1036 S5c; env-only secrets, injected `:fetch`) |
@@ -513,4 +513,52 @@ from source, the rest follow the module name until their slice lands.
   pinned; an explicit-but-unavailable name still wins, pinned.
   Env reads, random-hex, fetch, the 402 retry loop, registration
   and lifecycle dispatch stay S6.)
+- S6b-18 oauth pure units — done (JUN-1036: pure SHA-256 /
+  `verify-challenge` (RFC 7636, independent oracle: node:crypto) /
+  `pkce-pair` / `auth-params` / `discovery-record` /
+  `registration-body` + `registration-record` / `token-record`,
+  with `:oauth` verbs. 10 cases + 3 must-fail; 928 cases + 108
+  must-fail green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon
+  byte-identical — see the evidence doc. Verified divergences:
+  length padding was a 12-byte high+low instead of 64-bit (found
+  by sha256("abc") vs node); schedule sigmas missed the SHR halves
+  (same oracle); base64 grouped bytes at 24-bit-high regardless of
+  group width (found by the RFC 7636 vector: last group only).
+  Random verifiers, fetch, the loopback listener, URL
+  serialization, the token endpoint, 0600 writes, clock reads and
+  the login/device flows stay S6.)
+- S6b-19 collect-io receipt — done (JUN-1036: `receipt` maps an
+  SDK append result to the collect receipt contract or nil on any
+  doubt, with the `:collect-io` verb. 5 cases + 2 must-fail; 933
+  cases + 110 must-fail green on basilisp 0.5.1 / bb 1.12.218 /
+  nbb, canon byte-identical — see the evidence doc. Verified
+  divergence: the legacy keyword read on JSON-shaped (string-key)
+  input returns nil on every runner — the gate caught the draft
+  cases; the port keeps the accessor verbatim and the cases use
+  keyword keys, with the SDK key convention pinned when the wiring
+  lands. Signer, DID and transport stay S6.)
+- S6b-20 mcp oauth-cache decision — done (JUN-1036:
+  `cache-status` over already-read cache records + witness clock /
+  file witnesses, with the `:mcp` verb: fresh vs issuer-bound
+  refreshability, corrupt records never read healthy, boundary
+  expiry counts expired, parseFloat-prefix expiry parsing. 8 cases
+  + 2 must-fail; 941 cases + 112 must-fail green on basilisp
+  0.5.1 / bb 1.12.218 / nbb, canon byte-identical — see the
+  evidence doc. Verified divergences: none — bb ratios would
+  diverge from JS doubles, so pow10/parse results stay doubles;
+  ##Inf/NaN handled without host predicates. Token-file reads,
+  stdio/HTTP exchange spawn, discover projection/call dispatch
+  stay S6.)
+- S6b-21 mcp discover projection — done (JUN-1036:
+  `project-discovery` over exchange-selected outcomes: schemas +
+  dispatch index + errors, alias rows only for unclaimed native
+  names, disabled servers skipped, missing results are errors.
+  5 cases + 2 must-fail; 946 cases + 114 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical — see
+  the evidence doc. Verified divergence: exchange envelopes are
+  keyword (`:error`) while tool payloads are string-keyed
+  (`"tools"`) — the first draft used keyword tools and the gate
+  rejected all four positive cases on every runner; the exchange
+  sources prove the mixed convention. Exchange spawn and call
+  dispatch stay S6.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

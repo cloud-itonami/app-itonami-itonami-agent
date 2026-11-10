@@ -1,9 +1,10 @@
 (ns itonami.otehon.mcp
   "The portable config half of itonami.agent.mcp: server selection,
-  command/env shaping, tool naming and the per-server tool allowlist.
-  Exchange (stdio spawn, Streamable HTTP, token refresh) stays host-side
-  (S6): these are the shapes both sides agree on. `env` is one merged
-  string map, as in dapps/connections."
+  command/env shaping, tool naming, the per-server tool allowlist and
+  the oauth-cache-ready decision. Exchange (stdio spawn, Streamable
+  HTTP, token refresh) stays host-side (S6): these are the shapes
+  both sides agree on. `env` is one merged string map, as in
+  dapps/connections."
   (:require [clojure.string :as str]
             [itonami.otehon.cas :as cas]
             [itonami.otehon.io :as hio]
@@ -229,3 +230,114 @@
     (if has-include
       (boolean (matches include))
       (not (boolean (matches exclude))))))
+
+(defn- finite?
+  "js/Number.isFinite without the host: numbers that are neither NaN
+  nor infinite. Everything else (strings included) is not finite."
+  [x]
+  (boolean (and (number? x) (= x x) (not (= x ##Inf)) (not (= x ##-Inf)))))
+
+(defn- parse-int-str
+  "Small ASCII integer strings (the float exponent); nil when malformed."
+  [s]
+  (let [[_ sign digits] (re-matches #"([+-]?)(\d+)" (str s))]
+    (when digits
+      (let [n (reduce (fn [a d] (+ (* a 10) d)) 0
+                      (map #(str/index-of "0123456789" (str %)) digits))]
+        (if (= "-" sign) (- n) n)))))
+
+(defn- pow10
+  "10^n as a double (ratios would diverge from JS doubles on bb)."
+  [n]
+  (if (neg? n)
+    (/ 1.0 (double (apply * (repeat (- n) 10))))
+    (double (apply * (repeat n 10)))))
+
+(defn- parse-float
+  "js/parseFloat(s) without the host: leading numeric-prefix
+  semantics (\"123x\" reads 123, \"Infinity\" reads ##Inf), nil when
+  no prefix parses (NaN upstream). Hex stays a leading-0 read, as
+  parseFloat never went hex."
+  [s]
+  (let [s (str/trim (str s))
+        m (re-matches #"\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|([+-]?[Ii]nfinity)).*" s)]
+    (when m
+      (if (nth m 2)
+        (if (= \- (first (nth m 2))) ##-Inf ##Inf)
+        (let [[_ sign int-part frac-part exp-part] (re-matches #"([+-]?)(\d*)\.?(\d*)(?:[eE]([+-]?\d+))?" (nth m 1))
+              digits (str int-part frac-part)
+              ds (map #(str/index-of "0123456789" (str %)) digits)]
+          (when (and (seq digits) (every? some? ds))
+            (let [n (double (reduce (fn [a d] (+ (* a 10) d)) 0 ds))
+                  scale (- (count frac-part))
+                  e (if (str/blank? (str exp-part)) 0 (parse-int-str exp-part))]
+              (when (some? e)
+                (* (if (= "-" sign) -1.0 1.0) n (pow10 (+ scale e)))))))))))
+
+(defn cache-status
+  "The oauth-cache-ready decision over already-read records (file
+  reads stay host-side, S6): {:fresh? :issuer-bound? :ready?}.
+  `tokens`/`meta`/`client` are the cache maps (nil when unreadable),
+  `spec` the server spec (client overrides), `now-s` the witness
+  clock and `file-mtime-s`/`file?` the token-file witness."
+  [tokens meta client spec now-s file-mtime-s file?]
+  (let [stored-expiry (parse-float (str (get tokens "expires_at" "NaN")))
+        ttl (parse-float (str (get tokens "expires_in" "NaN")))
+        expiry (cond
+                 (finite? stored-expiry) stored-expiry
+                 (and (finite? ttl) file?) (+ (/ file-mtime-s 1000) ttl)
+                 :else 0)
+        fresh? (boolean (and (get tokens "access_token") (finite? expiry)
+                             (> expiry (+ now-s 60))))
+        client-id (or (get-in spec ["oauth" "client_id"]) (get client "client_id"))
+        client-secret (or (get-in spec ["oauth" "client_secret"]) (get client "client_secret"))
+        auth-method (or (get client "token_endpoint_auth_method") "none")
+        endpoint (get meta "token_endpoint")
+        issuer-bound? (boolean (and (get tokens "refresh_token")
+                                   (string? (get tokens "hermes_issuer"))
+                                   (= (get tokens "hermes_issuer") (get meta "issuer"))
+                                   (string? endpoint) (str/starts-with? endpoint "https://")
+                                   client-id
+                                   (contains? #{"none" "client_secret_post" "client_secret_basic"} auth-method)
+                                   (or (= "none" auth-method) client-secret)))]
+    {:fresh? fresh? :issuer-bound? issuer-bound? :ready? (boolean (or fresh? issuer-bound?))}))
+
+(defn project-discovery
+  "The pure projection half of discover: exchange results in, schemas
+  + dispatch index + errors out. `results` maps server names to the
+  exchange-selected outcomes, keyword-enveloped like the legacy
+  ({:tools [...]} / {:error ...}; tool payloads stay string-keyed).
+  A server with no result counts as an exchange error. Disabled
+  servers are skipped silently. Alias rows only fire for native
+  names no other server claimed."
+  [config servers results]
+  (let [rows (vec
+              (mapcat
+               (fn [server]
+                 (let [spec (get-in config ["mcp_servers" server])]
+                   (if (not (enabled? spec))
+                     []
+                     (let [result (get results server)]
+                       (if-let [error (or (:error result) (when (nil? result) "no exchange result"))]
+                         [{:error-entry {"server" server "error" error}}]
+                         (for [tool (get result "tools" [])
+                               :let [raw (get tool "name")]
+                               :when (and raw (tool-allowed? spec raw))]
+                           [(tool-name server raw)
+                            {"type" "function"
+                             "function" {"name" (tool-name server raw)
+                                         "description" (or (get tool "description") (str "MCP tool " raw " from " server))
+                                         "parameters" (object-schema (or (get tool "inputSchema") (get tool "input_schema")))}}
+                            [server raw]]))))))
+               servers))
+        data-rows (vec (filter vector? rows))
+        alias-rows (for [[_ schema target] data-rows
+                         :let [[_ raw] target
+                               same-name (filter #(= raw (second (nth % 2))) data-rows)]
+                         :when (and (contains? hermes-native-aliases raw)
+                                    (= 1 (count same-name)))]
+                     [raw (assoc-in schema ["function" "name"] raw) target])
+        all-rows (into data-rows alias-rows)]
+    {:schemas (mapv second all-rows)
+     :index (into {} (map (fn [[name _ target]] [name target]) all-rows))
+     :errors (mapv :error-entry (filter map? rows))}))

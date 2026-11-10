@@ -400,4 +400,31 @@
   {:id :must-fail/bprovider-wrong-resolve :op :browser-provider
    :call ["resolve" {"browser-use" {} "browserbase" {}} {"browser-use" true "browserbase" true} nil]
    :expect {:value "browserbase"}}
+  {:id :must-fail/oauth-wrong-challenge :op :oauth
+   :call ["challenge" "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"]
+   :expect {:value "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}
+  {:id :must-fail/oauth-wrong-expiry :op :oauth
+   :call ["token-record" {"access_token" "a" "expires_in" "100"} {"issuer" "iss"} 1000]
+   :expect {:value {"access_token" "a" "expires_in" "100" "expires_at" 9999 "hermes_issuer" "iss"}}}
+  {:id :must-fail/oauth-wrong-discovery :op :oauth
+   :call ["discovery" nil "https://m.example"]
+   :expect {:value {"issuer" "https://m.example" "authorization_endpoint" "https://m.example/authorize" "token_endpoint" "https://m.example/token" "registration_endpoint" "https://m.example/register" "device_authorization_endpoint" "https://m.example/device"}}}
+  {:id :must-fail/collect-io-wrong-receipt :op :collect-io
+   :call ["receipt" {"transfer-id" "t1"} "did:key:z1"]
+   :expect {:value {:transfer-id "t1" :signed-by "WRONG" :appended-at nil}}}
+  {:id :must-fail/collect-io-error-is-receipt :op :collect-io
+   :call ["receipt" {"error" "down"} "did:key:z1"]
+   :expect {:value {:transfer-id nil :signed-by "did:key:z1" :appended-at nil}}}
+  {:id :must-fail/mcp-wrong-cache-fresh :op :mcp
+   :call ["cache-status" {"access_token" "a" "expires_at" 2000} {"issuer" "i" "token_endpoint" "https://h/t"} {} {} 1000 0 false]
+   :expect {:value {:fresh? false :issuer-bound? false :ready? false}}}
+  {:id :must-fail/mcp-wrong-cache-bound :op :mcp
+   :call ["cache-status" {"refresh_token" "r" "hermes_issuer" "i"} {"issuer" "i" "token_endpoint" "https://h/t"} {"client_id" "c"} {} 99999 0 false]
+   :expect {:value {:fresh? true :issuer-bound? true :ready? true}}}
+  {:id :must-fail/mcp-wrong-discover-count :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {"command" "k"}}} ["x"] {"x" {"tools" [{"name" "a"}]}}]
+   :expect {:value {:schemas [] :index {} :errors []}}}
+  {:id :must-fail/mcp-wrong-discover-errors :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {}}} ["x"] {"x" {:error "down"}}]
+   :expect {:value {:schemas [] :index {} :errors []}}}
 ]}]

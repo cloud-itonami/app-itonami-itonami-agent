@@ -4509,4 +4509,92 @@ Output since last heartbeat:
   {:id :bprovider/resolve-local :op :browser-provider
    :call ["resolve" {"browser-use" {}} {"browser-use" true} "local"]
    :expect {:value nil}}
+  ;; ------------------------------------------------------------ oauth pure units (S6b-18)
+  {:id :oauth/challenge-rfc :op :oauth
+   :call ["challenge" "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"]
+   :expect {:value "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"}}
+  {:id :oauth/pkce :op :oauth
+   :call ["pkce" "abc"]
+   :expect {:value {"code_verifier" "abc" "code_challenge" "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0" "code_challenge_method" "S256"}}}
+  {:id :oauth/params-scope :op :oauth
+   :call ["params" {"client_id" "c"} "http://127.0.0.1:9/cb" {"code_challenge" "ch"} "st" "read write"]
+   :expect {:value {"response_type" "code" "client_id" "c" "redirect_uri" "http://127.0.0.1:9/cb" "state" "st" "code_challenge" "ch" "code_challenge_method" "S256" "scope" "read write"}}}
+  {:id :oauth/params-no-scope :op :oauth
+   :call ["params" {"client_id" "c"} "r" {"code_challenge" "ch"} "st" ""]
+   :expect {:value {"response_type" "code" "client_id" "c" "redirect_uri" "r" "state" "st" "code_challenge" "ch" "code_challenge_method" "S256"}}}
+  {:id :oauth/discovery-doc :op :oauth
+   :call ["discovery" {"issuer" "https://a" "authorization_endpoint" "https://a/auth" "token_endpoint" "https://a/token" "registration_endpoint" "https://a/reg" "device_authorization_endpoint" "https://a/dev"} "https://m.example"]
+   :expect {:value {"issuer" "https://a" "authorization_endpoint" "https://a/auth" "token_endpoint" "https://a/token" "registration_endpoint" "https://a/reg" "device_authorization_endpoint" "https://a/dev"}}}
+  {:id :oauth/discovery-fallback :op :oauth
+   :call ["discovery" nil "https://m.example"]
+   :expect {:value {"issuer" "https://m.example" "authorization_endpoint" "https://m.example/authorize" "token_endpoint" "https://m.example/token" "registration_endpoint" "https://m.example/register" "device_authorization_endpoint" nil}}}
+  {:id :oauth/reg-body :op :oauth
+   :call ["reg-body" ["http://127.0.0.1:9/cb"]]
+   :expect {:value {"client_name" "itonami-agent" "redirect_uris" ["http://127.0.0.1:9/cb"] "grant_types" ["authorization_code" "refresh_token" "urn:ietf:params:oauth:grant-type:device_code"] "response_types" ["code"] "token_endpoint_auth_method" "none"}}}
+  {:id :oauth/reg-record :op :oauth
+   :call ["reg-record" {"client_id" "c"}]
+   :expect {:value {"client_id" "c" "client_secret" nil "token_endpoint_auth_method" "none"}}}
+  {:id :oauth/token-record :op :oauth
+   :call ["token-record" {"access_token" "a" "expires_in" "100" "extra" "drop"} {"issuer" "iss"} 1000]
+   :expect {:value {"access_token" "a" "expires_in" "100" "expires_at" 1100 "hermes_issuer" "iss"}}}
+  {:id :oauth/token-record-default-expiry :op :oauth
+   :call ["token-record" {"access_token" "a" "expires_in" "xx"} {"issuer" "iss"} 1000]
+   :expect {:value {"access_token" "a" "expires_in" "xx" "expires_at" 4600 "hermes_issuer" "iss"}}}
+  ;; ------------------------------------------------------------ collect-io receipt (S6b-19)
+  {:id :collect-io/receipt-ok :op :collect-io
+   :call ["receipt" {:transfer-id "t1" :appended-at "2026-11-08T00:00:00+09:00" :extra "drop"} "did:key:z1"]
+   :expect {:value {:transfer-id "t1" :signed-by "did:key:z1" :appended-at "2026-11-08T00:00:00+09:00"}}}
+  {:id :collect-io/receipt-no-stamp :op :collect-io
+   :call ["receipt" {:transfer-id "t1"} "did:key:z1"]
+   :expect {:value {:transfer-id "t1" :signed-by "did:key:z1" :appended-at nil}}}
+  {:id :collect-io/receipt-empty-id :op :collect-io
+   :call ["receipt" {"transfer-id" ""} "did:key:z1"]
+   :expect {:value nil}}
+  {:id :collect-io/receipt-error :op :collect-io
+   :call ["receipt" {"error" "down"} "did:key:z1"]
+   :expect {:value nil}}
+  {:id :collect-io/receipt-no-signer :op :collect-io
+   :call ["receipt" {"transfer-id" "t1"} ""]
+   :expect {:value nil}}
+  ;; ------------------------------------------------------------ mcp cache-status (S6b-20)
+  {:id :mcp/cache-fresh :op :mcp
+   :call ["cache-status" {"access_token" "a" "expires_at" 2000} {"issuer" "i" "token_endpoint" "https://h/t"} {} {} 1000 0 false]
+   :expect {:value {:fresh? true :issuer-bound? false :ready? true}}}
+  {:id :mcp/cache-expired-boundary :op :mcp
+   :call ["cache-status" {"access_token" "a" "expires_at" 1000} {"issuer" "i" "token_endpoint" "https://h/t"} {} {} 1000 0 false]
+   :expect {:value {:fresh? false :issuer-bound? false :ready? false}}}
+  {:id :mcp/cache-ttl-fallback :op :mcp
+   :call ["cache-status" {"access_token" "a" "expires_in" 500} {} {} {} 1000 1400000 true]
+   :expect {:value {:fresh? true :issuer-bound? false :ready? true}}}
+  {:id :mcp/cache-corrupt :op :mcp
+   :call ["cache-status" {"access_token" "a" "expires_at" "xx"} {} {} {} 1000 0 false]
+   :expect {:value {:fresh? false :issuer-bound? false :ready? false}}}
+  {:id :mcp/cache-issuer-bound :op :mcp
+   :call ["cache-status" {"refresh_token" "r" "hermes_issuer" "i"} {"issuer" "i" "token_endpoint" "https://h/t"} {"client_id" "c"} {} 99999 0 false]
+   :expect {:value {:fresh? false :issuer-bound? true :ready? true}}}
+  {:id :mcp/cache-basic-no-secret :op :mcp
+   :call ["cache-status" {"refresh_token" "r" "hermes_issuer" "i"} {"issuer" "i" "token_endpoint" "https://h/t"} {"client_id" "c" "token_endpoint_auth_method" "client_secret_basic"} {} 99999 0 false]
+   :expect {:value {:fresh? false :issuer-bound? false :ready? false}}}
+  {:id :mcp/cache-http-endpoint :op :mcp
+   :call ["cache-status" {"refresh_token" "r" "hermes_issuer" "i"} {"issuer" "i" "token_endpoint" "http://h/t"} {} {} 99999 0 false]
+   :expect {:value {:fresh? false :issuer-bound? false :ready? false}}}
+  {:id :mcp/cache-prefix-expiry :op :mcp
+   :call ["cache-status" {"access_token" "a" "expires_at" "2000x"} {} {} {} 1000 0 false]
+   :expect {:value {:fresh? true :issuer-bound? false :ready? true}}}
+  ;; ------------------------------------------------------------ mcp discover projection (S6b-21)
+  {:id :mcp/discover-basic :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {"command" "k"}}} ["x"] {"x" {"tools" [{"name" "a" "description" "Ad" "inputSchema" {"type" "object" "properties" {"q" {}}}} {"name" "clarify"}]}}]
+   :expect {:value {:schemas [{"type" "function" "function" {"name" "mcp__x__a" "description" "Ad" "parameters" {"type" "object" "properties" {"q" {}} "required" []}}} {"type" "function" "function" {"name" "mcp__x__clarify" "description" "MCP tool clarify from x" "parameters" {"type" "object" "properties" {} "required" []}}} {"type" "function" "function" {"name" "clarify" "description" "MCP tool clarify from x" "parameters" {"type" "object" "properties" {} "required" []}}}] :index {"mcp__x__a" ["x" "a"] "mcp__x__clarify" ["x" "clarify"] "clarify" ["x" "clarify"]} :errors []}}}
+  {:id :mcp/discover-collide :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {} "y" {}}} ["x" "y"] {"x" {"tools" [{"name" "clarify"}]} "y" {"tools" [{"name" "clarify"}]}}]
+   :expect {:value {:schemas [{"type" "function" "function" {"name" "mcp__x__clarify" "description" "MCP tool clarify from x" "parameters" {"type" "object" "properties" {} "required" []}}} {"type" "function" "function" {"name" "mcp__y__clarify" "description" "MCP tool clarify from y" "parameters" {"type" "object" "properties" {} "required" []}}}] :index {"mcp__x__clarify" ["x" "clarify"] "mcp__y__clarify" ["y" "clarify"]} :errors []}}}
+  {:id :mcp/discover-errors :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {} "z" {"enabled" false}}} ["x" "z" "w"] {"x" {:error "down"}}]
+   :expect {:value {:schemas [] :index {} :errors [{"server" "x" "error" "down"} {"server" "w" "error" "no exchange result"}]}}}
+  {:id :mcp/discover-allowlist :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {"tools" {"exclude" ["s*"]}}}} ["x"] {"x" {"tools" [{"name" "secret"} {"name" "ok"}]}}]
+   :expect {:value {:schemas [{"type" "function" "function" {"name" "mcp__x__ok" "description" "MCP tool ok from x" "parameters" {"type" "object" "properties" {} "required" []}}}] :index {"mcp__x__ok" ["x" "ok"]} :errors []}}}
+  {:id :mcp/discover-input-schema :op :mcp
+   :call ["discover" {"mcp_servers" {"x" {}}} ["x"] {"x" {"tools" [{"name" "t" "input_schema" {"properties" {"p" {}}}}]}}]
+   :expect {:value {:schemas [{"type" "function" "function" {"name" "mcp__x__t" "description" "MCP tool t from x" "parameters" {"type" "object" "properties" {"p" {}} "required" []}}}] :index {"mcp__x__t" ["x" "t"]} :errors []}}}
 ]}]
