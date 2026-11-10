@@ -154,7 +154,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -203,6 +203,7 @@
     :browser (ops-browser c)
     :browser-cloud (ops-browser-cloud c)
     :browser-provider (ops-browser-provider c)
+    :oauth (ops-oauth c)
     :process (ops-process c)
     :dapps (ops-dapps c scratch)
     :connections (ops-connections c scratch)
@@ -2884,6 +2885,19 @@
               "normalize" (browser-provider/normalize-provider arg)
               "resolve" (browser-provider/resolve-provider arg arg2 arg3)
               (throw (ex-info (str "browser-provider: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-oauth [c]
+  (let [[verb arg arg2 arg3 arg4 arg5] (:call c)]
+    {:value (case verb
+              "store-name" (oauth/store-name arg)
+              "challenge" (oauth/verify-challenge arg)
+              "pkce" (oauth/pkce-pair arg)
+              "params" (oauth/auth-params arg arg2 arg3 arg4 arg5)
+              "discovery" (oauth/discovery-record arg arg2)
+              "reg-body" (oauth/registration-body arg)
+              "reg-record" (oauth/registration-record arg)
+              "token-record" (oauth/token-record arg arg2 arg3)
+              (throw (ex-info (str "oauth: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-process [c]
   (let [[verb arg] (:call c)]

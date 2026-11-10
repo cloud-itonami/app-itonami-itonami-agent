@@ -108,7 +108,7 @@ from source, the rest follow the module name until their slice lands.
 | `manifest.cljk` | `manifest.cljc` | done |
 | `mcp.cljk` | `mcp.cljc` (protocol-version, enabled?, names-for, command-for, server-env, tool-name, tool-allowed?, handshake-lines, call-line, collect-call-results, collect-exchange-result, render-result + private rpc/expand/object-schema/glob) | partial (config selection + naming + allowlist + message shapes done JUN-1036 S6b-4/S6b-5, shared cases; stdio/HTTP exchange spawn, oauth-cache-ready, discover projection/call dispatch stay S6) |
 | `notepad.cljk` | `notepad.cljc` | done (JUN-1036 S4a; clear is ported, unwired — no CLI surface) |
-| `oauth.cljk` | `oauth.cljc` (store-name only) | partial (JUN-1036 S6b-2; discovery/registration/token flows stay S6) |
+| `oauth.cljk` | `oauth.cljc` (store-name + PKCE S256 + auth params + discovery/registration/token-cache shapes, `:oauth` op) | partial (pure heads done JUN-1036 S6b-2/S6b-18, shared cases; fetch, loopback listener, URL serialization, token endpoint, file writes, clock, login/device flows stay S6) |
 | `p2p.cljk` *node server/trust* | `peer.cljc` | partial (sync plans done; + S5d unit 1: did:key parse/valid/pub->did, signed envelopes + auth header, peers.edn read/write/add, ensure-rail, path rebase, bundle materialize/fetch, service-record projection/overlay, fetch mapping; + S5d unit 2: peer-info/discover/pick-peer/infer-peers/infer-via-peers/remote-run, seven serve routes + dispatch, local-gateway-complete, placement; socket/child-process/agent-loop/rails reads/health syscalls stay host-side) |
 | `pause.cljk` * | `pause.cljc` | done (JUN-1036 S3a) |
 | `platform_adapters.cljk` *lane adapters* | `adapters.cljc` (per-lane request builders + token-env/for-lane resolution + sync sends, error strings verbatim) | done (JUN-1036 S5c; env-only secrets, injected `:fetch`) |
@@ -508,4 +508,18 @@ from source, the rest follow the module name until their slice lands.
   pinned; an explicit-but-unavailable name still wins, pinned.
   Env reads, random-hex, fetch, the 402 retry loop, registration
   and lifecycle dispatch stay S6.)
+- S6b-18 oauth pure units — done (JUN-1036: pure SHA-256 /
+  `verify-challenge` (RFC 7636, independent oracle: node:crypto) /
+  `pkce-pair` / `auth-params` / `discovery-record` /
+  `registration-body` + `registration-record` / `token-record`,
+  with `:oauth` verbs. 10 cases + 3 must-fail; 928 cases + 108
+  must-fail green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon
+  byte-identical — see the evidence doc. Verified divergences:
+  length padding was a 12-byte high+low instead of 64-bit (found
+  by sha256("abc") vs node); schedule sigmas missed the SHR halves
+  (same oracle); base64 grouped bytes at 24-bit-high regardless of
+  group width (found by the RFC 7636 vector: last group only).
+  Random verifiers, fetch, the loopback listener, URL
+  serialization, the token endpoint, 0600 writes, clock reads and
+  the login/device flows stay S6.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.
