@@ -332,6 +332,40 @@
    :expect {:turn {:final "[CRON_FAILURE] turn/empty-transcript"
                    :exit-reason "turn/empty-transcript"
                    :error {:error "turn/empty-transcript"}}}}
+  ;; ------------------------------------------------------------ oneshot
+  ;; Ad-hoc turn execution (S2e): gate, then apply the host's finished
+  ;; turn. The product command has no executor, so a gated turn without
+  ;; an injected one stays pending (exit 3); print/exit semantics are
+  ;; verbatim from main.cljk oneshot + quiet/turn-failed?.
+  {:id :oneshot/ok-print :op :oneshot :profile "itonami-ok" :prompt "hello"
+   :capabilities [:read_source]
+   :turn {:final "hi there" :exit-reason "completed" :turns 1 :provider "murakumo" :model "mishima"}
+   :expect {:exit 0 :status "ok" :first-line "hi there" :final "hi there"}}
+  {:id :oneshot/held-approval :op :oneshot :profile "itonami-ok" :prompt "hello"
+   :capabilities [:publish_external]
+   :turn {:final "hi" :exit-reason "completed"}
+   :expect {:exit 2 :status "held"}}
+  {:id :oneshot/empty-prompt :op :oneshot :profile "itonami-ok" :prompt ""
+   :expect {:exit 1 :status "refused"}}
+  {:id :neg/oneshot-without-manifest :negative true :op :oneshot :profile "itonami-ok" :prompt "hello"
+   :edit [["itonami.edn" :delete]]
+   :turn {:final "hi" :exit-reason "completed"}
+   :expect {:exit 1 :status "refused"}}
+  {:id :oneshot/failed-error :op :oneshot :profile "itonami-ok" :prompt "hello"
+   :capabilities [:read_source]
+   :turn {:final "" :exit-reason "error" :error {:error "boom"}}
+   :expect {:exit 1 :status "error" :first-line "itonami-agent -z: error: boom"}}
+  {:id :oneshot/interrupted-never-prints :op :oneshot :profile "itonami-ok" :prompt "hello"
+   :capabilities [:read_source]
+   :turn {:final "partial" :exit-reason "interrupted"}
+   :expect {:exit 1 :status "error"}}
+  {:id :oneshot/blank-final-dies :op :oneshot :profile "itonami-ok" :prompt "hello"
+   :capabilities [:read_source]
+   :turn {:final "   " :exit-reason "completed"}
+   :expect {:exit 1 :status "error"}}
+  {:id :oneshot/pending-no-executor :op :oneshot :profile "itonami-ok" :prompt "hello"
+   :capabilities [:read_source]
+   :expect {:exit 3 :status "pending" :messages-include ["inference pending for itonami-ok"]}}
 
   ;; ------------------------------------------------------------ run-plan
   {:id :run-plan/pending-script :op :run-plan :profile "itonami-ok" :job "digest-tick"
