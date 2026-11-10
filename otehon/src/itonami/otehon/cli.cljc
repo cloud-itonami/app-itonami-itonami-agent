@@ -6,6 +6,7 @@
     dry-run    <profile-dir> <job-id-or-name> [--capability <name>]...
     tick       <profile-dir>
     turn-gate  <profile-dir> <prompt> [--capability <name>]...
+    oneshot    <profile-dir> <prompt> [--capability <name>]...
     run-plan   <profile-dir> <job-id-or-name> [--capability <name>]...
                [--script-file <path> | --script-error <text>] [--script-no-wake]
     store-plan --direction import|export --from <dir> --to <dir> [--force]
@@ -30,7 +31,10 @@
     test       <cases.edn>
 
   tick, turn-gate and run-plan decide without doing: no script runs, no
-  inference is called, nothing is saved (side-effects :none). store-plan
+  inference is called, nothing is saved (side-effects :none). oneshot
+  gates the same way, then applies the host's finished turn (the CLI
+  has no executor, so a gated turn without one stays pending, exit 3).
+  store-plan
   prints the copy plan; the host copies the bytes. pause, resume and
   status touch and read the store exactly like the legacy CLI (the pause
   marker text and every status line are verbatim), so their shared cases
@@ -154,7 +158,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -178,6 +182,7 @@
     :model (ops-model c scratch)
     :fallback (ops-fallback c scratch)
     :run (ops-run c scratch)
+    :oneshot (ops-oneshot c dir read-text)
     :doctor (ops-doctor c scratch)
     :sessions (ops-sessions c scratch)
     :notepad (ops-notepad c scratch)
@@ -878,6 +883,50 @@
               {:exit (if (= :held (:status plan2)) 2 1)
                :lines [(str (name (:status plan2)) ": " (:reason plan2))]
                :detail {:status (name (:status plan2)) :reason (:reason plan2)}})))))))
+
+(defn- execute-oneshot
+  "Run one ad-hoc turn's host side: gate, then apply the finished turn.
+  Verbatim from main.cljk oneshot + quiet/turn-failed?: the final text
+  prints when the turn completed with a non-blank answer, otherwise
+  exit 1 with the exit reason (a hard failure or a cancellation never
+  prints). The live inference call stays the host's job (the CLI has no
+  executor, so a gated turn without one stays pending, exit 3 — the
+  same seam run-exec uses for agent turns)."
+  [prof prompt capabilities opts]
+  (let [gate (turn/turn-gate prof prompt {:capabilities capabilities})]
+    (cond
+      (= :refused (:status gate))
+      {:exit 1 :lines [(str "refused: " (:reason gate))] :detail {:status "refused" :reason (:reason gate)}}
+
+      (= :held (:status gate))
+      {:exit 2 :lines [(str "held: " (:reason gate))] :detail {:status "held" :reason (:reason gate)}}
+
+      :else
+      (if-let [turn (:turn opts)]
+        (let [final (str (:final turn))
+              failed? (or (some? (:error turn)) (= "interrupted" (:exit-reason turn)))]
+          (if (and (not failed?) (= "completed" (:exit-reason turn)) (not (str/blank? final)))
+            {:exit 0 :lines [final]
+             :detail {:status "ok" :final final :exit-reason "completed"
+                      :provider (:provider turn) :model (:model turn) :turns (:turns turn)}}
+            {:exit 1 :lines [(str "itonami-agent -z: " (:exit-reason turn)
+                                 (when-let [e (get-in turn [:error :error])] (str ": " e)))]
+             :detail {:status "error" :exit-reason (:exit-reason turn)
+                      :error (get-in turn [:error :error]) :final final}}))
+        {:exit 3
+         :lines [(str "inference pending for " (:profile gate)) (canon gate)]
+         :detail {:status "pending" :plan (canon gate)}}))))
+
+(defn- ops-oneshot
+  "The shared-case op for oneshot: the fixture profile gates the prompt,
+  then the case's injected :turn applies (the product command has no
+  executor yet, so a case without one stays pending)."
+  [c dir read-text]
+  (let [prof (load-dir dir read-text)
+        r (execute-oneshot prof (:prompt c "") (vec (:capabilities c [])) {:turn (:turn c)})]
+    (merge {:exit (:exit r) :lines (:lines r) :first-line (first (:lines r))
+            :messages (:lines r)}
+           (:detail r))))
 
 (defn- host-now []
   (let [np (hio/now-parts)]
@@ -3209,7 +3258,7 @@
           :else (recur (next as) (update m :pos conj (first as))))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | bundle <name> | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] <artifact> [--dry-run] | hy-migrate [<p>|--all] [--dry-run] | did [<p>|--all] [--registry R] [--out F]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | oneshot <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | bundle <name> | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] <artifact> [--dry-run] | hy-migrate [<p>|--all] [--dry-run] | did [<p>|--all] [--registry R] [--out F]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -3613,6 +3662,12 @@
                                             {:capabilities (capabilities-arg more)})]
                       (println (canon r))
                       (exit-for r)))
+      "oneshot" (if-not (and a b)
+                  (usage)
+                  (let [prof (load-dir a (hio/read-text-fn a))
+                        r (execute-oneshot prof b (capabilities-arg more) nil)]
+                    (doseq [l (:lines r)] (println l))
+                    (:exit r)))
       "run-plan" (if-not (and a b)
                    (usage)
                    (let [now (hio/now-parts)

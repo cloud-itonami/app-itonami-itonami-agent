@@ -17,7 +17,7 @@ covered by shared cases on all three runners.
 
 | legacy route | legacy ref | otehon command | status |
 |---|---|---|---|
-| oneshot `-p/-z` (+`-m/--provider/-t`) | `oneshot`, `loop.cljk` toolset rule | `turn-gate` (gate only, no turn is run) | S2 (execute the gated turn) |
+| oneshot `-p/-z` (+`-m/--provider/-t`) | `oneshot`, `loop.cljk` toolset rule | `oneshot` (gate + injected/host turn apply: prints the final on completed non-blank, exit 1 otherwise, pending exit 3 without an executor; the live inference call stays host-side) | done (JUN-1036 S2e; the live run-job loop + watcher fan-in stay open) |
 | `bridge` | `bridge` | — | S6 |
 | `chat` | `chat` | — | S6 |
 | `vault` | `vault-cmd` | `vault.cljc` (login-meta / add-login / remove-login / secret / list-rows / format-row over an explicit store map, `:vault` op; encrypted file, handle generation, stdin read and the CLI stay S6) | partial (store core done JUN-1036 S6b-14, shared cases; TOTP minting + the `vault` command wiring stay S6) |
@@ -163,6 +163,11 @@ from source, the rest follow the module name until their slice lands.
   added); the `:quiet` op calls `quiet-notify-linger-seconds` via
   `process.cljc`. The S5c loop omits the legacy diagnostic-mute
   displacement — predicate ported, loop-level case absent.)
+- S2e ad-hoc turn — done (JUN-1036: `oneshot` gate + finished-turn
+  apply — prints the final on completed non-blank (verbatim from
+  `main.cljk` oneshot + `quiet/turn-failed?`), exit 1 otherwise,
+  pending exit 3 without an executor; 8 cases + 1 negative control.
+  The live run-job loop + watcher fan-in stay open).
 - S3a store verbs pause/status — done (JUN-1036: 5 cases + 2 must-fail).
 - S3b read/show ops — done (JUN-1036: model/fallback first; doctor +
   sessions list/show/resume-refusal second, 18 cases. The S6-owned
