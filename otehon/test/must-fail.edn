@@ -385,4 +385,10 @@
   {:id :must-fail/vault-bad-seed :op :vault
    :call ["totp" "NOT-BASE32!!" 59000]
    :expect {:value "287082"}}
+  {:id :must-fail/browser-explicit-expects-nil :op :browser-provider
+   :call ["resolve" "browserbase" {"browser-use" {:available? true} "browserbase" {:available? false}}]
+   :expect {:value nil}}
+  {:id :must-fail/browser-shortcut-expects-firecrawl :op :browser-provider
+   :call ["resolve" "" {"firecrawl" {:available? true}}]
+   :expect {:value "firecrawl"}}
 ]}]

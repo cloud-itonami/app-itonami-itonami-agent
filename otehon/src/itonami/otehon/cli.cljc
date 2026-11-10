@@ -57,6 +57,7 @@
             [itonami.otehon.turn :as turn]
             [itonami.otehon.execute :as execute]
             [itonami.otehon.tts :as tts]
+            [itonami.otehon.browser-provider :as browser-provider]
             [itonami.otehon.collect :as collect]
             [itonami.otehon.clarify :as clarify]
             [itonami.otehon.webguard :as webguard]
@@ -151,7 +152,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser-provider ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -197,6 +198,7 @@
     :clarify (ops-clarify c)
     :webguard (ops-webguard c)
     :vault (ops-vault c)
+    :browser-provider (ops-browser-provider c)
     :process (ops-process c)
     :dapps (ops-dapps c scratch)
     :connections (ops-connections c scratch)
@@ -2833,6 +2835,27 @@
               "totp" (vault/mint-totp arg arg2)
               "base32" (vault/base32-decode arg)
               (throw (ex-info (str "vault: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-browser-provider
+  "The shared-case op for the provider registry core. Registry entries
+  are data ({name {:available? bool}}); an entry with `:throw true`
+  stands in for a throwing `:is-available` fn (Hermes is_available_safe)
+  so the broken-provider case is pinned without host fns in EDN."
+  [c]
+  (let [[verb arg arg2] (:call c)
+        with-fns (fn [registry]
+                   (into {} (map (fn [[name entry]]
+                                   [name (if (get entry :throw)
+                                           (assoc entry :is-available
+                                                  (fn [] (throw (ex-info "browser provider unavailable" {}))))
+                                           entry)])
+                                 (or registry {}))))]
+    {:value (case verb
+              "normalize" (browser-provider/normalize-provider arg)
+              "resolve" (browser-provider/resolve-provider arg (with-fns arg2))
+              "preference" browser-provider/legacy-preference
+              "default" browser-provider/default-provider
+              (throw (ex-info (str "browser-provider: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-process [c]
   (let [[verb arg] (:call c)]

@@ -3434,6 +3434,47 @@ Output since last heartbeat:
    :call ["refusal" "what is the weather"]
    :expect {:value nil}}
 
+  ;; ------------------------------------------------------------ browser-provider (S6b)
+  ;; Cloud browser registry core: normalize + resolve. Registry entries
+  ;; are data ({name {:available? bool}}); :throw true stands in for a
+  ;; throwing :is-available fn (Hermes is_available_safe).
+  {:id :browser-provider/normalize-blank :op :browser-provider
+   :call ["normalize" ""]
+   :expect {:value "local"}}
+  {:id :browser-provider/normalize-case :op :browser-provider
+   :call ["normalize" "  BROWSER-USE "]
+   :expect {:value "browser-use"}}
+  {:id :browser-provider/default :op :browser-provider
+   :call ["default"]
+   :expect {:value "local"}}
+  {:id :browser-provider/preference :op :browser-provider
+   :call ["preference"]
+   :expect {:value ["browser-use" "browserbase"]}}
+  {:id :browser-provider/resolve-explicit :op :browser-provider
+   :call ["resolve" "browser-use" {"browser-use" {:available? true} "browserbase" {:available? true}}]
+   :expect {:value "browser-use"}}
+  {:id :browser-provider/resolve-explicit-unavailable-wins :op :browser-provider
+   :call ["resolve" "browserbase" {"browser-use" {:available? true} "browserbase" {:available? false}}]
+   :expect {:value "browserbase"}}
+  {:id :browser-provider/resolve-explicit-unregistered-falls-back :op :browser-provider
+   :call ["resolve" "firecrawl" {"browser-use" {:available? true} "browserbase" {:available? false}}]
+   :expect {:value "browser-use"}}
+  {:id :browser-provider/resolve-local-nil :op :browser-provider
+   :call ["resolve" "local" {"browser-use" {:available? true}}]
+   :expect {:value nil}}
+  {:id :browser-provider/resolve-auto-order :op :browser-provider
+   :call ["resolve" "" {"browser-use" {:available? false} "browserbase" {:available? true}}]
+   :expect {:value "browserbase"}}
+  {:id :browser-provider/resolve-auto-none :op :browser-provider
+   :call ["resolve" nil {"browser-use" {:available? false} "browserbase" {:available? false}}]
+   :expect {:value nil}}
+  {:id :browser-provider/resolve-no-shortcut :op :browser-provider
+   :call ["resolve" "" {"firecrawl" {:available? true}}]
+   :expect {:value nil}}
+  {:id :browser-provider/resolve-throw-safe :op :browser-provider
+   :call ["resolve" "" {"browser-use" {:throw true} "browserbase" {:available? true}}]
+   :expect {:value "browserbase"}}
+
   ;; ------------------------------------------------------------ process (redact)
   {:id :process/redact-url :op :process
    :call ["redact" "curl https://user:s3cret@host/x"]

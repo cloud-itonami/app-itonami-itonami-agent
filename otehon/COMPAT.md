@@ -85,7 +85,7 @@ from source, the rest follow the module name until their slice lands.
 |---|---|---|
 | `browser.cljk` *browser tools* | — | planned S6 |
 | `browser_cloud.cljk` | — | planned S6 |
-| `browser_provider.cljk` | — | planned S6 |
+| `browser_provider.cljk` | `browser_provider.cljc` (normalize-provider, resolve-provider over an explicit registry map) | partial (registry core done JUN-1036 S6b-16, 12 shared cases + 2 must-fail; plugin registration, lifecycle + local browser stay S6) |
 | `chat_platform.cljk` | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply, sync) | done (JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in) |
 | `clarify.cljk` | — | planned S6 |
 | `code_rpc.cljk` | `code_rpc.cljc` (tool-error, result-error, tool-errors-since, sandbox-tools-for, terminal-blocked-params, missing-import-hint, failure-hint-rules, failure-hint, hint-on-failure) | partial (shaping + hints done JUN-1036 S6b-8, shared cases; shim-header/tool-stubs/generate-hermes-tools, token check, dispatch, budget, log, serve loop stay S6) |
@@ -477,4 +477,16 @@ from source, the rest follow the module name until their slice lands.
   AES-256-GCM file, 0600 key file, `vh-` + random handle
   generation, the stdin password read, the default clock and the
   `vault` command wiring stay S6.)
+- S6b-16 browser-provider registry core — done (JUN-1036:
+  `browser_provider.cljc` normalize-provider + resolve-provider over
+  an explicit registry map (no global atom); explicit-wins,
+  unregistered-falls-back, local-nil, preference-order auto-detect,
+  no-single-eligible-shortcut, throw-safe `:is-available`.
+  12 shared cases + 2 must-fail green on basilisp 0.5.1 / bb 1.12.218 /
+  nbb (targeted runs; full-harness byte-identity left to CI). Verified
+  divergences: the twin answers the provider NAME (the legacy answers
+  the record; the host resolves it from its plugin registry);
+  registry entries are data (`:available?`), a throwing fn entry reads
+  false at the `:throw` seam. Plugin registration, session lifecycle
+  and the local browser stay S6.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.
