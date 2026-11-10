@@ -373,4 +373,10 @@
   {:id :must-fail/doc-wrong-oauth :op :doctor-kinds
    :call ["oauth" ["a" "b"] {"a" {"url" "u" "auth" "oauth"} "b" {"url" "u" "auth" "oauth"}} ["a"]]
    :expect {:value [{:code :oauth_cache_unavailable :detail "a"}]}}
+  {:id :must-fail/vault-wrong-meta :op :vault
+   :call ["meta" {"vh-a" {"label" "Work" "username" "ako" "password" "pw1" "origin" "https://x" "totp_seed" ""}} "vh-a"]
+   :expect {:value {"handle" "vh-a" "backend" "local" "label" "WRONG" "kind" "login" "origin" "https://x" "available" true "identifier" "ako" "identifier_type" "username" "two_factor" nil}}}
+  {:id :must-fail/vault-wrong-remove :op :vault
+   :call ["remove" {"vh-a" {"label" "Work"}} "vh-a"]
+   :expect {:value {:store {} :removed false}}}
 ]}]

@@ -20,7 +20,7 @@ covered by shared cases on all three runners.
 | oneshot `-p/-z` (+`-m/--provider/-t`) | `oneshot`, `loop.cljk` toolset rule | `turn-gate` (gate only, no turn is run) | S2 (execute the gated turn) |
 | `bridge` | `bridge` | — | S6 |
 | `chat` | `chat` | — | S6 |
-| `vault` | `vault-cmd` | — | S6 |
+| `vault` | `vault-cmd` | `vault.cljc` (login-meta / add-login / remove-login / secret / list-rows / format-row over an explicit store map, `:vault` op; encrypted file, handle generation, stdin read and the CLI stay S6) | partial (store core done JUN-1036 S6b-14, shared cases; TOTP minting + the `vault` command wiring stay S6) |
 | `mcp` | `mcp-cmd` | — | S6 |
 | `dapps` | `dapps-cmd` | `dapps/status` surface (resolve + rows, shared `:dapps` cases) | partial (JUN-1036 S6b-2; the product `dapps` command wiring stays S6) |
 | `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor), `notepad` (KV verbatim), `runs`/`incidents` (ledger reads: rows list, ack) | done run/tick-exec + notepad + ledger reads (JUN-1036 S2a/S2b/S4a/S4b; ledger/queue writes S5) |
@@ -122,7 +122,7 @@ from source, the rest follow the module name until their slice lands.
 | `soul.cljk` | `soul.cljc` (world/unit/role render + splice, limit, body guard) | done (JUN-1036 S4d) |
 | `tools.cljk` *tool registry* | `tools.cljc` (schemas table + toolsets + name/unsupported/approval/enabled/execution-disabled/runtime predicates) | partial (registry core done S6a; tool implementations + servers/processes + CLIs stay S6c/d) |
 | `tts.cljk` | — | planned S6 |
-| `vault.cljk` | — | planned S6 |
+| `vault.cljk` | `vault.cljc` (store core: login-meta / add / remove / secret / list / format verbs) | partial (store core done JUN-1036 S6b-14, shared cases; AES file, handle generation, TOTP minting, CLI wiring stay S6) |
 | `watcher.cljk` | — | planned S5 |
 | `webguard.cljk` | — | planned S6 |
 | `yaml.cljk` | `yaml.cljc` | done |
@@ -450,4 +450,18 @@ from source, the rest follow the module name until their slice lands.
   / carrier / ssrf, the local-Chrome probe, host credential-cache
   reads, role/capability gating and the evidence-table rendering
   stay S6.)
-- S6 tools (rest): backends + bridge/chat/vault/mcp/dapps CLIs.
+- S6b-14 vault pure store ops — done (JUN-1036:
+  `login-meta` / `add-login` / `remove-login` / `secret` /
+  `list-rows` / `format-row` over an explicit store map, with
+  `:vault` verbs (`meta` / `add` / `remove` / `secret` / `list` /
+  `format`). 10 cases + 2 must-fail; 867 cases + 98 must-fail
+  green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical
+  — see the evidence doc. Verified divergences: none — string-keyed
+  store records verbatim (input records stay keyword-keyed, as the
+  legacy `add-login!` receives them); `list-rows` normalizes to
+  `[handle record]` vectors so every runner compares the same shape;
+  `remove` returns `{:store :removed}` to pin the CLI's removed /
+  no-such-handle contract. AES-256-GCM file, 0600 key file, `vh-` +
+  random handle generation, the stdin password read, TOTP minting and
+  the `vault` command wiring stay S6.)
+- S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.
