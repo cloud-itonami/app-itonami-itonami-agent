@@ -500,4 +500,10 @@
   {:id :must-fail/args-wrong-opt :op :parse-args
    :call ["opt-value" :force "true"]
    :expect {:value false}}
+  {:id :must-fail/args-wrong-route :op :parse-args
+   :call ["route" ["chat"]]
+   :expect {:value {:command "WRONG" :args []}}}
+  {:id :must-fail/args-wrong-valid-name :op :parse-args
+   :call ["valid-name" "main"]
+   :expect {:value false}}
 ]}]

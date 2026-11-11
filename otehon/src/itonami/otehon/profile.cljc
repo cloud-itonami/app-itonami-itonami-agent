@@ -102,6 +102,14 @@
 
 (defn errors [problems] (filterv #(= :error (:level %)) problems))
 
+(defn valid-name?
+  "A profile name: a lowercase token of at most 64 chars. Non-strings
+  refuse — the coercion is for callers passing keyword/string twins, not
+  for numbers. Verbatim from `profile.cljk`; `-main` and `home-in` gate
+  on this, so `-p ../..` cannot escape the store."
+  [n]
+  (boolean (and (string? n) (re-matches #"^[a-z0-9][a-z0-9_-]{0,63}$" n))))
+
 (defn- refuse [reason & [more]]
   (merge {:status :refused :reason reason} more))
 

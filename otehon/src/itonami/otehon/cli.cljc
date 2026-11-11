@@ -3197,11 +3197,51 @@
             (recur (rest more) (assoc opts k (opt-value k v)) pos))))
       :else (recur more opts (conj pos a)))))
 
+(def ^:private main-commands
+  "First-positional commands `-main` dispatches to a product command.
+  Verbatim from `main.cljk`; `gateway` sub-routes, `help`/`--help`/nil
+  print help, `peer` is also the oneshot exception."
+  #{"bridge" "chat" "vault" "mcp" "dapps" "cron" "profile" "doctor"
+    "sessions" "model" "fallback" "status" "pause" "resume" "send" "peer"})
+
+(defn- route-argv
+  "Raw argv to a `-main` routing decision, without running anything.
+  Verbatim from `main.cljk`: the profile-name gate first (`default`
+  always passes, anything else must satisfy `valid-name?`), then the
+  oneshot branch (any truthy `:oneshot` unless the command is `peer`),
+  then the command case with `gateway` sub-routing. Printing, dying,
+  profile loading and execution stay host-side: usage and errors come
+  back as data (`{:usage msg}` for the gateway usage line, `{:error
+  msg}` for the die-2 refusals, `{:help true}` for the help arms)."
+  [argv]
+  (let [[opts pos] (parse-args argv)
+        [cmd & rest] pos]
+    (cond
+      (and (:profile opts)
+           (not= "default" (:profile opts))
+           (not (profile/valid-name? (:profile opts))))
+      {:error (str "invalid profile name: " (:profile opts))}
+      (and (:oneshot opts) (not= "peer" cmd))
+      {:oneshot opts}
+      (contains? main-commands cmd)
+      {:command cmd :args (vec rest)}
+      (= "gateway" cmd)
+      (let [sub (first rest)]
+        (if (or (= "run" sub) (= "serve" sub))
+          {:command "gateway" :sub sub}
+          {:usage "usage: itonami-agent gateway run | serve [--platform telegram] [--interval seconds]"}))
+      (or (= "help" cmd) (= "--help" cmd) (nil? cmd))
+      {:help true}
+      :else
+      {:error (str "unknown command: " cmd)})))
+
 (defn- ops-parse-args [c]
   (let [[verb arg arg2] (:call c)]
     {:value (case verb
               "parse" (parse-args (vec arg))
               "opt-value" (opt-value arg arg2)
+              "route" (route-argv (vec arg))
+              "valid-name" (profile/valid-name? arg)
               (throw (ex-info (str "parse-args: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-send [c]
