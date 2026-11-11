@@ -77,6 +77,7 @@
             [itonami.otehon.homeassistant :as homeassistant]
             [itonami.otehon.computer-use :as computer-use]
             [itonami.otehon.code-rpc :as code-rpc]
+            [itonami.otehon.bridge :as bridge]
             [itonami.otehon.run :as run]
             [itonami.otehon.doctor :as doctor]
             [itonami.otehon.sessions :as sessions]
@@ -162,7 +163,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -222,6 +223,7 @@
     :homeassistant (ops-homeassistant c)
     :computer-use (ops-computer-use c)
     :code-rpc (ops-code-rpc c)
+    :bridge (ops-bridge c)
     :doctor-kinds (ops-doctor-kinds c)
     :confine (ops-confine c scratch)
     :send (ops-send c)
@@ -3106,6 +3108,15 @@
                               {:result (last out) :count @(:counter st)
                                :log (mapv #(dissoc % "duration") @(:log st))})
               (throw (ex-info (str "code-rpc: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-bridge [c]
+  (let [[verb arg arg2] (:call c)]
+    {:value (case verb
+              "validate" (bridge/validate-request arg)
+              "approval" (bridge/approval-outcome arg arg2)
+              "result" (bridge/result-row arg)
+              "error" (bridge/error-row arg)
+              (throw (ex-info (str "bridge: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-send [c]
   (let [req (:request c {})

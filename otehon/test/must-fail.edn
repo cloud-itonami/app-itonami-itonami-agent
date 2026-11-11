@@ -438,4 +438,10 @@
    :budget {"max-blocks" 1 "max-bytes" 1000 "max-matches" 10}
    :stats {"blocks" 2 "bytes" 200 "matches" 1 "round-trips" 2}
    :expect {"ok" true "reason" "within-budget"}}
+  {:id :must-fail/bridge-wrong-profile :op :bridge
+   :call ["validate" {"profile" "p" "prompt" "hi" "tool_names" []}]
+   :expect {:value {:profile "WRONG" :prompt "hi" :tool-names []}}}
+  {:id :must-fail/bridge-wrong-allow :op :bridge
+   :call ["approval" {"type" "approval" "request_id" "r1" "choice" "once"} ["r1"]]
+   :expect {:value {:request-id "r1" :allow false}}}
 ]}]

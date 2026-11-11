@@ -4775,4 +4775,47 @@ Output since last heartbeat:
    :budget {"max-blocks" 1 "max-bytes" 1000 "max-matches" 10}
    :stats {"blocks" 2 "bytes" 10 "matches" 0 "round-trips" 2}
    :expect {:value true}}
+  ;; ------------------------------------------------------------ bridge request gate (S6b-22)
+  {:id :bridge/validate-ok :op :bridge
+   :call ["validate" {"prompt" "hi" "tool_names" ["read_file"]}]
+   :expect {:value {:profile "default" :prompt "hi" :tool-names ["read_file"]}}}
+  {:id :bridge/validate-profile :op :bridge
+   :call ["validate" {"profile" "p" "prompt" "hi" "tool_names" []}]
+   :expect {:value {:profile "p" :prompt "hi" :tool-names []}}}
+  {:id :bridge/validate-bad-prompt :op :bridge
+   :call ["validate" {"prompt" 42 "tool_names" []}]
+   :expect {:value {:error "bridge request requires a string prompt"}}}
+  {:id :bridge/validate-no-tools :op :bridge
+   :call ["validate" {"prompt" "hi"}]
+   :expect {:value {:error "bridge request requires an explicit tool_names array"}}}
+  {:id :bridge/validate-nonvector-tools :op :bridge
+   :call ["validate" {"prompt" "hi" "tool_names" "read_file"}]
+   :expect {:value {:error "bridge request requires an explicit tool_names array"}}}
+  {:id :bridge/validate-unsupported :op :bridge
+   :call ["validate" {"prompt" "hi" "tool_names" ["read_file" "nope" "x"]}]
+   :expect {:value {:error "Kotoba agent does not implement requested tools: nope, x"}}}
+  {:id :bridge/approval-once :op :bridge
+   :call ["approval" {"type" "approval" "request_id" "r1" "choice" "once"} ["r1" "r2"]]
+   :expect {:value {:request-id "r1" :allow true}}}
+  {:id :bridge/approval-deny :op :bridge
+   :call ["approval" {"type" "approval" "request_id" "r2" "choice" "deny"} ["r1" "r2"]]
+   :expect {:value {:request-id "r2" :allow false}}}
+  {:id :bridge/approval-unknown :op :bridge
+   :call ["approval" {"type" "approval" "request_id" "r9" "choice" "once"} ["r1" "r2"]]
+   :expect {:value nil}}
+  {:id :bridge/approval-bad-choice :op :bridge
+   :call ["approval" {"type" "approval" "request_id" "r1" "choice" "maybe"} ["r1"]]
+   :expect {:value nil}}
+  {:id :bridge/result-completed :op :bridge
+   :call ["result" {:final "done" :exit-reason "completed" :usage {"prompt_tokens" 10 "completion_tokens" 20 "total_tokens" 30} :model "m" :provider "p"}]
+   :expect {:value {"type" "result" "result" {"final_response" "done" "completed" true "exit_reason" "completed" "error" nil "usage" {"input_tokens" 10 "output_tokens" 20 "total_tokens" 30} "model" "m" "provider" "p"}}}}
+  {:id :bridge/result-failed-error :op :bridge
+   :call ["result" {:final "" :exit-reason "error" :error {:error "down"} :model "m" :provider "p"}]
+   :expect {:value {"type" "result" "result" {"final_response" "" "completed" false "exit_reason" "error" "error" "down" "usage" {"input_tokens" 0 "output_tokens" 0 "total_tokens" 0} "model" "m" "provider" "p"}}}}
+  {:id :bridge/result-failed-bare :op :bridge
+   :call ["result" {:final "" :exit-reason "timeout"}]
+   :expect {:value {"type" "result" "result" {"final_response" "" "completed" false "exit_reason" "timeout" "error" "timeout" "usage" {"input_tokens" 0 "output_tokens" 0 "total_tokens" 0} "model" nil "provider" nil}}}}
+  {:id :bridge/error-row :op :bridge
+   :call ["error" "boom"]
+   :expect {:value {"type" "error" "error" "boom"}}}
 ]}]
