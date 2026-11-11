@@ -163,7 +163,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge ops-cron ops-tick-parse ops-parse-args ops-gateway-gates)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge ops-cron ops-tick-parse ops-parse-args ops-gateway-gates ops-peer-cmd)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -230,6 +230,7 @@
     :confine (ops-confine c scratch)
     :send (ops-send c)
     :peer (ops-peer c scratch)
+    :peer-cmd (ops-peer-cmd c)
     :tools (ops-tools c)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
@@ -3371,6 +3372,14 @@
       "list" (peer-list-lines dir node fetch verify-fn now-ms nonces)
       "sleeps" @sleeps
       (throw (ex-info (str "peer: unknown step " verb) {:verb verb})))))
+
+(defn- ops-peer-cmd [c]
+  (let [[verb arg arg2 arg3 arg4 arg5] (:call c)]
+    (case verb
+      "serve-opts" {:value (peer/serve-opts arg)}
+      "rails-add" {:value (peer/rails-add-row arg arg2 arg3)}
+      "route" (peer/peer-cmd-route arg (vec arg2) arg3 arg4 arg5)
+      (throw (ex-info (str "peer-cmd: unknown call " verb) {:verb verb})))))
 
 (defn- ops-peer [c scratch]
   (let [req (:request c {})

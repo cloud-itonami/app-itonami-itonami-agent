@@ -17,7 +17,8 @@
             [itonami.otehon.bundle :as bundle]
             [itonami.otehon.cas :as cas]
             [itonami.otehon.ed25519 :as ed25519]
-            [itonami.otehon.io :as hio]))
+            [itonami.otehon.io :as hio]
+            [itonami.otehon.text :as text]))
 
 (defn register-node
   "Admit `node` with the storage `prefix` it may write."
@@ -743,3 +744,57 @@
                 (assoc r :placement trail)))))
 
         :else (recur more last-r trail)))))
+
+;; ---------------------------------------------------------------- peer command routing (S6c-12)
+
+(defn serve-opts
+  "The `peer serve` listener options as data. Verbatim from `main.cljk`:
+  ports parse prefix-first and stay nil when missing — no default and
+  no floor here (the detect default arrives through `peer-cmd-route`)."
+  [opts]
+  {:port (text/parse-int-prefix (:port opts))
+   :host (:host opts)
+   :public-url (:url opts)
+   :max-runs (text/parse-int-prefix (:max-runs opts))})
+
+(defn rails-add-row
+  "One `peer rails add` rail row as data. Verbatim from `main.cljk`:
+  the name defaults to `manual-<local count>`, models split on commas
+  (`auto` when unnamed), priority parses prefix-first with a 50
+  default, and any truthy `--small` opts the row out of agent work."
+  [opts local-count base-url]
+  {:name (or (:name opts) (str "manual-" local-count))
+   :base-url base-url
+   :models (str/split (or (:models opts) "auto") #",")
+   :priority (text/parse-int-prefix (or (:priority opts) "50"))
+   :agent? (not (:small opts))})
+
+(defn peer-cmd-route
+  "Raw `peer` subcommand routing as data. Verbatim from `main.cljk`:
+  `serve` carries the listener options, `add` / `trust` carry their
+  target, `list` / `exec` / `authorities` / `id` are bare intents,
+  `run` re-enters oneshot with `:peer true`, and `rails` sub-routes
+  (`detect` with an explicit skip-port default, `add` with a row,
+  anything else lists). Anything else refuses with the verbatim
+  unknown-command error. Key generation, sockets, file writes, reads
+  and execution stay host-side."
+  [sub args opts default-port local-count]
+  (case (str sub)
+    "serve" {:serve (serve-opts opts)}
+    "add" {:add {:url (first args) :did (:did opts) :trust (:trust opts)}}
+    "trust" {:trust {:did (first args)}}
+    "list" {:list true}
+    "run" {:oneshot (assoc opts :peer true)}
+    "rails" (let [[action & _] args]
+              (case (str action)
+                "detect" {:rails {:action "detect"
+                                  :dry-run (:dry-run opts)
+                                  :skip-port (or (text/parse-int-prefix (:port opts))
+                                                 default-port)}}
+                "add" {:rails {:action "add"
+                               :row (rails-add-row opts local-count (second args))}}
+                {:rails {:action "list"}}))
+    "exec" {:exec true}
+    "authorities" {:authorities true}
+    "id" {:id true}
+    {:error (str "unknown peer command: " sub)}))

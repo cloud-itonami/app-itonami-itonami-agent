@@ -231,3 +231,20 @@
   [s w]
   (let [s (str s) n (count s)]
     (if (>= n w) s (str s (apply str (repeat (- w n) " "))))))
+
+(defn parse-int-prefix
+  "JS parseInt with radix 10: optional sign and leading digits, the rest
+  ignored; nil when the text starts with no digits. Same shape as the
+  private `js-parse-int` / `parse-int-prefix` twins in `cli.cljc` and
+  `gateway.cljc` (small-helper duplication is the established twin
+  idiom); shared here for the CLI command surfaces that parse ports,
+  priorities and limits. No interop: `host/replace`, `re-find` and
+  char arithmetic only."
+  [s]
+  (let [t (host/replace (str s) #"^\s+" "")
+        m (re-find #"^[+-]?\d+" t)]
+    (when m
+      (let [neg? (host/starts-with? m "-")
+            ds (host/replace m #"^[+-]" "")
+            n (reduce (fn [a ch] (+ (* a 10) (- (int ch) (int \0)))) 0 ds)]
+        (if neg? (- n) n)))))
