@@ -20,7 +20,7 @@ covered by shared cases on all three runners.
 | oneshot `-p/-z` (+`-m/--provider/-t`) | `oneshot`, `loop.cljk` toolset rule | `oneshot` (gate + injected/host turn apply: prints the final on completed non-blank, exit 1 otherwise, pending exit 3 without an executor; the live inference call stays host-side) | done (JUN-1036 S2e; the live run-job loop + watcher fan-in stay open) |
 | `bridge` | `bridge` | `bridge.cljc` (validate-request / approval-outcome / result-row / error-row / run-options, shared `:bridge` cases) | partial (request gate + approval routing + row shaping done JUN-1036 S6b-22; run-options plan done JUN-1036 S6c-2; readline loop, profile load, agent-loop run, event/result print stay S6) |
 | `chat` | `chat` | — | S6 |
-| `vault` | `vault-cmd` | `vault.cljc` (login-meta / add-login / remove-login / secret / list-rows / format-row over an explicit store map, `:vault` op; encrypted file, handle generation, stdin read and the CLI stay S6) | partial (store core done JUN-1036 S6b-14, shared cases; TOTP minting + the `vault` command wiring stay S6) |
+| `vault` | `vault-cmd` | `vault.cljc` (login-meta / add-login / remove-login / secret / list-rows / format-row / command-plan over an explicit store map, `:vault` op; encrypted file, handle generation, stdin read and the CLI stay S6) | partial (store core done JUN-1036 S6b-14, shared cases; TOTP minting done JUN-1036 S6b-15; command dispatch plan done JUN-1036 S6c-3) |
 | `mcp` | `mcp-cmd` | — | S6 |
 | `dapps` | `dapps-cmd` | `dapps/status` surface (resolve + rows, shared `:dapps` cases) | partial (JUN-1036 S6b-2; the product `dapps` command wiring stays S6) |
 | `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor), `notepad` (KV verbatim), `runs`/`incidents` (ledger reads: rows list, ack) | done run/tick-exec + notepad + ledger reads (JUN-1036 S2a/S2b/S4a/S4b; ledger/queue writes S5) |
@@ -606,4 +606,12 @@ from source, the rest follow the module name until their slice lands.
   green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical
   — see the evidence doc. Verified divergence: none in the data
   half; function seams, profile load and the run stay host-side.)
+- S6c-3 vault command dispatch — done (JUN-1036: `command-plan` in
+  `vault.cljc` (`{:list {}}`, `{:add {...}}` with defaulted
+  origin/totp-seed, `{:remove {:handle}}`, verbatim `{:usage msg}`
+  otherwise), with the `:vault` `command` verb. 8 cases + 2
+  must-fail; 1039 cases + 127 must-fail green on basilisp 0.5.1 /
+  bb 1.12.218 / nbb, canon byte-identical — see the evidence doc.
+  Verified divergence: truthiness gate kept like the legacy. Usage
+  exits, stdin, the AES file and row printing stay at the CLI.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

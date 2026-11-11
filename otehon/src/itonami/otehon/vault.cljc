@@ -197,3 +197,26 @@
                (* (nth mac (+ off 2)) 256)
                (nth mac (+ off 3)))]
     (subs (str (+ 1000000 (mod bin 1000000))) 1)))
+
+(defn command-plan
+  "The `vault` command dispatch as data, verbatim from `vault-cmd`.
+  `{:list {}}`, `{:add {...}}` (the password comes from stdin at the
+  host) or `{:remove {:handle h}}`; anything missing its required
+  part answers the verbatim `{:usage msg}`. The gate uses truthiness
+  like the legacy (`(and label username)`), so empty strings pass and
+  fail at the host write. Usage exits, stdin, the AES file and the
+  row printing stay at the CLI."
+  [sub args]
+  (let [[label username origin totp-seed] args]
+    (cond
+      (or (nil? sub) (= sub "list")) {:list {}}
+      (= sub "add")
+      (if (and label username)
+        {:add {:label label :username username
+               :origin (or origin "") :totp-seed (or totp-seed "")}}
+        {:usage "usage: itonami-agent vault add <label> <username> [origin] [totp-seed]   (the password is read from stdin)"})
+      (= sub "remove")
+      (if (first args)
+        {:remove {:handle (first args)}}
+        {:usage "usage: itonami-agent vault remove <handle>"})
+      :else {:usage "usage: itonami-agent vault add|list|remove"})))

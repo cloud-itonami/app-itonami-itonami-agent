@@ -2923,6 +2923,7 @@
               "format" (vault/format-row arg)
               "totp" (vault/mint-totp arg arg2)
               "base32" (vault/base32-decode arg)
+              "command" (vault/command-plan arg arg2)
               (throw (ex-info (str "vault: unknown call " verb) {:verb verb})))}))
 
 (defn- browser-file-stub
