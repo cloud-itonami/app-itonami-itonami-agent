@@ -23,7 +23,7 @@ covered by shared cases on all three runners.
 | `vault` | `vault-cmd` | `vault.cljc` (login-meta / add-login / remove-login / secret / list-rows / format-row / command-plan over an explicit store map, `:vault` op; encrypted file, handle generation, stdin read and the CLI stay S6) | partial (store core done JUN-1036 S6b-14, shared cases; TOTP minting done JUN-1036 S6b-15; command dispatch plan done JUN-1036 S6c-3) |
 | `mcp` | `mcp-cmd` | — | S6 |
 | `dapps` | `dapps-cmd` | `dapps/status` surface (resolve + rows, shared `:dapps` cases) | partial (JUN-1036 S6b-2; the product `dapps` command wiring stays S6) |
-| `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor), `notepad` (KV verbatim + `notepad-plan` dispatch, shared `:cron` cases), `runs`/`incidents` (ledger reads: rows list, ack) | done run/tick-exec + notepad + ledger reads (JUN-1036 S2a/S2b/S4a/S4b; ledger/queue writes S5; notepad dispatch plan S6c-5) |
+| `cron list/create/run/tick/runs/incidents/notepad/status` | `cron-cmd` | `tick` (due/next-fire plan), `run-exec` (host side + finished-turn apply; stops at `:planned` with no executor), `notepad` (KV verbatim + `notepad-plan` dispatch, shared `:cron` cases), `runs`/`incidents` (ledger reads: rows list, ack) | done run/tick-exec + notepad + ledger reads (JUN-1036 S2a/S2b/S4a/S4b; ledger/queue writes S5; notepad dispatch plan S6c-5; run/tick gates S6c-6) |
 | `profile list/show/check/refresh/itonamify/adopt/release/soul/did/organize/readiness/import/export/hy-*` | `profile-cmd` | `check` (job-level readiness: the legacy command reads active jobs only; model/state.db/pause findings stay doctor-only), `store-plan` (import/export copy plan), `profile list/show/check/readiness/refresh/itonamify/rail/bundle/refresh-bundle/release/import/export/adopt/soul/organize/hy-stage/hy-migrate/did` (import/export executes the plan: definition byte copy + Hermes-side park on export; adopt flips scheduler + parks + refreshes CID; soul renders registry/worlds blocks with backup+receipt; organize projects the registry entry; hy-stage checks and stages the Hy payload; hy-migrate rewrites `.py` refs under the tick lock; did derives the fleet did:key; bundle prints CID + manifest) | S4 verbs complete (S6-owned check/readiness finding kinds deferred, recorded below) |
 | `doctor` | `doctor-cmd` | `doctor` (store verbs; S6-owned finding kinds deferred, recorded below) | done (JUN-1036 S3b) |
 | `sessions [list]/show/resume` | `sessions-cmd` | `sessions` (reads state.db read-only; resume refuses verbatim) | done (JUN-1036 S3b) |
@@ -634,4 +634,12 @@ from source, the rest follow the module name until their slice lands.
   — see the evidence doc. Verified divergence: verb membership and
   set-value nil-ness kept like the legacy (`false` passes as a
   value). File read/write and result printing stay at the CLI.)
+- S6c-6 cron run/tick gates — done (JUN-1036: the `cron run` and
+  `cron tick` preconditions as `run-gate` / `tick-gate` in
+  `cron.cljc` (paused refusal with resume hint, missing-job refusal,
+  `{:run {:job :manual? true}}` / `{:tick {:force?}}`), with the
+  `:cron` verbs. 6 cases + 2 must-fail; 1057 cases + 133 must-fail
+  green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical
+  — see the evidence doc. Verified divergence: none; pause state
+  and job lookup are explicit arguments, execution stays host-side.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

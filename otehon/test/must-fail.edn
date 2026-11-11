@@ -476,4 +476,10 @@
   {:id :must-fail/cron-wrong-notepad-list :op :cron
    :call ["notepad" "j" "list" nil nil]
    :expect {:value {:usage "usage: WRONG"}}}
+  {:id :must-fail/cron-wrong-run-usage :op :cron
+   :call ["run-gate" false nil "j" nil]
+   :expect {:value {:usage "no such job: WRONG"}}}
+  {:id :must-fail/cron-wrong-tick :op :cron
+   :call ["tick-gate" false nil true]
+   :expect {:value {:tick {:force? false}}}}
 ]}]
