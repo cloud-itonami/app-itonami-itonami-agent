@@ -5063,4 +5063,41 @@ Output since last heartbeat:
   {:id :args/opt-trust-false :op :parse-args
    :call ["opt-value" :trust "false"]
    :expect {:value false}}
+  ;; ------------------------------------------------------------ -main routing (S6c-10)
+  {:id :args/route-chat :op :parse-args
+   :call ["route" ["chat"]]
+   :expect {:value {:command "chat" :args []}}}
+  {:id :args/route-vault-sub :op :parse-args
+   :call ["route" ["-p" "main" "vault" "list"]]
+   :expect {:value {:command "vault" :args ["list"]}}}
+  {:id :args/route-oneshot :op :parse-args
+   :call ["route" ["-z" "hello" "run"]]
+   :expect {:value {:oneshot {:oneshot "hello"}}}}
+  {:id :args/route-oneshot-peer :op :parse-args
+   :call ["route" ["-z" "x" "peer" "sync"]]
+   :expect {:value {:command "peer" :args ["sync"]}}}
+  {:id :args/route-bad-profile :op :parse-args
+   :call ["route" ["-p" "Bad Name!" "chat"]]
+   :expect {:value {:error "invalid profile name: Bad Name!"}}}
+  {:id :args/route-default-profile :op :parse-args
+   :call ["route" ["-p" "default" "status"]]
+   :expect {:value {:command "status" :args []}}}
+  {:id :args/route-gateway-run :op :parse-args
+   :call ["route" ["gateway" "run"]]
+   :expect {:value {:command "gateway" :sub "run"}}}
+  {:id :args/route-gateway-bad :op :parse-args
+   :call ["route" ["gateway" "fly"]]
+   :expect {:value {:usage "usage: itonami-agent gateway run | serve [--platform telegram] [--interval seconds]"}}}
+  {:id :args/route-help :op :parse-args
+   :call ["route" ["--help"]]
+   :expect {:value {:help true}}}
+  {:id :args/route-unknown :op :parse-args
+   :call ["route" ["frobnicate"]]
+   :expect {:value {:error "unknown command: frobnicate"}}}
+  {:id :args/valid-name-ok :op :parse-args
+   :call ["valid-name" "main-2_x"]
+   :expect {:value true}}
+  {:id :args/valid-name-bad :op :parse-args
+   :call ["valid-name" "../.."]
+   :expect {:value false}}
 ]}]

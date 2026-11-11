@@ -667,4 +667,12 @@ from source, the rest follow the module name until their slice lands.
   `--toolsets` stays nil-safe through `opt-value`, exactly as the
   legacy spellings differ. `die`, `-main` wiring and host reads
   stay host-side.)
+- S6c-10 `-main` routing — done (JUN-1036: the routable core of
+  `-main` as `route-argv` in `cli.cljc` (`valid-name?` twinned in
+  `profile.cljc`), with `route` / `valid-name` verbs extending the
+  existing `:parse-args` op — no new op. 12 cases + 2 must-fail;
+  1102 cases + 141 must-fail green on basilisp 0.5.1 / bb 1.12.218
+  / nbb, canon byte-identical — see the evidence doc. Verified
+  divergence: none; errors come back as data, dying/printing/
+  loading/execution stay host-side.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.
