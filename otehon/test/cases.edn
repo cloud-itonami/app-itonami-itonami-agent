@@ -4942,4 +4942,23 @@ Output since last heartbeat:
   {:id :cron/notepad-bad-verb :op :cron
    :call ["notepad" "j" "bogus" nil nil]
    :expect {:value {:usage "usage: itonami-agent cron notepad <job-id> set <key> <value> | get <key> | delete <key> | list"}}}
+  ;; ------------------------------------------------------------ cron run/tick gates (S6c-6)
+  {:id :cron/run-paused :op :cron
+   :call ["run-gate" true "2026-11-12T00:00" "j" nil]
+   :expect {:value {:usage "paused: cron dispatch is stopped (2026-11-12T00:00) — lift with: itonami-agent resume"}}}
+  {:id :cron/run-no-job :op :cron
+   :call ["run-gate" false nil "j" nil]
+   :expect {:value {:usage "no such job: j"}}}
+  {:id :cron/run-ok :op :cron
+   :call ["run-gate" false nil "j" {"id" "j"}]
+   :expect {:value {:run {:job {"id" "j"} :manual? true}}}}
+  {:id :cron/tick-paused :op :cron
+   :call ["tick-gate" true "2026-11-12T00:00" false]
+   :expect {:value {:skip "tick skipped: paused (2026-11-12T00:00) — lift with: itonami-agent resume"}}}
+  {:id :cron/tick-ok :op :cron
+   :call ["tick-gate" false nil false]
+   :expect {:value {:tick {:force? false}}}}
+  {:id :cron/tick-force :op :cron
+   :call ["tick-gate" false nil true]
+   :expect {:value {:tick {:force? true}}}}
 ]}]

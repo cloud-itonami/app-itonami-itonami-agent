@@ -3128,6 +3128,8 @@
   (let [[verb arg arg2 arg3 arg4] (:call c)]
     {:value (case verb
               "notepad" (cron/notepad-plan arg arg2 arg3 arg4)
+              "run-gate" (cron/run-gate arg arg2 arg3 arg4)
+              "tick-gate" (cron/tick-gate arg arg2 arg3)
               (throw (ex-info (str "cron: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-send [c]

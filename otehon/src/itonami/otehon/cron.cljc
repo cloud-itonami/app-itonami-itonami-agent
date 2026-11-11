@@ -156,3 +156,25 @@
       (= verb "get") {:get {:job-id job-id :key key}}
       (= verb "delete") {:delete {:job-id job-id :key key}}
       :else {:list {:job-id job-id}})))
+
+(defn run-gate
+  "The `cron run` preconditions as data, verbatim from `cron-cmd`.
+  A paused dispatcher refuses with the resume hint; a missing job
+  refuses with its id; otherwise `{:run {:job job :manual? true}}`
+  for the host to execute. The run itself, its output print and the
+  error exit stay host-side."
+  [paused? since job-id job]
+  (cond
+    paused? {:usage (str "paused: cron dispatch is stopped (" since ") — lift with: itonami-agent resume")}
+    (nil? job) {:usage (str "no such job: " job-id)}
+    :else {:run {:job job :manual? true}}))
+
+(defn tick-gate
+  "The `cron tick` preconditions as data, verbatim from `cron-cmd`.
+  A paused dispatcher reports the skip line (stdout, no die);
+  otherwise `{:tick {:force? bool}}` for the host to execute. The
+  tick run, per-job prints and the error exit stay host-side."
+  [paused? since force?]
+  (if paused?
+    {:skip (str "tick skipped: paused (" since ") — lift with: itonami-agent resume")}
+    {:tick {:force? (boolean force?)}}))
