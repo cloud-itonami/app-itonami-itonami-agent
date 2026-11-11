@@ -178,3 +178,27 @@
   (if paused?
     {:skip (str "tick skipped: paused (" since ") — lift with: itonami-agent resume")}
     {:tick {:force? (boolean force?)}}))
+
+(defn create-gate
+  "The `cron create` preconditions as data, verbatim from `cron-cmd`.
+  A schedule plus either a prompt or `--no-agent` with a script
+  proceeds (`nil`); anything else answers the verbatim `{:usage
+  msg}`. The job construction, file write and result print stay at
+  the CLI (host-side: id, dates and next-run need the host clock)."
+  [schedule prompt script no-agent?]
+  (when (or (str/blank? (str schedule))
+            (and no-agent? (str/blank? (str script)))
+            (and (not no-agent?) (str/blank? (str prompt))))
+    {:usage "create requires a schedule and either a prompt or --no-agent with --script"}))
+
+(defn incidents-plan
+  "The `cron incidents` routing as data, verbatim from `cron-cmd`.
+  `ack` with a found incident closes it; `ack` of a missing one
+  refuses with its id; any other action lists. `found?` is explicit:
+  the legacy writes first and branches on the result, the twin takes
+  the outcome as an argument so no store read hides inside the unit."
+  [action incident-id found?]
+  (cond
+    (not= action "ack") {:list {}}
+    found? {:ack {:incident-id incident-id}}
+    :else {:usage (str "no such incident: " incident-id)}))

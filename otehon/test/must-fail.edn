@@ -482,4 +482,10 @@
   {:id :must-fail/cron-wrong-tick :op :cron
    :call ["tick-gate" false nil true]
    :expect {:value {:tick {:force? false}}}}
+  {:id :must-fail/cron-wrong-create :op :cron
+   :call ["create-gate" "s" "p" nil false]
+   :expect {:value {:usage "WRONG"}}}
+  {:id :must-fail/cron-wrong-incidents :op :cron
+   :call ["incidents" "ack" "i1" true]
+   :expect {:value {:ack {:incident-id "WRONG"}}}}
 ]}]

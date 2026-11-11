@@ -3130,6 +3130,8 @@
               "notepad" (cron/notepad-plan arg arg2 arg3 arg4)
               "run-gate" (cron/run-gate arg arg2 arg3 arg4)
               "tick-gate" (cron/tick-gate arg arg2 arg3)
+              "create-gate" (cron/create-gate arg arg2 arg3 arg4)
+              "incidents" (cron/incidents-plan arg arg2 arg3)
               (throw (ex-info (str "cron: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-send [c]
