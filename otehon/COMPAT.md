@@ -675,4 +675,14 @@ from source, the rest follow the module name until their slice lands.
   / nbb, canon byte-identical — see the evidence doc. Verified
   divergence: none; errors come back as data, dying/printing/
   loading/execution stay host-side.)
+- S6c-11 gateway run/serve gates — done (JUN-1036:
+  `tick-interval-ms` / `serve-interval-ms` / `serve-gate` in
+  `gateway.cljc`, with the new `:gateway-gates` op mirroring the
+  `:tick-parse` split. 12 cases + 2 must-fail; 1114 cases + 143
+  must-fail green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon
+  byte-identical — see the evidence doc. Verified divergence: one,
+  kept — `serve-interval-ms` reads nil for an unparsable interval
+  where the legacy reads NaN; no default/floor on serve, only run
+  carries those. Pid claims, profile loads and the serve loop stay
+  host-side.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

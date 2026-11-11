@@ -142,6 +142,53 @@
 (defn- whole-number [v]
   (if (and (number? v) (== v (long v))) (long v) v))
 
+;; ---------------------------------------------------------------- run/serve gates (S6c-11)
+
+(defn- parse-int-prefix
+  "JS parseInt with radix 10: optional sign and leading digits, the rest
+  ignored; nil when the text starts with no digits. Same shape as the
+  `js-parse-int` twin in `cli.cljc`; duplicated here so the gateway
+  surface stays dependency-free (small-helper duplication is the
+  established twin idiom)."
+  [s]
+  (let [t (str/replace (str s) #"^\s+" "")
+        m (re-find #"^[+-]?\d+" t)]
+    (when m
+      (let [neg? (str/starts-with? m "-")
+            ds (str/replace m #"^[+-]" "")
+            n (reduce (fn [a ch] (+ (* a 10) (- (int ch) (int \0)))) 0 ds)]
+        (if neg? (- n) n)))))
+
+(defn tick-interval-ms
+  "The `gateway run` tick period in ms. Verbatim from `main.cljk`:
+  `--interval` is seconds with a sane default — missing or unparsable
+  reads 60 s, and a floor of 1 s keeps a zero/negative value from
+  becoming a hot loop."
+  [raw]
+  (let [sec (parse-int-prefix (or raw "60"))]
+    (if (some? sec) (* 1000 (max 1 sec)) 60000)))
+
+(defn serve-interval-ms
+  "The `gateway serve` tick period in ms, or nil. Verbatim from
+  `main.cljk`: no default and no floor — only `gateway run` carries
+  those. An unparsable value reads nil (the legacy reads NaN; both
+  stay host-side with the serve loop)."
+  [raw]
+  (when (some? raw)
+    (when-let [sec (parse-int-prefix raw)]
+      (* 1000 sec))))
+
+(defn serve-gate
+  "The `gateway serve` preconditions as data. Verbatim from `main.cljk`:
+  the platform defaults to telegram and anything else refuses with the
+  telegram-only usage; the interval shapes through `serve-interval-ms`.
+  Claiming the pid, loading profiles and the serve loop stay host-side."
+  [platform interval-raw]
+  (let [p (or platform "telegram")]
+    (if (not= "telegram" p)
+      {:error (str "gateway serve: platform " p " not implemented (telegram only)")}
+      {:serve {:platform p :interval-ms (serve-interval-ms interval-raw)}})))
+
 (defn producer-identity
   "The completion's producer-stable identity as one compact JSON string;
   raises `invalid_params` when the event carries none. Whole doubles
