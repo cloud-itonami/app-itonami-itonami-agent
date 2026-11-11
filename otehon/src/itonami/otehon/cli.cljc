@@ -1298,14 +1298,14 @@
                     targets)]
     {:exit 0 :lines (conj lines (str @n " profile(s) " (if dry-run? "would be " "") "itonamified"))}))
 
-(def valid-rails #{:murakumo :kotoba :itonami-p2p})
+(def valid-rails #{:murakumo :kotoba :itonami-p2p :openrouter :muse :codex :Claude})
 
 (defn- rail-lines
   "The `profile rail` lines: point itonami profiles at one inference
   rail. Verbatim from main.cljk."
   [store targets rail dry-run?]
   (if (or (not (contains? valid-rails rail)) (empty? targets))
-    {:exit 2 :lines ["usage: itonami-agent profile rail <p>|--all --to murakumo|kotoba|itonami-p2p [--dry-run]"]}
+    {:exit 2 :lines ["usage: itonami-agent profile rail <p>|--all --to murakumo|kotoba|itonami-p2p|openrouter|muse|codex|Claude [--dry-run]"]}
     (let [n (atom 0)
           lines (mapv (fn [t]
                         (let [home (str store "/profiles/" t)

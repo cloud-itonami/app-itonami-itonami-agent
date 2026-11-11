@@ -19,6 +19,45 @@
    :expect {:errors 0 :runtime "itonami"}}
   {:id :check/hermes-ok :op :check :profile "hermes-ok"
    :expect {:errors 0 :runtime "hermes"}}
+  ;; Opt-in rails: a profile that names a subscription rail in :rails +
+  ;; :authorities (and lifts the openrouter deny only for :openrouter)
+  ;; checks clean. Existing-token reuse stays a host-side read.
+  {:id :check/optin-muse-ok :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":inference {:rails [:murakumo]" ":inference {:rails [:muse]"]
+          ["itonami.edn" ":inference-rail :murakumo" ":inference-rail :muse"]
+          ["itonami.edn" ":authorities [\"api.murakumo.cloud\"]" ":authorities [\"api.meta.ai\"]"]
+          ["config.yaml" "  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1"
+           "  provider: muse\n  base_url: https://api.meta.ai/v1"]]
+   :expect {:errors 0 :runtime "itonami"}}
+  {:id :check/optin-codex-ok :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":inference {:rails [:murakumo]" ":inference {:rails [:codex]"]
+          ["itonami.edn" ":inference-rail :murakumo" ":inference-rail :codex"]
+          ["itonami.edn" ":authorities [\"api.murakumo.cloud\"]" ":authorities [\"api.openai.com\"]"]
+          ["config.yaml" "  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1"
+           "  provider: codex\n  base_url: https://api.openai.com/v1"]]
+   :expect {:errors 0 :runtime "itonami"}}
+  {:id :check/optin-claude-ok :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":inference {:rails [:murakumo]" ":inference {:rails [:Claude]"]
+          ["itonami.edn" ":inference-rail :murakumo" ":inference-rail :Claude"]
+          ["itonami.edn" ":authorities [\"api.murakumo.cloud\"]" ":authorities [\"api.anthropic.com\"]"]
+          ["config.yaml" "  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1"
+           "  provider: Claude\n  base_url: https://api.anthropic.com/v1"]]
+   :expect {:errors 0 :runtime "itonami"}}
+  {:id :check/optin-openrouter-ok :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":inference {:rails [:murakumo]" ":inference {:rails [:openrouter]"]
+          ["itonami.edn" ":inference-rail :murakumo" ":inference-rail :openrouter"]
+          ["itonami.edn" ":authorities [\"api.murakumo.cloud\"]" ":authorities [\"openrouter.ai\"]"]
+          ["itonami.edn" ":deny-hosts [\"openrouter.ai\"]" ":deny-hosts []"]
+          ["config.yaml" "  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1"
+           "  provider: openrouter\n  base_url: https://openrouter.ai/api/v1"]]
+   :expect {:errors 0 :runtime "itonami"}}
+  {:id :check/optin-kotoba-ok :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":inference {:rails [:murakumo]" ":inference {:rails [:kotoba]"]
+          ["itonami.edn" ":inference-rail :murakumo" ":inference-rail :kotoba"]
+          ["itonami.edn" ":authorities [\"api.murakumo.cloud\"]" ":authorities [\"api.kotoba.cloud\"]"]
+          ["config.yaml" "  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1"
+           "  provider: kotoba\n  base_url: https://api.kotoba.cloud/v1"]]
+   :expect {:errors 0 :runtime "itonami"}}
   {:id :additive/itonami-edn-is-additive :op :additive :profile "itonami-ok"
    :expect {:hermes-files-same true :runtime-full "itonami" :runtime-bare "hermes"}}
   {:id :dry-run/ok-by-name :op :dry-run :profile "itonami-ok" :job "digest-tick"
@@ -109,11 +148,17 @@
   {:id :neg/itonami-config-on-openrouter :negative true :op :check :profile "itonami-ok"
    :edit [["config.yaml" "  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1"
            "  provider: openrouter\n  base_url: https://openrouter.ai/api/v1"]]
-   :expect {:messages-include ["rail/itonami-off-murakumo" "rail/denied-host openrouter.ai"]}}
-  {:id :neg/itonami-rail-kotoba :negative true :op :check :profile "itonami-ok"
-   :edit [["itonami.edn" ":inference {:rails [:murakumo]" ":inference {:rails [:kotoba]"]
-          ["itonami.edn" ":inference-rail :murakumo" ":inference-rail :kotoba"]]
+   :expect {:messages-include ["rail/denied-host openrouter.ai"]}}
+  {:id :neg/itonami-rail-unknown :negative true :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":inference {:rails [:murakumo]" ":inference {:rails [:bogus]"]
+          ["itonami.edn" ":inference-rail :murakumo" ":inference-rail :bogus"]]
    :expect {:messages-include ["rail/itonami-off-murakumo"]}}
+  {:id :neg/muse-host-not-authorised :negative true :op :check :profile "itonami-ok"
+   :edit [["itonami.edn" ":inference {:rails [:murakumo]" ":inference {:rails [:muse]"]
+          ["itonami.edn" ":inference-rail :murakumo" ":inference-rail :muse"]
+          ["config.yaml" "  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1"
+           "  provider: muse\n  base_url: https://api.meta.ai/v1"]]
+   :expect {:messages-include ["rail/host-not-authorised"]}}
   {:id :neg/host-not-authorised :negative true :op :check :profile "itonami-ok"
    :edit [["itonami.edn" ":authorities [\"api.murakumo.cloud\"]" ":authorities [\"example.org\"]"]]
    :expect {:messages-include ["rail/host-not-authorised"]}}
@@ -218,6 +263,17 @@
    :capabilities [:read_source]
    :expect {:status :ok :prompt-chars 5 :toolsets ["hermes-cron"] :reasoning-effort "low"
             :inference {:provider "murakumo" :model "mishima" :host "api.murakumo.cloud"
+                        :pinned? false :verdict "rail/ok"}}}
+  {:id :turn-gate/optin-codex :op :turn-gate :profile "itonami-ok" :prompt "hello"
+   :capabilities [:read_source]
+   :edit [["itonami.edn" ":inference {:rails [:murakumo]" ":inference {:rails [:codex]"]
+          ["itonami.edn" ":inference-rail :murakumo" ":inference-rail :codex"]
+          ["itonami.edn" ":authorities [\"api.murakumo.cloud\"]" ":authorities [\"api.openai.com\"]"]
+          ["config.yaml" "  provider: murakumo\n  base_url: https://api.murakumo.cloud/v1"
+           "  provider: codex\n  base_url: https://api.openai.com/v1"]
+          ["config.yaml" "  default: mishima" "  default: gpt-5"]]
+   :expect {:status :ok
+            :inference {:provider "codex" :model "gpt-5" :host "api.openai.com"
                         :pinned? false :verdict "rail/ok"}}}
   {:id :turn-gate/held-approval :op :turn-gate :profile "itonami-ok" :prompt "hello"
    :capabilities [:publish_external]
@@ -806,6 +862,12 @@
                     "provider:  kotoba   (override (--provider / job pin))"
                     "chain:"
                     "  1. kotoba/k2"]}}
+  {:id :model/show-subscription-rail :op :model
+   :seed {"config.yaml" "model:\n  default: gpt-5\n  provider: codex\n"}
+   :expect {:lines ["model:     gpt-5   (model.default)"
+                    "provider:  codex   (model.provider)"
+                    "chain:"
+                    "  1. codex/gpt-5"]}}
   {:id :model/set-keeps-comments :op :model
    :seed {"config.yaml" "# keep me\nmodel:\n  default: mishima # main model\n  # provider comment\nother: 1\n"}
    :request {:pos ["k2-pro"] :provider {:present true :value "murakumo"}}
@@ -1546,7 +1608,7 @@
   {:id :profile-rail-usage :op :profile
    :seed {"profiles/ph/itonami.edn" "{:profile/id \"ph\"}"}
    :request {:sub "rail" :name "ph" :to "bogus"}
-   :expect {:exit 2 :lines ["usage: itonami-agent profile rail <p>|--all --to murakumo|kotoba|itonami-p2p [--dry-run]"]}}
+   :expect {:exit 2 :lines ["usage: itonami-agent profile rail <p>|--all --to murakumo|kotoba|itonami-p2p|openrouter|muse|codex|Claude [--dry-run]"]}}
   ;; S4b: profile rail --dry-run prints would and keeps the old rail
   {:id :profile-rail-dry :op :profile
    :seed {"profiles/ph/SOUL.md" "soul\n"
