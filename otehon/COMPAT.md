@@ -93,7 +93,7 @@ from source, the rest follow the module name until their slice lands.
 | `computer_use.cljk` | `computer_use.cljc` (canon-keys, blocked-input?, select-window, build-request, content-text, image-parts, result-error, structured, error/success-result, action-request) | partial (arg shapes done JUN-1036 S6b-7, shared cases; driver spawn, capture/list flows, approval, call dispatch stay S6) |
 | `confine.cljk` *OS sandbox* | `confine.cljc` (policy, secret-paths, read-denial, confine-env, seatbelt-profile, bwrap-args, command) | partial (pure policy core done JUN-1036 S2c; `backend` probe and `audit*!` writers stay host-side) |
 | `connections.cljk` | `connections.cljc` (connection-status + auth-status, read-only) | done (JUN-1036 S6b-2, shared cases; install/authorize is slice 2, hosted answers the named error) |
-| `cron.cljk` *jobs/schedules* | `cron.cljc`, `tick.cljc`, `run.cljc`, `exec.cljc` | partial (plans + `run-job` host side and finished-turn apply done, JUN-1036 S2a/S2b; ledger/queue rows S5a; drain rail — deliver/drain/settle/abandoned/finish-run — S5b; the live run-job loop + watcher fan-in stay open) |
+| `cron.cljk` *jobs/schedules* | `cron.cljc`, `tick.cljc`, `run.cljc`, `exec.cljc` | partial (plans + `run-job` host side and finished-turn apply done, JUN-1036 S2a/S2b; ledger/queue rows S5a; drain rail — deliver/drain/settle/abandoned/finish-run — S5b; duration + natural-language schedule parsing done JUN-1036 S6c-8; the live run-job loop + watcher fan-in stay open) |
 | `dapps.cljk` | `dapps.cljc` (registry pin + server table + resolve-checkout + status) | partial (status surface done JUN-1036 S6b-2, shared cases; `with-servers` / `select-servers` need the MCP allowlist, stay S6) |
 | `delivery.cljk` | `delivery.cljc` (normalize/lanes/bot-chat token/adapter registry/classify-outcome, pure) | done (JUN-1036 S5a; shared cases assert the vocabulary incl. the outcome table) |
 | `delivery_queue.cljk` | `queue.cljc` (`cron/deliveries.db`, `deliveries` + bounded `delivery_tombstones`, enqueue/get-status/claim-row/claim-next/finish/recover) | done (JUN-1036 S5a; fencing answers verified by follow-up SELECT — same outcome single-writer; `job_json` keeps the legacy indent-2 layout, key order is the map's iteration order) |
@@ -649,4 +649,12 @@ from source, the rest follow the module name until their slice lands.
   basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical — see
   the evidence doc. Verified divergence: none new; the ack outcome
   arrives as `found?`, construction stays host-side.)
+- S6c-8 schedule parsing — done (JUN-1036: the pure half of the
+  schedule parser as `parse-duration-minutes` / `natural-cron-expr`
+  in `tick.cljc`, with the new `:tick-parse` op mirroring the
+  `:doctor` / `:doctor-kinds` split. 12 cases + 2 must-fail;
+  1078 cases + 137 must-fail green on basilisp 0.5.1 / bb 1.12.218
+  / nbb, canon byte-identical — see the evidence doc. Verified
+  divergence: none; the `in X` arm and the ISO fallback need the
+  host clock and ISO helpers, so full `parse-schedule` stays host.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

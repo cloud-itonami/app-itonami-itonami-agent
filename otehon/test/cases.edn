@@ -4989,4 +4989,41 @@ Output since last heartbeat:
   {:id :cron/incidents-other-action :op :cron
    :call ["incidents" "bogus" "i1" false]
    :expect {:value {:list {}}}}
+  ;; ------------------------------------------------------------ schedule parsing (S6c-8)
+  {:id :tick/duration-minutes :op :tick-parse
+   :call ["duration" "90m"]
+   :expect {:value 90}}
+  {:id :tick/duration-hours :op :tick-parse
+   :call ["duration" "2h"]
+   :expect {:value 120}}
+  {:id :tick/duration-day :op :tick-parse
+   :call ["duration" "1 day"]
+   :expect {:value 1440}}
+  {:id :tick/duration-bare-unit :op :tick-parse
+   :call ["duration" "m"]
+   :expect {:value 1}}
+  {:id :tick/duration-zero :op :tick-parse
+   :call ["duration" "0m"]
+   :expect {:value nil}}
+  {:id :tick/duration-bare-number :op :tick-parse
+   :call ["duration" "90"]
+   :expect {:value nil}}
+  {:id :tick/duration-empty :op :tick-parse
+   :call ["duration" ""]
+   :expect {:value nil}}
+  {:id :tick/natural-weekdays :op :tick-parse
+   :call ["natural" "weekdays at 9:30am"]
+   :expect {:value "30 9 * * 1-5"}}
+  {:id :tick/natural-mon :op :tick-parse
+   :call ["natural" "mon at 9"]
+   :expect {:value "0 9 * * 1"}}
+  {:id :tick/natural-daily-pm :op :tick-parse
+   :call ["natural" "daily at 8pm"]
+   :expect {:value "0 20 * * *"}}
+  {:id :tick/natural-bad-day :op :tick-parse
+   :call ["natural" "25 at 9"]
+   :expect {:value nil}}
+  {:id :tick/natural-midnight :op :tick-parse
+   :call ["natural" "sat at 12am"]
+   :expect {:value "0 0 * * 6"}}
 ]}]

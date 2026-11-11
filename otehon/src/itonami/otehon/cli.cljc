@@ -163,7 +163,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge ops-cron)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge ops-cron ops-tick-parse)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -232,6 +232,7 @@
     :tools (ops-tools c)
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
+    :tick-parse (ops-tick-parse c)
     :tick (let [prof (load-dir dir read-text)
                 prof (if (contains? c :jobs) (assoc prof :jobs (:jobs c)) prof)]
             (tick/tick-plan (:jobs prof) (:now c)))
@@ -3133,6 +3134,13 @@
               "create-gate" (cron/create-gate arg arg2 arg3 arg4)
               "incidents" (cron/incidents-plan arg arg2 arg3)
               (throw (ex-info (str "cron: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-tick-parse [c]
+  (let [[verb arg] (:call c)]
+    {:value (case verb
+              "duration" (tick/parse-duration-minutes arg)
+              "natural" (tick/natural-cron-expr arg)
+              (throw (ex-info (str "tick-parse: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-send [c]
   (let [req (:request c {})
