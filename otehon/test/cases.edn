@@ -4961,4 +4961,32 @@ Output since last heartbeat:
   {:id :cron/tick-force :op :cron
    :call ["tick-gate" false nil true]
    :expect {:value {:tick {:force? true}}}}
+  ;; ------------------------------------------------------------ cron create/incidents gates (S6c-7)
+  {:id :cron/create-no-schedule :op :cron
+   :call ["create-gate" nil nil nil false]
+   :expect {:value {:usage "create requires a schedule and either a prompt or --no-agent with --script"}}}
+  {:id :cron/create-no-prompt :op :cron
+   :call ["create-gate" "s" nil nil false]
+   :expect {:value {:usage "create requires a schedule and either a prompt or --no-agent with --script"}}}
+  {:id :cron/create-no-agent-no-script :op :cron
+   :call ["create-gate" "s" nil nil true]
+   :expect {:value {:usage "create requires a schedule and either a prompt or --no-agent with --script"}}}
+  {:id :cron/create-ok :op :cron
+   :call ["create-gate" "s" "p" nil false]
+   :expect {:value nil}}
+  {:id :cron/create-no-agent-ok :op :cron
+   :call ["create-gate" "s" nil "x" true]
+   :expect {:value nil}}
+  {:id :cron/incidents-ack :op :cron
+   :call ["incidents" "ack" "i1" true]
+   :expect {:value {:ack {:incident-id "i1"}}}}
+  {:id :cron/incidents-ack-missing :op :cron
+   :call ["incidents" "ack" "i1" false]
+   :expect {:value {:usage "no such incident: i1"}}}
+  {:id :cron/incidents-list :op :cron
+   :call ["incidents" "list" nil false]
+   :expect {:value {:list {}}}}
+  {:id :cron/incidents-other-action :op :cron
+   :call ["incidents" "bogus" "i1" false]
+   :expect {:value {:list {}}}}
 ]}]
