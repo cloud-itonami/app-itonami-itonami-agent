@@ -4855,4 +4855,23 @@ Output since last heartbeat:
   {:id :bridge/error-row :op :bridge
    :call ["error" "boom"]
    :expect {:value {"type" "error" "error" "boom"}}}
+  ;; ------------------------------------------------------------ mcp login plan (S6c-1)
+  {:id :mcp/login-ok :op :mcp
+   :call ["login-plan" "login" "x" {"url" "https://h"} false]
+   :expect {:value {:login {:server "x" :url "https://h" :device? false}}}}
+  {:id :mcp/login-device :op :mcp
+   :call ["login-plan" "login" "x" {"url" "https://h"} true]
+   :expect {:value {:login {:server "x" :url "https://h" :device? true}}}}
+  {:id :mcp/login-no-server :op :mcp
+   :call ["login-plan" "login" nil {"url" "https://h"} false]
+   :expect {:value {:usage "usage: itonami-agent mcp login <server> [--device]   (the server must be in config.yaml mcp_servers)"}}}
+  {:id :mcp/login-no-spec :op :mcp
+   :call ["login-plan" "login" "x" nil false]
+   :expect {:value {:usage "usage: itonami-agent mcp login <server> [--device]   (the server must be in config.yaml mcp_servers)"}}}
+  {:id :mcp/login-wrong-sub :op :mcp
+   :call ["login-plan" "serve" "x" {"url" "https://h"} false]
+   :expect {:value {:usage "usage: itonami-agent mcp login <server> [--device]   (the server must be in config.yaml mcp_servers)"}}}
+  {:id :mcp/login-empty-server :op :mcp
+   :call ["login-plan" "login" "" {"url" "https://h"} false]
+   :expect {:value {:login {:server "" :url "https://h" :device? false}}}}
 ]}]
