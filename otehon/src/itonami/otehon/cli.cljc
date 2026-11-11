@@ -3026,6 +3026,7 @@
               "render-result" (mcp/render-result arg)
               "cache-status" (mcp/cache-status arg arg2 arg3 arg4 arg5 arg6 arg7)
               "discover" (mcp/project-discovery arg arg2 arg3)
+              "login-plan" (mcp/login-plan arg arg2 arg3 arg4)
               (throw (ex-info (str "mcp: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-connections [c scratch]

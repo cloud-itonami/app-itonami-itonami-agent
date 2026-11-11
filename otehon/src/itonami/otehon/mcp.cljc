@@ -4,7 +4,9 @@
   the oauth-cache-ready decision. Exchange (stdio spawn, Streamable
   HTTP, token refresh) stays host-side (S6): these are the shapes
   both sides agree on. `env` is one merged string map, as in
-  dapps/connections."
+  dapps/connections. The `login` command gate and route
+  (`login-plan`) is the first S6c slice: the CLI executes the plan
+  with injected seams, and usage exits stay host-side."
   (:require [clojure.string :as str]
             [itonami.otehon.cas :as cas]
             [itonami.otehon.io :as hio]
@@ -341,3 +343,21 @@
     {:schemas (mapv second all-rows)
      :index (into {} (map (fn [[name _ target]] [name target]) all-rows))
      :errors (mapv :error-entry (filter map? rows))}))
+
+(defn login-plan
+  "The `mcp login` gate and route as data, verbatim from `mcp-cmd`.
+  `{:usage msg}` when the subcommand is not `login`, or when the
+  server does not name a configured `mcp_servers` entry; else
+  `{:login {:server s :url u :device? bool}}` for the host to execute
+  (PKCE loopback or the RFC 8628 device grant). The usage text and
+  the die-2 exits stay at the CLI: the twin returns the refusal so
+  the shared cases can pin it."
+  [sub server spec device?]
+  (let [usage "usage: itonami-agent mcp login <server> [--device]   (the server must be in config.yaml mcp_servers)"]
+    (cond
+      ;; the legacy gates on truthiness (`(and server spec)`): an empty
+      ;; server name passes the gate and fails at the host login, and
+      ;; the twin keeps that exact boundary.
+      (not= sub "login") {:usage usage}
+      (not (and server spec)) {:usage usage}
+      :else {:login {:server server :url (get spec "url") :device? (boolean device?)}})))

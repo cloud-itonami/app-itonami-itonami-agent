@@ -450,4 +450,10 @@
   {:id :must-fail/clarify-wrong-multi :op :clarify
    :call ["pick" "1, 2" ["a" "b"] true]
    :expect {:value ["a" "a"]}}
+  {:id :must-fail/mcp-wrong-login-url :op :mcp
+   :call ["login-plan" "login" "x" {"url" "https://h"} false]
+   :expect {:value {:login {:server "x" :url "https://WRONG" :device? false}}}}
+  {:id :must-fail/mcp-wrong-login-usage :op :mcp
+   :call ["login-plan" "login" "x" nil false]
+   :expect {:value {:login {:server "x" :url nil :device? false}}}}
 ]}]
