@@ -1,4 +1,6 @@
-# awai fs — infinite storage filesystem + local cache for itonami-agent CLI
+# Awai Object Storage — tiered object storage and local cache for itonami-agent CLI
+
+> Naming update (2026-11-08): this B2-backed design is **Awai Object Storage**. **Awai FS** now refers to the separate Awai Network distributed filesystem; see [AWAI-161](https://linear.app/kotobalabs/issue/AWAI-161). The historical filename and proposed `:awai-fs` identifier are retained for reference, not an instruction to rename deployed resources.
 
 Status: design proposal (2026-11-08). Not implemented. All measurements cited
 below are single-run values from the JUN-964 JuiceFS trials, not benchmarks.
@@ -40,16 +42,16 @@ Source: `workspaces/codex/jun-964-juicefs/RESULTS.md`,
 | 7 | Restic (rclone backend) → B2: 1 GiB backup 33s, `check --read-data` clean, `restore --verify` clean, `worktree repair` fixes restored pointers | Restic is the proven snapshot tier for Git worktrees |
 | 8 | No external NVMe was present; "NVMe" was never established as a protocol claim. Internal Apple Fabric SSD only | "Local NVMe cache" means: internal SSD today, dedicated external NVMe later after measurement |
 
-## 2. What awai fs is (and is not)
+## 2. What Awai Object Storage is (and is not)
 
-- awai fs is a **tiered storage subsystem for itonami-agent CLI**: infinite
+- Awai Object Storage is a **tiered storage subsystem for itonami-agent CLI**: scalable
   B2-backed capacity with a local fast cache. It is a thin policy + mount +
   CLI-integration layer **over the JuiceFS client**, not a new filesystem
   implementation.
 - Execution path follows the repo rule: new itonami-agent routes are
   Kotoba/Amu selfhost native kexe. No Node/kbb/JVM/nbb in runtime, gates, or
   fallback. An unported route stays blocked.
-- Store separation (Two CLIs) holds: Hermes never reads awai fs state.
+- Store separation (Two CLIs) holds: Hermes never reads Awai Object Storage state.
   `profile import/export` moves profile *definitions* only, never caches,
   sessions, runs, or volume state — same boundary as today.
 - The `.cljc` Otehon mirrors this design later (`otehon/`). No fallback
@@ -184,7 +186,7 @@ quota enforcement; the single-host durability rules above do not relax.
 4. B2 key scope (S3-compatible vs native) and lifecycle/retention policy.
 5. External NVMe identity and measurement (no NVMe claim until measured).
 6. Meta engine choice for the fleet step.
-7. Dead rclone NFS volume: repair or retire (do not stack awai fs on it).
+7. Dead rclone NFS volume: repair or retire (do not stack Awai Object Storage on it).
 
 ## 12. Rollout
 
@@ -194,7 +196,7 @@ quota enforcement; the single-host durability rules above do not relax.
   gateway; barrier-gated snapshot automation.
 - **P2:** native Mac access (macFUSE fixed or chosen alternative);
   per-profile quotas; multi-host read.
-- **P3:** fleet meta; awai fs as the default store backend.
+- **P3:** fleet meta; Awai Object Storage as the default store backend.
 
 ## References
 

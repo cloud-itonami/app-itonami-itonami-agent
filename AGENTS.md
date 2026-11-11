@@ -49,7 +49,9 @@ CLI route は selfhost 資格未取得であり、移行完了まで起動手順
 - フォーマット互換（両 CLI が読むファイル）を変えるときは README の互換表と
   この表を同時に更新する。
 
-## awai fs storage — local agent 共通退避先（2026-11-08〜）
+## Awai Object Storage — local agent 共通退避先（2026-11-08〜）
+
+旧称 awai fs の B2 ベース運用。分散型 Awai FS は別構想（[AWAI-161](https://linear.app/kotobalabs/issue/AWAI-161)）。既存 volume・パス・サービスは改名しない。
 
 > 位置づけ（2026-11-10、[AWAI-161](https://linear.app/kotobalabs/issue/AWAI-161)）:
 > 以下は legacy **Awai Object Storage**（JuiceFS + B2 + restic による退避経路）の
