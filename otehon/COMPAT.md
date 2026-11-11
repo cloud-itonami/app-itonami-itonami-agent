@@ -120,7 +120,7 @@ from source, the rest follow the module name until their slice lands.
 | `quiet.cljk` | `quiet.cljc` (warn/diag/wake predicates, linger budget, turn-failed?, sync linger loop) | partial (predicates + 35 S2c cases JUN-1036 S2c; sync linger loop with injected fns JUN-1036 S5c; live registry waits stay host-side) |
 | `rails.cljk` | `rails.cljc` (small-model? / normalize-model-ids / detect-entries / all-models / agent-models / select-candidates) | partial (selection core done JUN-1036 S6b-3, shared cases; rails.edn read/write, the loopback probe, detect fan-out and complete's fetch loop stay S6) |
 | `soul.cljk` | `soul.cljc` (world/unit/role render + splice, limit, body guard) | done (JUN-1036 S4d) |
-| `tools.cljk` *tool registry* | `tools.cljc` (schemas table + toolsets + name/unsupported/approval/enabled/execution-disabled/runtime predicates) | partial (registry core done S6a; tool implementations + servers/processes + CLIs stay S6c/d) |
+| `tools.cljk` *tool registry* | `tools.cljc` (schemas table + toolsets + name/unsupported/approval/enabled/execution-disabled/runtime predicates) | partial (registry core done S6a; every CLI/tool routing half twinned through S6c-12, lane closed S6c-13; live implementations + servers/processes bodies stay host-side by design) |
 | `tts.cljk` | `tts.cljc` (configured, speech-request, safe-format, clamp-timeout-s) | partial (pure request shapes done JUN-1036 S6b pure-units, 15 shared cases + 2 must-fail; provider hop resolution, fetch + audio write stay S6) |
 | `vault.cljk` | `vault.cljc` (store core + TOTP: login-meta / add / remove / secret / list / format / totp / base32 verbs) | partial (store core done JUN-1036 S6b-14, TOTP done S6b-15, shared cases; AES file, handle generation, CLI wiring stay S6) |
 | `watcher.cljk` | — | planned S5 |
@@ -297,7 +297,8 @@ from source, the rest follow the module name until their slice lands.
   byte-identical — see the evidence doc. Verified divergences:
   `runtime-tool-names` ports only the explicit 5-arity (the 4-arity
   reads the host PATH); the `computer_use` schema rides as inlined
-  static data. Next: S6c tool implementations + servers/processes + CLIs.
+  static data. S6c tool-implementation routing closed JUN-1036 S6c-13
+  (lane-closure audit; host bodies stay host-side by design).
 - S6b-2 connections/dapps status surface — done (JUN-1036:
   `dapps.cljc` registry pin + server table + resolve-checkout + status,
   `oauth.cljc` store-name, `connections.cljc` connection-status +
@@ -695,4 +696,11 @@ from source, the rest follow the module name until their slice lands.
   `rails detect`; priority/ports read nil where the legacy reads
   NaN. Key serving, sockets, file writes and execution stay
   host-side.)
-- S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.
+- S6c-13 lane closure — done (JUN-1036: closure by audit, no
+  source changes — every product command's pure half is twinned
+  with shared cases (per-command table in the evidence doc); what
+  remains is host-side bodies by otehon design. 1127 cases + 145
+  must-fail run unchanged as regression proof, green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical.)
+- S6 (rest): host-side bodies only — backends, loops, sockets,
+  file writes, prints, keygen, timers.
