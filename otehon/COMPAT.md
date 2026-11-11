@@ -87,7 +87,7 @@ from source, the rest follow the module name until their slice lands.
 | `browser_cloud.cljk` | `browser_cloud.cljc` (session-name / bb/bu-config / payload / downgrade / features / session records / close specs) | partial (shapes done JUN-1036 S6b-17, shared cases; env reads, fetch, 402 loop, registration stay S6) |
 | `browser_provider.cljk` | `browser_provider.cljc` (normalize / resolve over explicit registry + availability witness) | partial (resolution done JUN-1036 S6b-17, shared cases; registry atom, probes, lifecycle dispatch stay S6) |
 | `chat_platform.cljk` | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply, sync) | done (JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in) |
-| `clarify.cljk` | `clarify.cljc` (strip-recommended, mark-recommended, clean-answer, normalize-questions, response-status, result-json) | partial (pure question/answer shapes done JUN-1036 S6b pure-units, 15 shared cases + 2 must-fail; readline chat loop + host clarify-fn wiring stay S6) |
+| `clarify.cljk` | `clarify.cljc` (strip-recommended, mark-recommended, clean-answer, normalize-questions, response-status, result-json, pick-answer) | partial (pure question/answer shapes done JUN-1036 S6b pure-units + S6b-23 number-pick, 27 shared cases + 4 must-fail; readline chat loop + host clarify-fn wiring stay S6) |
 | `code_rpc.cljk` | `code_rpc.cljc` (tool-error, result-error, tool-errors-since, sandbox-tools-for, terminal-blocked-params, missing-import-hint, failure-hint-rules, failure-hint, hint-on-failure) | partial (shaping + hints done JUN-1036 S6b-8, shared cases; shim-header/tool-stubs/generate-hermes-tools, token check, dispatch, budget, log, serve loop stay S6) |
 | `collect.cljk`, `collect_io.cljk` | `collect.cljc` (certify-row, certify, reconcile — outbox shadow-write core) + `collect_io.cljc` (`receipt` mapping, `:collect-io` op) | partial (pure certify/reconcile done JUN-1036 S6b pure-units, 11 shared cases; receipt done S6b-19; signing-key custody + SDK wiring stay S6) |
 | `computer_use.cljk` | `computer_use.cljc` (canon-keys, blocked-input?, select-window, build-request, content-text, image-parts, result-error, structured, error/success-result, action-request) | partial (arg shapes done JUN-1036 S6b-7, shared cases; driver spawn, capture/list flows, approval, call dispatch stay S6) |
@@ -578,4 +578,14 @@ from source, the rest follow the module name until their slice lands.
   and the CLI maps it to an error row; the twin returns `{:error
   msg}` verbatim so the cases pin the gate. Readline loop, profile
   load, agent-loop run and event/result printing stay S6.)
+- S6b-23 chat number-pick — done (JUN-1036:
+  `pick-answer` in `clarify.cljc` (blank line to nil, multi maps
+  non-blank comma parts, 1-based digit choice or trimmed raw token),
+  with the `:clarify` `pick` verb. 12 cases + 2 must-fail; 1021
+  cases + 121 must-fail green on basilisp 0.5.1 / bb 1.12.218 /
+  nbb, canon byte-identical — see the evidence doc. Verified
+  divergence: none on overflow (parse failure and range failure both
+  land on the raw token on every runner). The readline loop, close /
+  settle handlers, per-question printing and host clarify-fn wiring
+  stay S6.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

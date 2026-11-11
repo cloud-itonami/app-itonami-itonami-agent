@@ -199,3 +199,30 @@
         result (cond-> {"responses" responses "outcome" (get reply "outcome")}
                  (py-truthy notice) (assoc "notice" (py-str notice)))]
     (hio/json-str result)))
+
+(defn- pick-one
+  "One raw token against the choice list: an all-digits token naming an
+  in-range 1-based choice resolves to that choice, anything else stays
+  the trimmed token. Unparseable or out-of-range numbers are raw text,
+  never an error — the readline loop re-asks, it does not crash."
+  [tok choices]
+  (let [t (str/trim (str tok))]
+    (if (re-matches #"\d+" t)
+      (let [n (try (parse-long t) (catch #?(:lpy python/Exception :clj Exception :cljs :default) _ nil))]
+        (if (and (some? n) (<= 1 n (count choices)))
+          (nth choices (dec n))
+          t))
+      t)))
+
+(defn pick-answer
+  "Parse one readline answer line into the locked answer, verbatim from
+  the chat loop: a blank line is nil; multi? maps the non-blank
+  comma-separated parts; otherwise the single pick. Choices resolve
+  by 1-based number, everything else passes through trimmed."
+  [line choices multi?]
+  (let [s (str line)]
+    (cond
+      (str/blank? s) nil
+      multi? (mapv #(pick-one % choices)
+                   (remove str/blank? (str/split s #",")))
+      :else (pick-one s choices))))
