@@ -494,4 +494,10 @@
   {:id :must-fail/tick-wrong-natural :op :tick-parse
    :call ["natural" "mon at 9"]
    :expect {:value "0 9 * * 2"}}
+  {:id :must-fail/args-wrong-profile :op :parse-args
+   :call ["parse" ["-p" "main"]]
+   :expect {:value [{:profile "WRONG"} []]}}
+  {:id :must-fail/args-wrong-opt :op :parse-args
+   :call ["opt-value" :force "true"]
+   :expect {:value false}}
 ]}]

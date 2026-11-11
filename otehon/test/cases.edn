@@ -5026,4 +5026,41 @@ Output since last heartbeat:
   {:id :tick/natural-midnight :op :tick-parse
    :call ["natural" "sat at 12am"]
    :expect {:value "0 0 * * 6"}}
+  ;; ------------------------------------------------------------ CLI arg parsing (S6c-9)
+  {:id :args/profile-short :op :parse-args
+   :call ["parse" ["-p" "main" "run"]]
+   :expect {:value [{:profile "main"} ["run"]]}}
+  {:id :args/oneshot-false-string :op :parse-args
+   :call ["parse" ["-z" "false"]]
+   :expect {:value [{:oneshot "false"} []]}}
+  {:id :args/model-provider :op :parse-args
+   :call ["parse" ["--model" "k2" "--provider" "murakumo"]]
+   :expect {:value [{:model "k2" :provider "murakumo"} []]}}
+  {:id :args/toolsets-short :op :parse-args
+   :call ["parse" ["-t" "file,web"]]
+   :expect {:value [{:toolsets ["file" "web"]} []]}}
+  {:id :args/toolsets-eq :op :parse-args
+   :call ["parse" ["--toolsets=a,b"]]
+   :expect {:value [{:toolsets ["a" "b"]} []]}}
+  {:id :args/force-eq-false :op :parse-args
+   :call ["parse" ["--force=false"]]
+   :expect {:value [{:force false} []]}}
+  {:id :args/dash-next-is-flag :op :parse-args
+   :call ["parse" ["--lane" "--verbose"]]
+   :expect {:value [{:lane true :verbose true} []]}}
+  {:id :args/negative-number :op :parse-args
+   :call ["parse" ["--count" "-5"]]
+   :expect {:value [{:count "-5"} []]}}
+  {:id :args/missing-value :op :parse-args
+   :call ["parse" ["--model"]]
+   :expect {:value [{:model nil} []]}}
+  {:id :args/force-yes-verbatim :op :parse-args
+   :call ["parse" ["--force" "yes"]]
+   :expect {:value [{:force "yes"} []]}}
+  {:id :args/opt-toolsets :op :parse-args
+   :call ["opt-value" :toolsets "a,b"]
+   :expect {:value ["a" "b"]}}
+  {:id :args/opt-trust-false :op :parse-args
+   :call ["opt-value" :trust "false"]
+   :expect {:value false}}
 ]}]
