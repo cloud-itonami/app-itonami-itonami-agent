@@ -11,7 +11,7 @@
 (def schema-v2 "cloud.itonami.profile.v2")
 (def schemas #{schema-v1 schema-v2})
 
-(def rails #{:murakumo :kotoba :itonami-p2p})
+(def rails #{:murakumo :kotoba :itonami-p2p :openrouter :muse :codex :Claude})
 (def kinds #{:steward :unit :role-bot :organism :worker})
 (def worlds #{:etzhayyim :awai :kotoba :host})
 
@@ -21,8 +21,18 @@
 (def legacy-decisions {:self-executing :autonomous :propose :approval-required :forbidden :blocked})
 
 (def required-deny-host
-  "Two CLIs: an itonami profile never reaches the Hermes aggregator rail."
+  "Two CLIs: an itonami profile never reaches the Hermes aggregator rail,
+  unless it explicitly opts into the openrouter rail (rails names
+  :openrouter and authorities names its host)."
   "openrouter.ai")
+
+(defn openrouter-opt-in?
+  "Explicit openrouter opt-in: the profile rides :openrouter and
+  authorises its host. Default profiles keep the deny."
+  [m]
+  (boolean
+   (and (some #{:openrouter} (get-in m [:inference :rails]))
+        (some #{"openrouter.ai"} (get-in m [:inference :authorities])))))
 
 (def org-keys
   [:agent/kind :org/world :org/path :org/github :org/unit :org/layer :invocation
@@ -83,7 +93,7 @@
                [[:placement :mode] true #{:p2p :local} "not one of :p2p :local"]
                [[:placement :order] true #(and (vec-of? #{:peer :local} %) (seq %)) "not a non-empty vector of :peer / :local"]
                [[:placement :peers] false #{:trusted} "not :trusted"]
-               [[:placement :inference-rail] true rails "not one of :murakumo :kotoba :itonami-p2p"]
+               [[:placement :inference-rail] true rails "not one of :murakumo :kotoba :itonami-p2p :openrouter :muse :codex :Claude"]
                [[:inference :rails] false #(and (vec-of? rails %) (seq %)) "not a non-empty vector of rails"]
                [[:inference :authorities] false #(vec-of? string? %) "not a vector of host names"]
                [[:inference :deny-hosts] false #(vec-of? string? %) "not a vector of host names"]
@@ -112,8 +122,10 @@
         (keep identity
               [(when (and (seq inf-rails) (keyword? rail) (not (some #{rail} inf-rails)))
                  (err [:placement :inference-rail] "not among :inference :rails"))
-               ;; Two CLIs (AGENTS.md): the itonami rail denies the Hermes aggregator
-               (when-not (and (vector? deny) (some #{required-deny-host} deny))
+               ;; Two CLIs (AGENTS.md): the itonami rail denies the Hermes aggregator,
+               ;; unless the profile explicitly opts into :openrouter.
+               (when-not (or (and (vector? deny) (some #{required-deny-host} deny))
+                               (openrouter-opt-in? m))
                  (err [:inference :deny-hosts] (str "must name " required-deny-host " (Two CLIs: itonami never rides the Hermes rail)")))
                (when (and v2? (nil? world))
                  (warn [:org/world] "v2 manifest not placed in the organisation (profile organize)"))

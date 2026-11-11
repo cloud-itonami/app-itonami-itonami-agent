@@ -14,13 +14,19 @@
 
 (def built-in
   "Provider defaults when the profile names no endpoint of its own.
-  Verbatim from provider.cljk."
+  Verbatim from provider.cljk, plus the opt-in subscription rails
+  (muse/codex/Claude): OpenAI-compatible defaults; per-profile
+  providers.<name> base_url/key_env overrides win, and subscription
+  OAuth file seams stay host-side reads (never written by the core)."
   {"kotoba"     {"base_url" "https://api.kotoba.cloud/v1"   "key_env" "KOTOBA_API_TOKEN"}
    "murakumo"   {"base_url" "https://api.murakumo.cloud/v1" "key_env" "MURAKUMO_API_TOKEN"}
    "openrouter" {"base_url" "https://openrouter.ai/api/v1"  "key_env" "OPENROUTER_API_KEY"}
    "openrouter-free" {"base_url" "https://openrouter.ai/api/v1" "key_env" "OPENROUTER_API_KEY"}
    "nous"       {"base_url" "https://inference-api.nousresearch.com/v1" "key_env" "NOUS_API_KEY"}
    "openai"     {"base_url" "https://api.openai.com/v1"     "key_env" "OPENAI_API_KEY"}
+   "muse"       {"base_url" "https://api.meta.ai/v1"        "key_env" "MUSE_API_TOKEN"}
+   "codex"      {"base_url" "https://api.openai.com/v1"     "key_env" "CODEX_API_TOKEN"}
+   "Claude"      {"base_url" "https://api.anthropic.com/v1"  "key_env" "ANTHROPIC_API_KEY"}
    "itonami-p2p" {"base_url" "http://127.0.0.1:7420/v1"}})
 
 (def default-headers

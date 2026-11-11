@@ -14,6 +14,16 @@
   (let [n (str name)]
     (or (str/starts-with? n "murakumo") (str/starts-with? n "mishima"))))
 
+(def opt-in-rails
+  "Itonami opt-in rails beyond murakumo/mishima. The default profile
+  stays murakumo-only; a profile names one of these explicitly in
+  :inference :rails + :authorities to ride it. Existing-token reuse
+  is a host-side read (never written by the core)."
+  #{:kotoba :itonami-p2p :openrouter :muse :codex :Claude})
+
+(defn opt-in-rail? [rail]
+  (contains? opt-in-rails (keyword (str rail))))
+
 (defn runtime-for [has-itonami-edn] (if has-itonami-edn "itonami" "hermes"))
 
 (defn hermes-provider-verdict [name]
@@ -22,6 +32,7 @@
 (defn itonami-rail-verdict [rail]
   (cond (= (str rail) "") "rail/itonami-without-rail"
         (murakumo-rail? rail) "rail/ok"
+        (opt-in-rail? rail) "rail/ok"
         :else "rail/itonami-off-murakumo"))
 
 (defn profile-verdict [registry-runtime has-itonami-edn rail]
@@ -42,6 +53,24 @@
 
 (defn- host-match? [host pattern]
   (or (= host pattern) (str/ends-with? host (str "." pattern))))
+
+(defn provider-refs
+  "Provider names only (no model ids): the model provider, providers keys,
+  fallback provider fields and job provider pins. Itonami checks these
+  against the opted-in rails; model ids are provider-scoped and unchecked
+  (a codex profile may call its model gpt-5, a Claude one claude-sonnet)."
+  [config jobs]
+  (let [model (get config "model")]
+    (vec (distinct
+          (remove #(or (nil? %) (= "" %))
+                  (concat
+                   (when (map? model) [(get model "provider")])
+                   (keys (get config "providers"))
+                   (let [fb (get config "fallback_providers")]
+                     (cond (string? fb) [fb]
+                           (sequential? fb) (map #(if (map? %) (get % "provider") %) fb)
+                           :else []))
+                   (map #(get % "provider") jobs)))))))
 
 (defn provider-names
   "Every provider name and model id a profile's config.yaml names, plus each
@@ -79,8 +108,10 @@
 
 (defn inference-verdict
   "rail verdict for one resolved inference target of an itonami profile.
-  The provider name must be on the murakumo rail, its host must not be in
-  :deny-hosts, and must be one of :authorities when the manifest names any."
+  The provider name must be on the murakumo rail or an explicit opt-in
+  rail (:kotoba :itonami-p2p :openrouter :muse :codex :Claude), its host
+  must not be in :deny-hosts, and must be one of :authorities when the
+  manifest names any."
   [inference {:keys [provider host]}]
   (let [deny (get inference :deny-hosts [])
         auth (get inference :authorities)]

@@ -56,7 +56,8 @@
   (map #(assoc % :file file) ps))
 
 (defn- rail-problems [{:keys [runtime config jobs manifest]}]
-  (let [names (rail/provider-names config jobs)]
+  (let [names (rail/provider-names config jobs)
+        provider-only (rail/provider-refs config jobs)]
     (if (= runtime "itonami")
       (let [rails (get-in manifest [:inference :rails])
             primary (name (or (first rails) (get-in manifest [:placement :inference-rail]) ""))]
@@ -64,7 +65,9 @@
          (let [v (rail/profile-verdict "itonami" true primary)]
            (when (not= v "rail/ok")
              [(problem :error "itonami.edn" [:inference :rails] v)]))
-         (for [n names :let [v (rail/itonami-rail-verdict n)] :when (not= v "rail/ok")]
+         ;; Provider refs ride rails and are checked strictly; model ids
+         ;; are provider-scoped (gpt-5, claude-sonnet) and unchecked.
+         (for [n provider-only :let [v (rail/itonami-rail-verdict n)] :when (not= v "rail/ok")]
            (problem :error "config.yaml" [n] v))
          (let [target (rail/resolve-job config {})
                v (rail/inference-verdict (:inference manifest) target)]

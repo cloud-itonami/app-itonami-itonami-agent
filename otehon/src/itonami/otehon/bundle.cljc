@@ -25,10 +25,16 @@
    "workdir" "context_from"])
 
 (def rail-authorities
-  "The authority server behind each operator rail."
+  "The authority server behind each rail. Subscription rails
+  (muse/codex/Claude) and the openrouter opt-in rail resolve here;
+  secrets stay host-side and are never written into the bundle."
   {:murakumo ["api.murakumo.cloud"]
    :kotoba ["api.kotoba.cloud"]
-   :itonami-p2p ["api.kotoba.cloud" "api.murakumo.cloud"]})
+   :itonami-p2p ["api.kotoba.cloud" "api.murakumo.cloud"]
+   :openrouter ["openrouter.ai"]
+   :muse ["api.meta.ai"]
+   :codex ["api.openai.com"]
+   :Claude ["api.anthropic.com"]})
 
 (defn- base-name [rel]
   (last (str/split (str rel) #"/")))
@@ -232,13 +238,19 @@
      :cron? cron?}))
 
 (defn with-inference-rail
-  "Point an itonami manifest at one inference rail."
+  "Point an itonami manifest at one inference rail. The default deny
+  on openrouter.ai stays for every rail except an explicit :openrouter
+  opt-in, which authorises its host and lifts the deny."
   [m rail]
-  (-> m
-      (assoc-in [:placement :inference-rail] rail)
-      (assoc-in [:inference :rails] [rail])
-      (assoc-in [:inference :authorities] (get rail-authorities rail []))
-      (update-in [:inference :deny-hosts] #(or % ["openrouter.ai"]))))
+  (let [deny (or (get-in m [:inference :deny-hosts]) ["openrouter.ai"])]
+    (-> m
+        (assoc-in [:placement :inference-rail] rail)
+        (assoc-in [:inference :rails] [rail])
+        (assoc-in [:inference :authorities] (get rail-authorities rail []))
+        (assoc-in [:inference :deny-hosts]
+                  (if (= rail :openrouter)
+                    (vec (remove #{"openrouter.ai"} deny))
+                    (vec (distinct (conj (vec deny) "openrouter.ai"))))))))
 
 (defn sorted-edn
   "pr-str of a manifest with EVERY map level ordered by printed key.
