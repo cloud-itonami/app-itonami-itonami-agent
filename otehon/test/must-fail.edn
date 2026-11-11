@@ -462,4 +462,10 @@
   {:id :must-fail/bridge-wrong-cwd :op :bridge
    :call ["options" {"prompt" "hi"} "/w"]
    :expect {:value {:model nil :provider nil :pinned? false :tool-names nil :history nil :instructions nil :cwd "/WRONG" :platform "api_server" :load-context? true :max-turns nil :budget-s nil}}}
+  {:id :must-fail/vault-wrong-add :op :vault
+   :call ["command" "add" ["l" "u"]]
+   :expect {:value {:add {:label "l" :username "WRONG" :origin "" :totp-seed ""}}}}
+  {:id :must-fail/vault-wrong-remove :op :vault
+   :call ["command" "remove" ["h1"]]
+   :expect {:value {:remove {:handle "WRONG"}}}}
 ]}]

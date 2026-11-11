@@ -4465,6 +4465,31 @@ Output since last heartbeat:
   {:id :vault/base32-tolerant :op :vault
    :call ["base32" "gezdgnbvgy3tqojq====\n"]
    :expect {:value [49 50 51 52 53 54 55 56 57 48]}}
+  ;; ------------------------------------------------------------ vault command dispatch (S6c-3)
+  {:id :vault/cmd-list :op :vault
+   :call ["command" "list" []]
+   :expect {:value {:list {}}}}
+  {:id :vault/cmd-default :op :vault
+   :call ["command" nil []]
+   :expect {:value {:list {}}}}
+  {:id :vault/cmd-add :op :vault
+   :call ["command" "add" ["l" "u"]]
+   :expect {:value {:add {:label "l" :username "u" :origin "" :totp-seed ""}}}}
+  {:id :vault/cmd-add-full :op :vault
+   :call ["command" "add" ["l" "u" "o" "t"]]
+   :expect {:value {:add {:label "l" :username "u" :origin "o" :totp-seed "t"}}}}
+  {:id :vault/cmd-add-missing :op :vault
+   :call ["command" "add" ["l"]]
+   :expect {:value {:usage "usage: itonami-agent vault add <label> <username> [origin] [totp-seed]   (the password is read from stdin)"}}}
+  {:id :vault/cmd-remove :op :vault
+   :call ["command" "remove" ["h1"]]
+   :expect {:value {:remove {:handle "h1"}}}}
+  {:id :vault/cmd-remove-missing :op :vault
+   :call ["command" "remove" []]
+   :expect {:value {:usage "usage: itonami-agent vault remove <handle>"}}}
+  {:id :vault/cmd-unknown :op :vault
+   :call ["command" "bogus" []]
+   :expect {:value {:usage "usage: itonami-agent vault add|list|remove"}}}
   ;; ------------------------------------------------------------ browser policy units (S6b-16)
   {:id :browser/secret-raw :op :browser
    :call ["secret" "token sk-abcdefghij1234567890 end"]
