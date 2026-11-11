@@ -18,7 +18,7 @@ covered by shared cases on all three runners.
 | legacy route | legacy ref | otehon command | status |
 |---|---|---|---|
 | oneshot `-p/-z` (+`-m/--provider/-t`) | `oneshot`, `loop.cljk` toolset rule | `oneshot` (gate + injected/host turn apply: prints the final on completed non-blank, exit 1 otherwise, pending exit 3 without an executor; the live inference call stays host-side) | done (JUN-1036 S2e; the live run-job loop + watcher fan-in stay open) |
-| `bridge` | `bridge` | `bridge.cljc` (validate-request / approval-outcome / result-row / error-row, shared `:bridge` cases) | partial (request gate + approval routing + row shaping done JUN-1036 S6b-22; readline loop, profile load, agent-loop run, event/result print stay S6) |
+| `bridge` | `bridge` | `bridge.cljc` (validate-request / approval-outcome / result-row / error-row / run-options, shared `:bridge` cases) | partial (request gate + approval routing + row shaping done JUN-1036 S6b-22; run-options plan done JUN-1036 S6c-2; readline loop, profile load, agent-loop run, event/result print stay S6) |
 | `chat` | `chat` | — | S6 |
 | `vault` | `vault-cmd` | `vault.cljc` (login-meta / add-login / remove-login / secret / list-rows / format-row over an explicit store map, `:vault` op; encrypted file, handle generation, stdin read and the CLI stay S6) | partial (store core done JUN-1036 S6b-14, shared cases; TOTP minting + the `vault` command wiring stay S6) |
 | `mcp` | `mcp-cmd` | — | S6 |
@@ -598,4 +598,12 @@ from source, the rest follow the module name until their slice lands.
   truthiness gate is kept exactly (an empty server name passes and
   fails at the host login, pinned by case). Usage exits, the
   PKCE/device flows and the success print stay at the CLI.)
+- S6c-2 bridge run options — done (JUN-1036: the data half of the
+  agent-loop options as a `run-options` plan in `bridge.cljc`
+  (model/provider/pin/tool-names/history/instructions/cwd/platform/
+  load-context/max-turns/budget-s; cwd explicit), with the `:bridge`
+  `options` verb. 4 cases + 2 must-fail; 1031 cases + 125 must-fail
+  green on basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical
+  — see the evidence doc. Verified divergence: none in the data
+  half; function seams, profile load and the run stay host-side.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

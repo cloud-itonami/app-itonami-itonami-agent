@@ -4874,4 +4874,17 @@ Output since last heartbeat:
   {:id :mcp/login-empty-server :op :mcp
    :call ["login-plan" "login" "" {"url" "https://h"} false]
    :expect {:value {:login {:server "" :url "https://h" :device? false}}}}
+  ;; ------------------------------------------------------------ bridge run options (S6c-2)
+  {:id :bridge/options-minimal :op :bridge
+   :call ["options" {"prompt" "hi" "tool_names" []} "/w"]
+   :expect {:value {:model nil :provider nil :pinned? false :tool-names [] :history nil :instructions nil :cwd "/w" :platform "api_server" :load-context? true :max-turns nil :budget-s nil}}}
+  {:id :bridge/options-full :op :bridge
+   :call ["options" {"prompt" "hi" "tool_names" ["read_file"] "model" "m" "provider" "p" "history" [{"role" "user"}] "instructions" "be brief" "cwd" "/c" "max_turns" 5 "budget_s" 60} "/w"]
+   :expect {:value {:model "m" :provider "p" :pinned? true :tool-names ["read_file"] :history [{"role" "user"}] :instructions "be brief" :cwd "/c" :platform "api_server" :load-context? true :max-turns 5 :budget-s 60}}}
+  {:id :bridge/options-cwd-fallback :op :bridge
+   :call ["options" {"prompt" "hi" "model" "m"} "/w"]
+   :expect {:value {:model "m" :provider nil :pinned? true :tool-names nil :history nil :instructions nil :cwd "/w" :platform "api_server" :load-context? true :max-turns nil :budget-s nil}}}
+  {:id :bridge/options-unpinned :op :bridge
+   :call ["options" {"prompt" "hi" "provider" "p"} "/w"]
+   :expect {:value {:model nil :provider "p" :pinned? false :tool-names nil :history nil :instructions nil :cwd "/w" :platform "api_server" :load-context? true :max-turns nil :budget-s nil}}}
 ]}]

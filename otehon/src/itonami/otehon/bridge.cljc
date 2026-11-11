@@ -71,3 +71,23 @@
   "The JSONL error row: the CLI prints one and exits 1."
   [message]
   {"type" "error" "error" message})
+
+(defn run-options
+  "The data half of the agent-loop options `start-request` builds, as
+  a plan for the host to execute with injected seams (`:before-tool`,
+  `:tool-overrides`, `:on-event` and the run itself stay host-side).
+  `cwd` is explicit: the legacy defaults to the process cwd when the
+  request carries none, and the twin takes it as an argument so no
+  host read hides inside the unit."
+  [request cwd]
+  {:model (get request "model")
+   :provider (get request "provider")
+   :pinned? (boolean (get request "model"))
+   :tool-names (get request "tool_names")
+   :history (get request "history")
+   :instructions (get request "instructions")
+   :cwd (or (get request "cwd") cwd)
+   :platform "api_server"
+   :load-context? true
+   :max-turns (get request "max_turns")
+   :budget-s (get request "budget_s")})
