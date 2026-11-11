@@ -192,3 +192,54 @@
   {:now (:iso now)
    :due (vec (keep #(when (due? % (:iso now)) (get % "id")) jobs))
    :next (into {} (map (fn [j] [(get j "id") (next-run j now)]) jobs))})
+
+;; ---------------------------------------------------------------- durations
+
+(defn parse-duration-minutes
+  "A duration string to whole minutes, or nil. Verbatim from the
+  `duration-minutes` half of parse-schedule: a bare number is not a
+  duration, `m` alone means one minute, and zero is not positive.
+  Uses the namespace `parse-int`, never js/parseInt, so every
+  runner reads the same digits."
+  [s]
+  (when-let [[_ amount unit] (re-matches #"(?i)^(\d*)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)$" (str/trim (str s)))]
+    (let [n (if (str/blank? amount) 1 (parse-int amount))
+          unit (str/lower-case unit)
+          scale (cond
+                  (#{"m" "min" "mins" "minute" "minutes"} unit) 1
+                  (#{"h" "hr" "hrs" "hour" "hours"} unit) 60
+                  (#{"d" "day" "days"} unit) 1440
+                  :else 10080)]
+      (when (pos? n) (* n scale)))))
+
+;; ---------------------------------------------------------------- natural language
+
+(def ^:private natural-day-map
+  {"day" "*" "daily" "*" "everyday" "*"
+   "weekday" "1-5" "weekdays" "1-5" "weekend" "0,6" "weekends" "0,6"
+   "sun" "0" "sunday" "0" "mon" "1" "monday" "1" "tue" "2" "tuesday" "2"
+   "wed" "3" "wednesday" "3" "thu" "4" "thursday" "4" "fri" "5" "friday" "5"
+   "sat" "6" "saturday" "6"})
+
+(defn natural-cron-expr
+  "A weekday/time phrase to a 5-field cron expression, or nil.
+  Verbatim from `natural-schedule`: the day half resolves through
+  the fixed word table (`weekday` to `1-5`, named days to numbers),
+  the clock half to minute/hour with am/pm, and anything unparsable
+  or out of range is nil. Validation of the produced expression
+  stays with `parse-cron`; this only produces it."
+  [s]
+  (when-let [[_ day-part time-part] (re-matches #"(?i)^(.+?)\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)$" (str/trim (str s)))]
+    (let [day-part (str/lower-case (str/replace day-part #"(?i)^every\s+" ""))
+          day-tokens (remove str/blank? (str/split day-part #"(?:,|\s+and\s+|\s+)"))
+          dow (if (some #{"*"} (map natural-day-map day-tokens))
+                "*"
+                (str/join "," (distinct (keep natural-day-map day-tokens))))
+          clock (str/replace (str/lower-case time-part) #"\s+" "")]
+      (when (and (seq dow) (every? natural-day-map day-tokens))
+        (when-let [[_ hh mm ap] (re-matches #"^(\d{1,2})(?::(\d{2}))?(am|pm)?$" clock)]
+          (let [raw-h (parse-int hh)
+                minute (parse-int (or mm "0"))
+                hour (if ap (+ (mod raw-h 12) (if (= ap "pm") 12 0)) raw-h)]
+            (when (and (<= 0 hour 23) (<= 0 minute 59) (or (not ap) (<= 1 raw-h 12)))
+              (str minute " " hour " * * " dow))))))))

@@ -488,4 +488,10 @@
   {:id :must-fail/cron-wrong-incidents :op :cron
    :call ["incidents" "ack" "i1" true]
    :expect {:value {:ack {:incident-id "WRONG"}}}}
+  {:id :must-fail/tick-wrong-duration :op :tick-parse
+   :call ["duration" "2h"]
+   :expect {:value 119}}
+  {:id :must-fail/tick-wrong-natural :op :tick-parse
+   :call ["natural" "mon at 9"]
+   :expect {:value "0 9 * * 2"}}
 ]}]
