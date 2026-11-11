@@ -2901,6 +2901,7 @@
               "normalize" (clarify/normalize-questions arg)
               "status" (clarify/response-status arg arg2 arg3)
               "result" (clarify/result-json arg arg2)
+              "pick" (clarify/pick-answer arg arg2 arg3)
               (throw (ex-info (str "clarify: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-webguard [c]

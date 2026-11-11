@@ -444,4 +444,10 @@
   {:id :must-fail/bridge-wrong-allow :op :bridge
    :call ["approval" {"type" "approval" "request_id" "r1" "choice" "once"} ["r1"]]
    :expect {:value {:request-id "r1" :allow false}}}
+  {:id :must-fail/clarify-wrong-pick :op :clarify
+   :call ["pick" "2" ["a" "b" "c"] false]
+   :expect {:value "c"}}
+  {:id :must-fail/clarify-wrong-multi :op :clarify
+   :call ["pick" "1, 2" ["a" "b"] true]
+   :expect {:value ["a" "a"]}}
 ]}]

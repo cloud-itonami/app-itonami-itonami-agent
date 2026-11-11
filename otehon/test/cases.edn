@@ -3450,6 +3450,43 @@ Output since last heartbeat:
                      "multi_select" false}]
           {"outcome" "answered" "answers" {"q0" "a"}}]
    :expect {:value "{\"outcome\":\"answered\",\"responses\":[{\"choices_offered\":[\"a\",\"b\"],\"question\":\"Pick?\",\"status\":\"answered\",\"user_response\":\"a\"}]}"}}
+  ;; ------------------------------------------------------------ clarify number-pick (S6b-23)
+  {:id :clarify/pick-number :op :clarify
+   :call ["pick" "2" ["a" "b" "c"] false]
+   :expect {:value "b"}}
+  {:id :clarify/pick-first :op :clarify
+   :call ["pick" "1" ["a" "b"] false]
+   :expect {:value "a"}}
+  {:id :clarify/pick-zero-padded :op :clarify
+   :call ["pick" "01" ["a" "b"] false]
+   :expect {:value "a"}}
+  {:id :clarify/pick-out-of-range :op :clarify
+   :call ["pick" "9" ["a" "b" "c"] false]
+   :expect {:value "9"}}
+  {:id :clarify/pick-zero :op :clarify
+   :call ["pick" "0" ["a" "b"] false]
+   :expect {:value "0"}}
+  {:id :clarify/pick-text :op :clarify
+   :call ["pick" "own answer" ["a" "b"] false]
+   :expect {:value "own answer"}}
+  {:id :clarify/pick-float :op :clarify
+   :call ["pick" "1.5" ["a" "b"] false]
+   :expect {:value "1.5"}}
+  {:id :clarify/pick-huge :op :clarify
+   :call ["pick" "99999999999999999999" ["a"] false]
+   :expect {:value "99999999999999999999"}}
+  {:id :clarify/pick-blank :op :clarify
+   :call ["pick" "   " ["a"] false]
+   :expect {:value nil}}
+  {:id :clarify/pick-multi :op :clarify
+   :call ["pick" "1, 3" ["a" "b" "c"] true]
+   :expect {:value ["a" "c"]}}
+  {:id :clarify/pick-multi-blanks :op :clarify
+   :call ["pick" "2,, 1" ["a" "b"] true]
+   :expect {:value ["b" "a"]}}
+  {:id :clarify/pick-multi-mixed :op :clarify
+   :call ["pick" "2, 9, x" ["a" "b"] true]
+   :expect {:value ["b" "9" "x"]}}
   ;; ------------------------------------------------------------ webguard (S6b)
   {:id :webguard/blocked-loopback :op :webguard
    :call ["blocked" 4 "127.0.0.1"]
