@@ -405,3 +405,22 @@
              (if (and (nil? res) (seq (rest segs)))
                (recur (rest segs))
                res))))))))
+
+(defn run-opts
+  "The data half of the chat command's run options, verbatim from
+  `run-opts` in main.cljk, as a plan for the host to execute. `opts`
+  is the parsed CLI map (model/provider/toolsets/join-children?/
+  verbose); `cwd` is explicit — the legacy reads the process cwd, and
+  the twin takes it as an argument so no host read hides inside the
+  unit. The `cronjob_manage` tool override, the verbose event logger
+  and the executor stay host-side: the plan carries only data, and a
+  verbose run plans exactly the same data."
+  [opts cwd]
+  {:model (:model opts)
+   :provider (:provider opts)
+   :pinned? (boolean (:model opts))
+   :toolsets (:toolsets opts)
+   :platform "cli"
+   :load-context? true
+   :cwd cwd
+   :join-children? (:join-children? opts)})

@@ -468,4 +468,6 @@
   {:id :must-fail/vault-wrong-remove :op :vault
    :call ["command" "remove" ["h1"]]
    :expect {:value {:remove {:handle "WRONG"}}}}
+  {:id :must-fail/chat-wrong-run-opts :op :chat :request {:steps [["run-opts" {:model "m"} "/w"]]} :expect {:results [{:model "m" :provider nil :pinned? false :toolsets nil :platform "cli" :load-context? true :cwd "/w" :join-children? nil}]}}
+  {:id :must-fail/chat-wrong-run-platform :op :chat :request {:steps [["run-opts" {} "/w"]]} :expect {:results [{:model nil :provider nil :pinned? false :toolsets nil :platform "WRONG" :load-context? true :cwd "/w" :join-children? nil}]}}
 ]}]
