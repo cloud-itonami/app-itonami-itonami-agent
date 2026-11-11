@@ -163,7 +163,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge ops-cron ops-tick-parse ops-parse-args)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge ops-cron ops-tick-parse ops-parse-args ops-gateway-gates)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -199,6 +199,7 @@
     :delivery (ops-delivery c)
     :drain (ops-drain c scratch)
     :gateway (ops-gateway c)
+    :gateway-gates (ops-gateway-gates c)
     :watcher (ops-watcher c)
     :adapters (ops-adapters c)
     :chat (ops-chat c scratch)
@@ -2435,6 +2436,13 @@
       "calls" @calls
       "warns" @warns
       (throw (ex-info (str "gateway: unknown step " verb) {:verb verb})))))
+
+(defn- ops-gateway-gates [c]
+  (let [[verb arg arg2] (:call c)]
+    (case verb
+      "tick-interval" {:value (gateway/tick-interval-ms arg)}
+      "serve" (gateway/serve-gate arg arg2)
+      (throw (ex-info (str "gateway-gates: unknown call " verb) {:verb verb})))))
 
 (defn- ops-gateway [c]
   (let [req (:request c {})

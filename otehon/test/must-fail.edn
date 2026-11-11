@@ -506,4 +506,10 @@
   {:id :must-fail/args-wrong-valid-name :op :parse-args
    :call ["valid-name" "main"]
    :expect {:value false}}
+  {:id :must-fail/gw-wrong-interval :op :gateway-gates
+   :call ["tick-interval" "30"]
+   :expect {:value 999}}
+  {:id :must-fail/gw-wrong-serve :op :gateway-gates
+   :call ["serve" "telegram" nil]
+   :expect {:serve {:platform "WRONG" :interval-ms nil}}}
 ]}]

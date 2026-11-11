@@ -5100,4 +5100,41 @@ Output since last heartbeat:
   {:id :args/valid-name-bad :op :parse-args
    :call ["valid-name" "../.."]
    :expect {:value false}}
+  ;; ------------------------------------------------------------ gateway run/serve gates (S6c-11)
+  {:id :gw/tick-default :op :gateway-gates
+   :call ["tick-interval" nil]
+   :expect {:value 60000}}
+  {:id :gw/tick-seconds :op :gateway-gates
+   :call ["tick-interval" "30"]
+   :expect {:value 30000}}
+  {:id :gw/tick-zero-floor :op :gateway-gates
+   :call ["tick-interval" "0"]
+   :expect {:value 1000}}
+  {:id :gw/tick-negative-floor :op :gateway-gates
+   :call ["tick-interval" "-5"]
+   :expect {:value 1000}}
+  {:id :gw/tick-unparsable :op :gateway-gates
+   :call ["tick-interval" "abc"]
+   :expect {:value 60000}}
+  {:id :gw/tick-prefix :op :gateway-gates
+   :call ["tick-interval" "12abc"]
+   :expect {:value 12000}}
+  {:id :gw/serve-default :op :gateway-gates
+   :call ["serve" nil nil]
+   :expect {:serve {:platform "telegram" :interval-ms nil}}}
+  {:id :gw/serve-telegram-interval :op :gateway-gates
+   :call ["serve" "telegram" "30"]
+   :expect {:serve {:platform "telegram" :interval-ms 30000}}}
+  {:id :gw/serve-other-platform :op :gateway-gates
+   :call ["serve" "discord" nil]
+   :expect {:error "gateway serve: platform discord not implemented (telegram only)"}}
+  {:id :gw/serve-empty-platform :op :gateway-gates
+   :call ["serve" "" nil]
+   :expect {:error "gateway serve: platform  not implemented (telegram only)"}}
+  {:id :gw/serve-bad-interval :op :gateway-gates
+   :call ["serve" "telegram" "abc"]
+   :expect {:serve {:platform "telegram" :interval-ms nil}}}
+  {:id :gw/serve-zero-no-floor :op :gateway-gates
+   :call ["serve" "telegram" "0"]
+   :expect {:serve {:platform "telegram" :interval-ms 0}}}
 ]}]
