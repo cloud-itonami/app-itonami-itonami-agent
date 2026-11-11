@@ -163,7 +163,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge ops-cron)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -224,6 +224,7 @@
     :computer-use (ops-computer-use c)
     :code-rpc (ops-code-rpc c)
     :bridge (ops-bridge c)
+    :cron (ops-cron c)
     :doctor-kinds (ops-doctor-kinds c)
     :confine (ops-confine c scratch)
     :send (ops-send c)
@@ -3122,6 +3123,12 @@
               "error" (bridge/error-row arg)
               "options" (bridge/run-options arg arg2)
               (throw (ex-info (str "bridge: unknown call " verb) {:verb verb})))}))
+
+(defn- ops-cron [c]
+  (let [[verb arg arg2 arg3 arg4] (:call c)]
+    {:value (case verb
+              "notepad" (cron/notepad-plan arg arg2 arg3 arg4)
+              (throw (ex-info (str "cron: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-send [c]
   (let [req (:request c {})

@@ -4917,4 +4917,29 @@ Output since last heartbeat:
   {:id :bridge/options-unpinned :op :bridge
    :call ["options" {"prompt" "hi" "provider" "p"} "/w"]
    :expect {:value {:model nil :provider "p" :pinned? false :tool-names nil :history nil :instructions nil :cwd "/w" :platform "api_server" :load-context? true :max-turns nil :budget-s nil}}}
+  ;; ------------------------------------------------------------ cron notepad dispatch (S6c-5)
+  {:id :cron/notepad-set :op :cron
+   :call ["notepad" "j" "set" "k" "v"]
+   :expect {:value {:set {:job-id "j" :key "k" :value "v"}}}}
+  {:id :cron/notepad-set-false :op :cron
+   :call ["notepad" "j" "set" "k" false]
+   :expect {:value {:set {:job-id "j" :key "k" :value false}}}}
+  {:id :cron/notepad-set-missing :op :cron
+   :call ["notepad" "j" "set" "k" nil]
+   :expect {:value {:usage "usage: itonami-agent cron notepad <job-id> set <key> <value> | get <key> | delete <key> | list"}}}
+  {:id :cron/notepad-get :op :cron
+   :call ["notepad" "j" "get" "k" nil]
+   :expect {:value {:get {:job-id "j" :key "k"}}}}
+  {:id :cron/notepad-delete :op :cron
+   :call ["notepad" "j" "delete" "k" nil]
+   :expect {:value {:delete {:job-id "j" :key "k"}}}}
+  {:id :cron/notepad-list :op :cron
+   :call ["notepad" "j" "list" nil nil]
+   :expect {:value {:list {:job-id "j"}}}}
+  {:id :cron/notepad-no-job :op :cron
+   :call ["notepad" nil "list" nil nil]
+   :expect {:value {:usage "usage: itonami-agent cron notepad <job-id> set <key> <value> | get <key> | delete <key> | list"}}}
+  {:id :cron/notepad-bad-verb :op :cron
+   :call ["notepad" "j" "bogus" nil nil]
+   :expect {:value {:usage "usage: itonami-agent cron notepad <job-id> set <key> <value> | get <key> | delete <key> | list"}}}
 ]}]

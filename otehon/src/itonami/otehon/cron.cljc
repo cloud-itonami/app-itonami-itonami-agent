@@ -135,3 +135,24 @@
 (defn schedule-display [job]
   (or (get job "schedule_display") (get-in job ["schedule" "display"])
       (str/trim (str (get-in job ["schedule" "expr"])))))
+
+(defn notepad-plan
+  "The `cron notepad` subcommand dispatch as data, verbatim from
+  `cron-cmd`. `{:list _}`, `{:get _}`, `{:delete _}` and `{:set _}`
+  carry the job id, key and (for set) value; anything missing its
+  required part answers the verbatim `{:usage msg}`. The gate uses
+  membership for the verb and nil-ness for the set value, like the
+  legacy: `false` and `\"\"` pass as values, and the set refusal
+  reuses the same usage text. The notepad file read/write and the
+  result printing stay at the CLI (host-side)."
+  [job-id verb key value]
+  (let [usage "usage: itonami-agent cron notepad <job-id> set <key> <value> | get <key> | delete <key> | list"]
+    (cond
+      (not (and job-id (#{"set" "get" "delete" "list"} verb))) {:usage usage}
+      (= verb "set")
+      (if (nil? value)
+        {:usage usage}
+        {:set {:job-id job-id :key key :value value}})
+      (= verb "get") {:get {:job-id job-id :key key}}
+      (= verb "delete") {:delete {:job-id job-id :key key}}
+      :else {:list {:job-id job-id}})))
