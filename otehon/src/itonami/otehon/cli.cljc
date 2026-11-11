@@ -163,7 +163,7 @@
 ;; Forward: the store-backed case ops live below with the other store
 ;; code (gather lives next to its CLI commands), while observe dispatches
 ;; every op from here. `declare` is the same idiom yaml.cljc uses.
-(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge ops-cron ops-tick-parse)
+(declare ops-pause ops-status ops-model ops-fallback ops-run ops-oneshot ops-doctor ops-doctor-kinds ops-sessions ops-notepad ops-profile ops-runs ops-incidents ops-queue ops-ledger ops-delivery ops-drain ops-gateway ops-watcher ops-adapters ops-chat ops-quiet ops-confine ops-send ops-peer ops-tools ops-assembly ops-execute ops-tts ops-collect ops-clarify ops-webguard ops-vault ops-browser ops-browser-cloud ops-browser-provider ops-oauth ops-collect-io ops-process ops-dapps ops-connections ops-rails ops-mcp ops-homeassistant ops-computer-use ops-code-rpc ops-bridge ops-cron ops-tick-parse ops-parse-args)
 
 (defn- subset?
   "Every key of `want` holds in `got` (nested maps compared the same way)."
@@ -233,6 +233,7 @@
     :check (check-result (load-dir dir read-text))
     :dry-run (profile/dry-run (load-dir dir read-text) (:job c) {:capabilities (:capabilities c [])})
     :tick-parse (ops-tick-parse c)
+    :parse-args (ops-parse-args c)
     :tick (let [prof (load-dir dir read-text)
                 prof (if (contains? c :jobs) (assoc prof :jobs (:jobs c)) prof)]
             (tick/tick-plan (:jobs prof) (:now c)))
@@ -3141,6 +3142,67 @@
               "duration" (tick/parse-duration-minutes arg)
               "natural" (tick/natural-cron-expr arg)
               (throw (ex-info (str "tick-parse: unknown call " verb) {:verb verb})))}))
+
+;; ---------------------------------------------------------------- CLI arg parsing (S6c-9)
+
+(def ^:private cli-boolean-flags
+  "Flags whose values coerce true/false — the ONLY keys opt-value coerces.
+  Verbatim from `main.cljk`."
+  #{:force :verbose :trust})
+
+(defn- opt-value
+  "Value shaping for the generic `--flag value` / `--flag=value` branch.
+  Verbatim from `main.cljk`: a value is a value — everything verbatim,
+  EXCEPT toolsets (comma split, both spellings agree) and the known
+  boolean flags (literal true/false coerce, so `--force=false` is false).
+  Named value flags (-p/-z/-m/--provider/--model/--toolsets) are arbitrary
+  strings in BOTH spellings; short flags never take `=`."
+  [k v]
+  (cond
+    (= k :toolsets) (str/split (str v) #",")
+    (contains? cli-boolean-flags k) (cond (= "true" (str v)) true
+                                          (= "false" (str v)) false
+                                          :else v)
+    :else v))
+
+(defn- parse-args
+  "Hermes-style: -p/--profile anywhere, flags with values, the rest
+  positional. Verbatim from `main.cljk`: `--flag=value` carries the whole
+  value; a following token is a VALUE when it is not dash-prefixed or is a
+  negative number — Telegram group chat ids are exactly `-100123...` and
+  must not be read as a boolean flag. Value flags (-p/-z/-m/--provider/
+  -t) consume the next token verbatim even when missing — a prompt or a
+  model name may be any string (`-z false` is the prompt \"false\"), so no
+  flag coercion there; `-t` splits right away (a missing value throws,
+  like the legacy) while `--toolsets` shapes through opt-value."
+  [args]
+  (loop [[a & more] args opts {} pos []]
+    (cond
+      (nil? a) [opts pos]
+      (#{"-p" "--profile"} a) (recur (rest more) (assoc opts :profile (first more)) pos)
+      (#{"-z" "--oneshot"} a) (recur (rest more) (assoc opts :oneshot (first more)) pos)
+      (#{"-m" "--model"} a) (recur (rest more) (assoc opts :model (first more)) pos)
+      (= "--provider" a) (recur (rest more) (assoc opts :provider (first more)) pos)
+      (#{"-t" "--toolsets"} a) (recur (rest more) (assoc opts :toolsets (str/split (first more) #",")) pos)
+      (str/starts-with? a "--")
+      (if-let [eq (str/index-of a "=")]
+        (let [k (keyword (subs a 2 eq))]
+          (recur more (assoc opts k (opt-value k (subs a (inc eq)))) pos))
+        (let [k (keyword (subs a 2))
+              v (first more)]
+          (if (or (nil? v)
+                  (and (str/starts-with? v "-")
+                       (not (re-matches #"-?\d+(\.\d+)?" v))))
+            (recur more (assoc opts k true) pos)
+            (recur (rest more) (assoc opts k (opt-value k v)) pos))))
+      :else (recur more opts (conj pos a)))))
+
+(defn- ops-parse-args [c]
+  (let [[verb arg arg2] (:call c)]
+    {:value (case verb
+              "parse" (parse-args (vec arg))
+              "opt-value" (opt-value arg arg2)
+              (throw (ex-info (str "parse-args: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-send [c]
   (let [req (:request c {})

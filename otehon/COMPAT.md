@@ -657,4 +657,14 @@ from source, the rest follow the module name until their slice lands.
   / nbb, canon byte-identical — see the evidence doc. Verified
   divergence: none; the `in X` arm and the ISO fallback need the
   host clock and ISO helpers, so full `parse-schedule` stays host.)
+- S6c-9 CLI arg parsing — done (JUN-1036: the pure half of the CLI
+  argument parser as `opt-value` / `parse-args` in `cli.cljc`, with
+  the new `:parse-args` op mirroring the `:doctor` / `:doctor-kinds`
+  split. 12 cases + 2 must-fail; 1090 cases + 139 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical — see
+  the evidence doc. Verified divergence: none new; the short `-t`
+  keeps the legacy split-on-missing throw while the long
+  `--toolsets` stays nil-safe through `opt-value`, exactly as the
+  legacy spellings differ. `die`, `-main` wiring and host reads
+  stay host-side.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.
