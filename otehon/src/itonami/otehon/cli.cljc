@@ -2679,6 +2679,7 @@
           "events" @events
           "sends" @calls
           "token" (chat/telegram-token (or (:token-config req) {}) env)
+          "run-opts" (chat/run-opts (first args) (second args))
           "backoff" (chat/backoff-ms (first args))
           "write-offset" (let [[n] args
                                f (str dir "/offset.json")]

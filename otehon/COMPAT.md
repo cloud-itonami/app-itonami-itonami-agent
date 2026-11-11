@@ -86,7 +86,7 @@ from source, the rest follow the module name until their slice lands.
 | `browser.cljk` *browser tools* | `browser.cljc` (secret-url? / allowed-host? / parse-connect-target / scrub-output / redact-cdp-output / clamp-timeout / screenshot-path, `:browser` op; DNS pinning, sockets, servers, spawn, config write, clock, file check stay S6) | partial (policy core done JUN-1036 S6b-16, shared cases; proxy/CDP/CLI wiring stays S6) |
 | `browser_cloud.cljk` | `browser_cloud.cljc` (session-name / bb/bu-config / payload / downgrade / features / session records / close specs) | partial (shapes done JUN-1036 S6b-17, shared cases; env reads, fetch, 402 loop, registration stay S6) |
 | `browser_provider.cljk` | `browser_provider.cljc` (normalize / resolve over explicit registry + availability witness) | partial (resolution done JUN-1036 S6b-17, shared cases; registry atom, probes, lifecycle dispatch stay S6) |
-| `chat_platform.cljk` | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply, sync) | done (JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in) |
+| `chat_platform.cljk` + `chat` cmd | `chat.cljc` (normalize/guard/route/history/dispatch/poll/serve/chunk/prepare/send-reply/sync + run-opts, shared `:chat` cases) | partial (chat_platform done JUN-1036 S5c; dispatch inline, serve bounded, fan-in hooks ride the gateway fan-in; chat command run-options plan done JUN-1036 S6c-4) |
 | `clarify.cljk` | `clarify.cljc` (strip-recommended, mark-recommended, clean-answer, normalize-questions, response-status, result-json, pick-answer) | partial (pure question/answer shapes done JUN-1036 S6b pure-units + S6b-23 number-pick, 27 shared cases + 4 must-fail; readline chat loop + host clarify-fn wiring stay S6) |
 | `code_rpc.cljk` | `code_rpc.cljc` (tool-error, result-error, tool-errors-since, sandbox-tools-for, terminal-blocked-params, missing-import-hint, failure-hint-rules, failure-hint, hint-on-failure) | partial (shaping + hints done JUN-1036 S6b-8, shared cases; shim-header/tool-stubs/generate-hermes-tools, token check, dispatch, budget, log, serve loop stay S6) |
 | `collect.cljk`, `collect_io.cljk` | `collect.cljc` (certify-row, certify, reconcile — outbox shadow-write core) + `collect_io.cljc` (`receipt` mapping, `:collect-io` op) | partial (pure certify/reconcile done JUN-1036 S6b pure-units, 11 shared cases; receipt done S6b-19; signing-key custody + SDK wiring stay S6) |
@@ -614,4 +614,15 @@ from source, the rest follow the module name until their slice lands.
   bb 1.12.218 / nbb, canon byte-identical — see the evidence doc.
   Verified divergence: truthiness gate kept like the legacy. Usage
   exits, stdin, the AES file and row printing stay at the CLI.)
+- S6c-4 chat run options — done (JUN-1036: the data half of the chat
+  command's run options as a `run-opts` plan in `chat.cljc`
+  (model/provider/pin/toolsets/platform/load-context/cwd/
+  join-children; cwd explicit), with the `:chat` `run-opts` verb.
+  4 cases + 2 must-fail; 1043 cases + 129 must-fail green on
+  basilisp 0.5.1 / bb 1.12.218 / nbb, canon byte-identical — see
+  the evidence doc. Verified divergence: the first draft used
+  string-keyed opts and the gate rejected it on every runner; the
+  legacy builds keyword-keyed opts. Tool override, event logger,
+  executor, profile load and cwd default stay host-side; verbose
+  plans identical data.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.
