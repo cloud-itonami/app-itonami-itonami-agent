@@ -456,4 +456,10 @@
   {:id :must-fail/mcp-wrong-login-usage :op :mcp
    :call ["login-plan" "login" "x" nil false]
    :expect {:value {:login {:server "x" :url nil :device? false}}}}
+  {:id :must-fail/bridge-wrong-pinned :op :bridge
+   :call ["options" {"prompt" "hi" "model" "m"} "/w"]
+   :expect {:value {:model "m" :provider nil :pinned? false :tool-names nil :history nil :instructions nil :cwd "/w" :platform "api_server" :load-context? true :max-turns nil :budget-s nil}}}
+  {:id :must-fail/bridge-wrong-cwd :op :bridge
+   :call ["options" {"prompt" "hi"} "/w"]
+   :expect {:value {:model nil :provider nil :pinned? false :tool-names nil :history nil :instructions nil :cwd "/WRONG" :platform "api_server" :load-context? true :max-turns nil :budget-s nil}}}
 ]}]

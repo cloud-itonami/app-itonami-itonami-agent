@@ -3118,6 +3118,7 @@
               "approval" (bridge/approval-outcome arg arg2)
               "result" (bridge/result-row arg)
               "error" (bridge/error-row arg)
+              "options" (bridge/run-options arg arg2)
               (throw (ex-info (str "bridge: unknown call " verb) {:verb verb})))}))
 
 (defn- ops-send [c]
