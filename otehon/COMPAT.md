@@ -685,4 +685,14 @@ from source, the rest follow the module name until their slice lands.
   where the legacy reads NaN; no default/floor on serve, only run
   carries those. Pid claims, profile loads and the serve loop stay
   host-side.)
+- S6c-12 `peer` command routing — done (JUN-1036: `serve-opts` /
+  `rails-add-row` / `peer-cmd-route` in `peer.cljc` (shared
+  `text/parse-int-prefix` helper), with the new `:peer-cmd` op
+  mirroring the `:tick-parse` split. 13 cases + 2 must-fail; 1127
+  cases + 145 must-fail green on basilisp 0.5.1 / bb 1.12.218 /
+  nbb, canon byte-identical — see the evidence doc. Verified
+  divergence: one, kept — raw `--dry-run` passes through for
+  `rails detect`; priority/ports read nil where the legacy reads
+  NaN. Key serving, sockets, file writes and execution stay
+  host-side.)
 - S6 tools (rest): backends + bridge/chat/mcp/dapps CLIs.

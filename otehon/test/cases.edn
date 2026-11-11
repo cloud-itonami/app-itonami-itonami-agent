@@ -5137,4 +5137,44 @@ Output since last heartbeat:
   {:id :gw/serve-zero-no-floor :op :gateway-gates
    :call ["serve" "telegram" "0"]
    :expect {:serve {:platform "telegram" :interval-ms 0}}}
+  ;; ------------------------------------------------------------ peer command routing (S6c-12)
+  {:id :peer-cmd/route-serve :op :peer-cmd
+   :call ["route" "serve" [] {:port "8080" :host "h" :url "u" :max-runs "5"} 7420 0]
+   :expect {:serve {:port 8080 :host "h" :public-url "u" :max-runs 5}}}
+  {:id :peer-cmd/route-serve-defaults :op :peer-cmd
+   :call ["route" "serve" [] {} 7420 0]
+   :expect {:serve {:port nil :host nil :public-url nil :max-runs nil}}}
+  {:id :peer-cmd/route-add :op :peer-cmd
+   :call ["route" "add" ["https://x"] {:did "d1" :trust true} 7420 0]
+   :expect {:add {:url "https://x" :did "d1" :trust true}}}
+  {:id :peer-cmd/route-trust :op :peer-cmd
+   :call ["route" "trust" ["d9"] {} 7420 0]
+   :expect {:trust {:did "d9"}}}
+  {:id :peer-cmd/route-list :op :peer-cmd
+   :call ["route" "list" [] {} 7420 0]
+   :expect {:list true}}
+  {:id :peer-cmd/route-run :op :peer-cmd
+   :call ["route" "run" [] {:profile "p"} 7420 0]
+   :expect {:oneshot {:profile "p" :peer true}}}
+  {:id :peer-cmd/route-rails-detect :op :peer-cmd
+   :call ["route" "rails" ["detect"] {:port "9000"} 7420 3]
+   :expect {:rails {:action "detect" :dry-run nil :skip-port 9000}}}
+  {:id :peer-cmd/route-rails-detect-default :op :peer-cmd
+   :call ["route" "rails" ["detect"] {} 7420 3]
+   :expect {:rails {:action "detect" :dry-run nil :skip-port 7420}}}
+  {:id :peer-cmd/route-rails-add :op :peer-cmd
+   :call ["route" "rails" ["add" "https://r"] {:models "a,b"} 7420 2]
+   :expect {:rails {:action "add" :row {:name "manual-2" :base-url "https://r" :models ["a" "b"] :priority 50 :agent? true}}}}
+  {:id :peer-cmd/route-rails-list :op :peer-cmd
+   :call ["route" "rails" [] {} 7420 0]
+   :expect {:rails {:action "list"}}}
+  {:id :peer-cmd/route-unknown :op :peer-cmd
+   :call ["route" "bogus" [] {} 7420 0]
+   :expect {:error "unknown peer command: bogus"}}
+  {:id :peer-cmd/serve-opts-bad-port :op :peer-cmd
+   :call ["serve-opts" {:port "abc"}]
+   :expect {:value {:port nil :host nil :public-url nil :max-runs nil}}}
+  {:id :peer-cmd/rails-add-defaults :op :peer-cmd
+   :call ["rails-add" {:priority "high"} 1 "https://r"]
+   :expect {:value {:name "manual-1" :base-url "https://r" :models ["auto"] :priority nil :agent? true}}}
 ]}]

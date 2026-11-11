@@ -512,4 +512,10 @@
   {:id :must-fail/gw-wrong-serve :op :gateway-gates
    :call ["serve" "telegram" nil]
    :expect {:serve {:platform "WRONG" :interval-ms nil}}}
+  {:id :must-fail/peer-cmd-wrong-route :op :peer-cmd
+   :call ["route" "list" [] {} 7420 0]
+   :expect {:list false}}
+  {:id :must-fail/peer-cmd-wrong-add :op :peer-cmd
+   :call ["rails-add" {} 0 "https://r"]
+   :expect {:value {:name "manual-0" :base-url "https://r" :models ["auto"] :priority 999 :agent? true}}}
 ]}]
