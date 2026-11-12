@@ -56,6 +56,7 @@ jobs:
         run: |
           bb -cp otehon/src otehon/test/muse_test.clj
           bb -cp otehon/src otehon/test/occurrence_test.clj
+          bb -cp otehon/src otehon/test/etcd_test.clj
 
       - name: Shared cases on every runner (oracle)
         run: |

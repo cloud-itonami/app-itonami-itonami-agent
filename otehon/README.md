@@ -325,3 +325,9 @@ through `recover-muse!` from the original transcript without reinference.
 admission, stable identity, cursor freezing, fenced publication and reconciliation.
 The `.cljc` protocol does not select a production backend. The optional etcd
 developer oracle is experimental, outside the production runtime and Native CI.
+
+Owner approved etcd for the Otehon control plane on 2026-11-12 (AWAI-2795).
+`itonami.otehon.etcd/client` now supplies the host transport through an explicitly
+pinned official etcdctl binary and authenticated3-node cluster. Certificate-CN
+RBAC is enforced over gRPC; the old HTTP developer transport stays experimental.
+See the protocol document for exact pins, permissions and remaining boundaries.

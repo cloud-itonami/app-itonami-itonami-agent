@@ -80,12 +80,39 @@ must not be installed as fleet authority merely because these tests passed.
 
 [etcd API guarantees](https://etcd.io/docs/v3.6/learning/api_guarantees/) and
 [the JSON transaction mapping](https://etcd.io/docs/v3.6/dev-guide/api_grpc_gateway/)
-define the comparison/write behavior used by this developer oracle. ADR0026 D3
-lists allowed Otehon runtime components and does not list etcd. Adding it to the
-production control plane is an owner architecture decision, not a side effect of
-these tests. Alternatively, implement this same transport contract on the
-approved Awai-node consensus/admission path, then qualify that adapter.
+define the comparison/write behavior used by this developer oracle. At that
+test's time ADR0026 D3 did not list etcd. The owner subsequently approved its
+addition on 2026-11-12 (AWAI-2795; network-awai-apex PR185). That approval is
+recorded separately from these earlier test results.
 
-No fleet schedule is activated, no VKE path is used, and no production backend
-is selected by this change. Unknown is deliberately unavailable until reconciled;
-there is no promise of automatic failover or a reliability percentage.
+No fleet schedule is activated and no VKE path is used. Unknown is deliberately
+unavailable until reconciled; there is no promise of a reliability percentage.
+
+## Approved etcd host transport
+
+`itonami.otehon.etcd/client` is the Babashka Otehon host adapter selected after
+that owner approval. It uses the digest-pinned official **etcdctl gRPC client**,
+not the experimental HTTP gateway: the gateway does not support TLS Common Name
+authentication. Pin the exact binary SHA256,3 endpoints, expected cluster ID,
+trusted CA, client cert/key paths and authenticated-node CN in host configuration.
+CN must match the configuration before any request. TLS verification stays on;
+no anonymous transport, alternate provider or local-lock fallback is supplied.
+
+Reads explicitly request linearizable consistency. Bounded CAS transactions use
+quoted data over etcdctl stdin, not a shell; keys outside the occurrence namespace
+and oversized values are refused. A timeout or non-success never admits a model.
+etcdctl may retry its transport internally: CAS/token rules still permit at most
+one *confirmed adapter invocation*, not a promise of one network request.
+
+Worker roles can read enrollments and read/write occurrence/cursor state but
+cannot write enrollments. Soshiki observer credentials are read-only. Certificates
+and private keys stay on their owning hosts; no model receives backend credentials.
+These are trusted host-worker roles, not per-profile credentials or a Byzantine
+defense: models do not get arbitrary etcd access. Private output and arbitrary
+effect sinks remain separately gated. Deploy independent failure domains and test
+RBAC, quorum loss and persistent restart before claiming operational coverage.
+
+The initial approved deployment uses three existing Mac mini **host** user-domain
+launchd services, preserving their existing Awai guests. This is an Otehon
+control-plane role, not a claim of a guest OS upgrade, GUI integration or cold-boot
+qualification. Installed templates and hardware evidence belong to awai-os AWAI-2795.
