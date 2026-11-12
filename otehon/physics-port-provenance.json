@@ -1,0 +1,42 @@
+{
+  "schema": "itonami.otehon.physics-port.v1",
+  "issue": "AWAI-2809",
+  "scope": "simulation-only; not original tests/Native/growth/land",
+  "sources": [
+    {
+      "source": "src/kotoba/robotics/process.cljk",
+      "sourceRevision": "a1af59c971e37d6c62a313ca52b662c92ba34c25",
+      "sourceSha256": "3781663c8f0d0f8ceb2249549125019c212cd81f6eafc3d8b2cd4693b44fad78",
+      "target": "otehon/src/itonami/otehon/physics/process.cljc",
+      "targetSha256": "dd06528636ca83ec61405ec186612afff9ae0ff7d30af3d45fd9c2be524bd615"
+    },
+    {
+      "source": "src/kotoba/robotics/process/transport.cljk",
+      "sourceRevision": "a1af59c971e37d6c62a313ca52b662c92ba34c25",
+      "sourceSha256": "8d7855a8431ea513f3501726c9f2bcf36c2f1ae36d0a42ec131e77277d27ab0b",
+      "target": "otehon/src/itonami/otehon/physics/process/transport.cljc",
+      "targetSha256": "215e3f8757407b714763aab8f9edeac4a866d9ef0820660a160ff1a5281f2e90"
+    },
+    {
+      "source": "src/kotoba/robotics/process/thermal.cljk",
+      "sourceRevision": "a1af59c971e37d6c62a313ca52b662c92ba34c25",
+      "sourceSha256": "7707d9f19e3e84cc041f41b979bc9139c559bc253c30b99d977a2b6a69b93881",
+      "target": "otehon/src/itonami/otehon/physics/process/thermal.cljc",
+      "targetSha256": "1533562faf518a86591acd2e13f430816c61c5fa947601abb53172af0788ef55"
+    },
+    {
+      "source": "src/kotoba/robotics/process/fluid.cljk",
+      "sourceRevision": "a1af59c971e37d6c62a313ca52b662c92ba34c25",
+      "sourceSha256": "6277b1f5fcb7d1f1d5f1a3b15b00e8089ececf9b0b2368318e4a20d98b4f041b",
+      "target": "otehon/src/itonami/otehon/physics/process/fluid.cljc",
+      "targetSha256": "357696652d4ceb9ff600fdf751a1bffbbef30612d712b28ddeee58d0115e47f9"
+    },
+    {
+      "source": "src/kotoba/robotics/process/manipulator.cljk",
+      "sourceRevision": "a1af59c971e37d6c62a313ca52b662c92ba34c25",
+      "sourceSha256": "145bc9ef81eed890bdcd02911d2aeaadf2e27d85ce382826389358c557d5e9ab",
+      "target": "otehon/src/itonami/otehon/physics/process/manipulator.cljc",
+      "targetSha256": "5999a0a9fd086f81cf87342891a7bfa69baa175c88a0fd3e41cbb076e8f8e30d"
+    }
+  ]
+}
