@@ -67,7 +67,7 @@
           (do
             (durable! intent (pr-str {:body-sha (occurrence/digest text) :state "single-write-intended"}))
             (durable! (str dir "/linear-" phase "-body.md") text)
-            (let [r (call-json! [(:orca cfg) "linear" "comment" "add" (get-in job [:binding :issue-uuid])
+            (let [r (call-json! [(:orca cfg) "linear" "comment" "add" (get-in job [:binding :issue-id])
                                 "--workspace" (:workspace cfg) "--body-file" (str dir "/linear-" phase "-body.md") "--json"]
                                (str dir "/linear-write-" phase))]
               (when-not (get-in r [:result :comment :id]) (throw (ex-info "comment not confirmed" {})))

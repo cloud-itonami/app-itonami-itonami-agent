@@ -17,7 +17,8 @@
 (deftest comments-are-single-write-and-unknown-never-resends
  (let [dir (scratch) writes (atom 0)]
   (with-redefs [h/issue-context! (fn [& _] issue)
-                h/call-json! (fn [& _] (swap! writes inc) {:ok true :result {:comment {:id "comment1"}}})]
+                h/call-json! (fn [argv _] (is (= "AWAI-1" (nth argv 4)))
+                              (swap! writes inc) {:ok true :result {:comment {:id "comment1"}}})]
    (is (true? (h/publish-comment! cfg job dir "forecast" "body")))
    (is (true? (h/publish-comment! cfg job dir "forecast" "body")))
    (is (= 1 @writes))))
