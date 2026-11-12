@@ -116,3 +116,18 @@ The initial approved deployment uses three existing Mac mini **host** user-domai
 launchd services, preserving their existing Awai guests. This is an Otehon
 control-plane role, not a claim of a guest OS upgrade, GUI integration or cold-boot
 qualification. Installed templates and hardware evidence belong to awai-os AWAI-2795.
+# Recurring readiness activation (owner 2026-11-12)
+
+`itonami.otehon.recurring` plans individually enrolled interval jobs for
+`public-readiness-only` inference. These are explicit readiness/Linear review
+jobs, not execution of the imported Hermes scripts or their effectful tasks.
+Capabilities remain exactly `inference_muse`. Original jobs retain their own
+disabled/held states and job IDs. Readiness jobs use distinct IDs and preserve
+each selected Bot's source interval; missing cron timezones are not invented.
+
+An explicit `skip-completed-only` policy selects the latest aligned interval
+after sleep rather than replaying every missed unstarted tick. It never skips
+an admitted/unknown cursor, takes another node's claim, or permits an unaligned
+slot. Existing enrollments without this policy retain strict consecutive slots.
+The original claim, result and completion fences remain mandatory.
+

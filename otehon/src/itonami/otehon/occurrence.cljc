@@ -20,7 +20,8 @@
   (and (= "itonami.occurrence-enrollment.v1" (:schema e))
        (every? #(text? (get e %)) [:bot-id :job-id :issue-id :project-id :initiative-id :profile-cid :schedule-cid :model])
        (= "meta" (:provider e)) (= ["inference_muse"] (:capabilities e))
-       (= "public-test-only" (:data-class e))
+       (contains? #{"public-test-only" "public-readiness-only"} (:data-class e))
+       (contains? #{nil "skip-completed-only"} (:missed-slot-policy e))
        (vector? (:nodes e)) (seq (:nodes e))
        (= (count (:nodes e)) (count (distinct (:nodes e))))
        (every? text? (:nodes e))
@@ -34,7 +35,12 @@
   (let [{:keys [bot-id job-id slot attempt-id input-sha]} request
         ks (keys-for bot-id job-id slot)
         previous (:slot cursor)
-        expected (if cursor (+ (or previous 0) (get-in enrollment [:schedule :every-ms] 0)) (:initial-slot enrollment))
+        period (get-in enrollment [:schedule :every-ms] 0)
+        expected (if cursor (+ (or previous 0) period) (:initial-slot enrollment))
+        aligned? (and (integer? slot) (pos? period) (<= expected slot)
+                      (zero? (mod (- slot (:initial-slot enrollment 0)) period)))
+        acceptable-slot? (or (= slot expected)
+                             (and (= "skip-completed-only" (:missed-slot-policy enrollment)) aligned?))
         bound [:bot-id :job-id :issue-id :project-id :initiative-id :profile-cid :schedule-cid :provider :model]]
     (cond
       (not (enrollment-valid? enrollment)) {:error "enrollment-invalid"}
@@ -42,7 +48,7 @@
       (not= (select-keys enrollment bound) (select-keys request bound)) {:error "binding-mismatch"}
       (not (and (text? attempt-id) (sha? input-sha))) {:error "attempt-invalid"}
       (and cursor (not= "completed" (:state cursor))) {:error "previous-outcome-unknown-no-retry"}
-      (not (and (integer? slot) (= slot expected) (<= 0 slot now-ms 9007199254740991))) {:error "slot-not-due-or-out-of-order"}
+      (not (and (integer? slot) acceptable-slot? (<= 0 slot now-ms 9007199254740991))) {:error "slot-not-due-or-out-of-order"}
       :else
       (let [claim {:schema "itonami.occurrence.v1" :state "admitted" :request request
                    :node authenticated-node :enrollment-sha (digest enrollment)}
