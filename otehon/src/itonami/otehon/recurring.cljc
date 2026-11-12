@@ -5,7 +5,8 @@
 (defn plan [enrollment cursor now]
   (cond
     (not (o/enrollment-valid? enrollment)) {:state "held" :reason "invalid-enrollment"}
-    (not= "public-readiness-only" (:data-class enrollment)) {:state "held" :reason "readiness-scope-required"}
+    (not (contains? #{"public-readiness-only" "job-result-metadata-only"} (:data-class enrollment)))
+    {:state "held" :reason "supported-recurring-scope-required"}
     (not= "skip-completed-only" (:missed-slot-policy enrollment)) {:state "held" :reason "explicit-missed-slot-policy-required"}
     (and cursor (not= "completed" (:state cursor))) {:state "unknown" :slot (:slot cursor) :reason "original-owner-reconciliation-required"}
     (< now (:initial-slot enrollment)) {:state "waiting" :next-slot (:initial-slot enrollment)}

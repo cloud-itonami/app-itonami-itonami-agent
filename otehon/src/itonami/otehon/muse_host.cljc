@@ -89,7 +89,7 @@
   (let [prof (load-profile profile-dir) plan (muse/plan prof prompt)
         input-sha (occurrence/digest [(:source-sha prof) prompt])
         pinned (bundle/bundle-cid (bundle/bundle-files profile-dir {}))
-        bound (merge binding (select-keys request [:attempt-id :input-sha :run-id :slot :bot-id :job-id :profile-cid :schedule-cid]))]
+        bound (merge binding (select-keys request [:attempt-id :input-sha :run-id :slot :bot-id :job-id :profile-cid :schedule-cid :executor :grant-cid]))]
     (when-not (and (= :ok (:status plan)) (binding-valid? binding)
                    (= (:name prof) (:bot-id request)) (= pinned (:profile-cid request))
                    (= (:model plan) (:model request)) (= "meta" (:provider request))
@@ -111,7 +111,7 @@
            raw (java.io.File. (str output "/events.jsonl"))]
        (when (> (.length raw) 8388608) (throw (ex-info "event limit" {})))
        (when-not (and (= binding (:binding intent)) (= binding (:binding saved))
-                      (every? #(= (get request %) (get binding %)) [:attempt-id :input-sha :run-id :slot :bot-id :job-id :profile-cid :schedule-cid :issue-id :project-id :initiative-id]))
+                      (every? #(= (get request %) (get binding %)) [:attempt-id :input-sha :run-id :slot :bot-id :job-id :profile-cid :schedule-cid :issue-id :project-id :initiative-id :executor :grant-cid]))
          (throw (ex-info "original run binding required" {})))
        (let [events (mapv #(json/parse-string % true) (remove str/blank? (str/split-lines (slurp raw))))
              result (assoc (muse/result intent events (or (:process-exit saved) -1)) :binding binding)
