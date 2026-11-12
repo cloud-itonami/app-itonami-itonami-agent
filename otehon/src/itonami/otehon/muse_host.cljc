@@ -3,6 +3,8 @@
   (:require [clojure.string :as str]
             [itonami.otehon.muse :as muse]
             [itonami.otehon.profile :as profile]
+            [itonami.otehon.bundle :as bundle]
+            [itonami.otehon.occurrence :as occurrence]
             [itonami.otehon.io :as hio]
             #?(:clj [cheshire.core :as json]))
   #?(:clj (:import [java.nio.file Files Paths]
@@ -10,12 +12,14 @@
                    [java.util.concurrent TimeUnit])))
 
 (defn load-profile [dir]
-  (profile/load-profile {:name (hio/basename dir)
-    :read-text (fn [rel] (let [p (str dir "/" rel)]
-                         (when (hio/file? p)
-                           (let [s (hio/slurp-utf8 p)]
-                             (when (> (count s) 262144) (throw (ex-info "profile file limit" {}))) s))))
-    :parse-edn hio/parse-edn :parse-json hio/parse-json}))
+  (let [names (concat profile/hermes-files profile/itonami-files)
+        texts (into {} (for [rel names :let [p (str dir "/" rel)]]
+                         [rel (when (hio/file? p)
+                                (let [s (hio/slurp-utf8 p)]
+                                  (when (> (count s) 262144) (throw (ex-info "profile file limit" {}))) s))]))
+        prof (profile/load-profile {:name (hio/basename dir) :read-text texts
+                                    :parse-edn hio/parse-edn :parse-json hio/parse-json})]
+    (assoc prof :soul (get texts "SOUL.md") :source-sha (occurrence/digest texts))))
 
 (defn binding-valid? [b]
   (and (= "awai.bot-run-binding.v1" (:schema b))
@@ -36,7 +40,9 @@
              path #(str (.resolve root ^String %))
              _ (.mkdirs (java.io.File. (path "config/muse")))
              _ (spit (path "config/muse/settings.json") "{\"schema_version\":1,\"mcpServers\":{}}")
-             _ (spit (path "prompt.txt") prompt)
+             effective-prompt (str (:soul prof) "\n\n" prompt)
+             _ (when (> (count effective-prompt) 65536) (throw (ex-info "combined prompt limit" {})))
+             _ (spit (path "prompt.txt") effective-prompt)
              _ (spit (path "binding.edn") (pr-str binding))
              _ (spit (path "intent.edn") (pr-str (assoc planned :state :admitted-local-call-only :binding binding)))
              argv ["muse" "exec" "--json" "--provider" "meta" "--model" (:model planned)
@@ -75,6 +81,44 @@
                       :provider "meta" :model (:model planned) :reason "host/uncertain-no-retry"}]
                (spit (path "result.edn") (pr-str r)) r)))))
      :default (throw (ex-info "Muse host adapter requires the Babashka Otehon host" {}))))
+
+(defn dispatch-muse!
+  "Composes confirmed distributed admission with the real Muse host, without
+  selecting a KV backend or minting membership. A backend is required."
+  [client profile-dir prompt output binding request now-ms]
+  (let [prof (load-profile profile-dir) plan (muse/plan prof prompt)
+        input-sha (occurrence/digest [(:source-sha prof) prompt])
+        pinned (bundle/bundle-cid (bundle/bundle-files profile-dir {}))
+        bound (merge binding (select-keys request [:attempt-id :input-sha :run-id :slot :bot-id :job-id :profile-cid :schedule-cid]))]
+    (when-not (and (= :ok (:status plan)) (binding-valid? binding)
+                   (= (:name prof) (:bot-id request)) (= pinned (:profile-cid request))
+                   (= (:model plan) (:model request)) (= "meta" (:provider request))
+                   (= input-sha (:input-sha request))
+                   (= (:source-sha prof) (:source-sha (load-profile profile-dir)))
+                   (every? #(= (get request %) (get binding %)) [:issue-id :project-id :initiative-id :run-id]))
+      (throw (ex-info "profile/input/work binding mismatch" {})))
+    (occurrence/dispatch! (assoc client :invoke-once #(invoke! prof prompt output bound))
+                          request (:authenticated-node client) now-ms)))
+
+(defn recover-muse!
+  "Reparse the original local transcript; no process spawn/model request.
+  Private result files alone cannot fabricate a completed model terminal."
+  [client request output]
+  #?(:clj
+     (let [binding (hio/parse-edn (hio/slurp-utf8 (str output "/binding.edn")))
+           intent (hio/parse-edn (hio/slurp-utf8 (str output "/intent.edn")))
+           saved (hio/parse-edn (hio/slurp-utf8 (str output "/result.edn")))
+           raw (java.io.File. (str output "/events.jsonl"))]
+       (when (> (.length raw) 8388608) (throw (ex-info "event limit" {})))
+       (when-not (and (= binding (:binding intent)) (= binding (:binding saved))
+                      (every? #(= (get request %) (get binding %)) [:attempt-id :input-sha :run-id :slot :bot-id :job-id :profile-cid :schedule-cid :issue-id :project-id :initiative-id]))
+         (throw (ex-info "original run binding required" {})))
+       (let [events (mapv #(json/parse-string % true) (remove str/blank? (str/split-lines (slurp raw))))
+             result (assoc (muse/result intent events (or (:process-exit saved) -1)) :binding binding)
+             ks (occurrence/keys-for (:bot-id request) (:job-id request) (:slot request))
+             claim ((:read client) (:occurrence ks))]
+         (occurrence/reconcile! client request claim result)))
+     :default (throw (ex-info "Muse recovery requires the Babashka Otehon host" {}))))
 
 (defn -main [& [dir prompt-file output binding-file]]
   (when-not binding-file (throw (ex-info "usage: muse-host PROFILE PROMPT_FILE NEW_OUTPUT BINDING.edn" {})))

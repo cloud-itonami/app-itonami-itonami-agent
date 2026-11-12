@@ -52,6 +52,11 @@ jobs:
           pipx install basilisp==0.5.1
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Muse and occurrence negative controls (BB oracle only)
+        run: |
+          bb -cp otehon/src otehon/test/muse_test.clj
+          bb -cp otehon/src otehon/test/occurrence_test.clj
+
       - name: Shared cases on every runner (oracle)
         run: |
           set -eu

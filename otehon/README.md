@@ -315,3 +315,13 @@ the integration commit records those source changes, not a prior deployment.
 ```sh
 bb -cp otehon/src otehon/test/muse_test.clj
 ```
+
+## Distributed occurrence integration
+
+The actual Muse adapter can now be called through
+`muse-host/dispatch-muse!` with an authenticated atomic backend, or recovered
+through `recover-muse!` from the original transcript without reinference.
+[Occurrence protocol and tested boundaries](docs/occurrence-protocol.md) describe
+admission, stable identity, cursor freezing, fenced publication and reconciliation.
+The `.cljc` protocol does not select a production backend. The optional etcd
+developer oracle is experimental, outside the production runtime and Native CI.
