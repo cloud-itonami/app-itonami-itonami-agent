@@ -131,3 +131,22 @@ an admitted/unknown cursor, takes another node's claim, or permits an unaligned
 slot. Existing enrollments without this policy retain strict consecutive slots.
 The original claim, result and completion fences remain mandatory.
 
+`itonami.otehon.recurring-host` is the Babashka Otehon host for this limited
+activation. Its manifest is digest pinned; it verifies the actual unfinished
+Issue UUID, owning Project and Kotoba Labs workspace before each tick. The
+operator-pinned Orca CLI supplies authenticated Linear reads/writes without
+exporting credentials. Only a public repository's default-branch commit and
+bounded README are sent to the explicitly configured Muse rail. Public README
+content is reference data, not authority. Source scripts, private connectors,
+email, Git writes and app-origin APIs are unavailable to the model.
+
+Per-run forecast and result comments have durable intent/confirmation records.
+An ambiguous comment write is never resent automatically; only exact-body
+readback reconciles it. Partial comment reads cannot authorize another write.
+Completed model transcripts recover publication without another inference.
+Receipts retain raw provider counters and explicit scope; a completed readiness
+assessment never means the original effectful job completed. The host application
+state and credential store are separate from both Hermes and browser state.
+The host requires the existing operator CLI/application connection; if it is
+unavailable, the tick is held before inference. No new Linear credential is made.
+
