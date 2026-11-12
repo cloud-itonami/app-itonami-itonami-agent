@@ -46,4 +46,13 @@
    (is (= 1 @calls))))
  (with-redefs [h/raw-json! (fn [& _] (throw (ex-info "must not call" {})))]
    (is (thrown? Exception (h/public-context! cfg {:public-repository "bad?route"} (scratch))))))
+(deftest waiting-ticks-do-not-poll-connectors-or-invoke-models
+ (let [en {:schema "itonami.occurrence-enrollment.v1" :bot-id "b" :job-id "j" :issue-id "AWAI-1"
+           :project-id "p" :initiative-id "i" :profile-cid "pin" :schedule-cid "schedule" :provider "meta"
+           :model "muse-spark-1.3" :capabilities ["inference_muse"] :nodes ["n"] :data-class "public-readiness-only"
+           :schedule {:type "interval" :every-ms 60000} :initial-slot 1000 :missed-slot-policy "skip-completed-only"}
+       client {:read #(if (clojure.string/includes? % "/enrollment/") en {:state "completed" :slot 1000})}]
+  (with-redefs [h/issue-context! (fn [& _] (throw (ex-info "must not poll while waiting" {})))]
+   (is (= "waiting" (:state (h/tick-job! {:state-root (scratch)} client
+                              {:enrollment en :source-interval-minutes 1 :catalog-bot-id "profile:b"} 1001)))))))
 (let [x (run-tests)] (when (pos? (+ (:fail x) (:error x))) (System/exit 1)))

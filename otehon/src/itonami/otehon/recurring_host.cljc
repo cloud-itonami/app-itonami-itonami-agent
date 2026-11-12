@@ -115,7 +115,7 @@
       (let [u (:usage result)
             b (str "Scheduled registered Bot readiness review completed; original effectful job remains held.\n"
                    "Bot: " (:catalog-bot-id job) "; source interval: " (:source-interval-minutes job) " minutes.\n"
-                   "Run: " (:run-id request) "; source: " (get-in job [:binding :revision]) "; model: Meta/" (:model result) ".\n"
+                   "Run: " (:run-id request) "; source: " (get-in result [:binding :revision]) "; model: Meta/" (:model result) ".\n"
                    "Observed provider usage (final cumulative snapshot; reasoning is output subset; cached relationship unverified): "
                    (pr-str (select-keys u [:models :calls :completed_calls :failed_calls :cancelled_calls :children_included])) ".\n"
                    "Acceptance unit: one public-data readiness assessment, not implementation/deployment.\n\n" (:text result))]
@@ -130,7 +130,6 @@
                    (= ["inference_muse"] (:capabilities e))
                    (= (* 60000 (:source-interval-minutes job)) (get-in e [:schedule :every-ms])))
       (throw (ex-info "source interval / scope mismatch" {})))
-    (issue-context! cfg job (str (:state-root cfg) "/issue-reads/" (:bot-id e)))
     ;; First repair publication of a locally completed run, never invoke again.
     (when cursor
       (let [dir (run-path cfg job (:slot cursor)) request (saved (str dir "/request.edn"))]
@@ -143,7 +142,8 @@
     (let [cursor ((:read client) (:cursor ks)) plan (recurring/plan e cursor now)]
       (if-not (= "due" (:state plan))
         (merge {:catalog-bot-id (:catalog-bot-id job) :scope "public-readiness-only"} plan)
-        (let [slot (:slot plan) dir (run-path cfg job slot)
+        (let [_ (issue-context! cfg job (str (:state-root cfg) "/issue-reads/" (:bot-id e)))
+              slot (:slot plan) dir (run-path cfg job slot)
               prof (muse/load-profile (:profile-dir job)) template (slurp (:prompt-file job))
               _ (when-not (= (:prompt-sha job) (etcd/binary-sha (:prompt-file job)))
                   (throw (ex-info "pinned public prompt changed" {})))
