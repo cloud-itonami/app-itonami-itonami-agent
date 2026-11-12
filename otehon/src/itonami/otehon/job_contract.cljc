@@ -17,7 +17,8 @@
     {:service "itonami-public-registry" :method "GET" :origin "https://itonami.cloud"
      :path "/api/marketplace/public-bots/catalog" :data-class "public"}]})
 (def capabilities
-  {"cron-health" ["fleet_observation_read" "result_write" "linear_record"]
+  {"physical-simulation" ["pinned_physics_read" "physics_simulate_otehon" "result_write" "linear_record"]
+   "cron-health" ["fleet_observation_read" "result_write" "linear_record"]
    "public-bots-registrar" ["registry_public_read" "result_write" "linear_record"]
    "awai-arb" ["registry_public_read" "result_write" "linear_record"]
    "rule-kaizen" ["repository_snapshot_scan" "encrypted_result_write" "linear_record"]})

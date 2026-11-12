@@ -4,7 +4,8 @@
   (:require [clojure.edn :as edn] [cheshire.core :as json]
             [itonami.otehon.etcd :as e] [itonami.otehon.occurrence :as o]
             [itonami.otehon.recurring :as recurring] [itonami.otehon.recurring-host :as d]
-            [itonami.otehon.job-host :as jobs]))
+            [itonami.otehon.job-host :as jobs] [itonami.otehon.physics-host :as physics]))
+(defn physics? [job] (= "physical-simulation" (get-in job [:enrollment :grant :job-kind])))
 (defn run-directory [cfg job slot]
   (str (:state-root cfg) "/runs/" (o/digest [(get-in job [:enrollment :bot-id]) (get-in job [:enrollment :job-id])]) "/" slot))
 (defn post-result! [cfg job request directory result]
@@ -36,7 +37,7 @@
                   (when (and request original-job)
                     (let [r (if (= "completed" (:state cursor))
                               {:state "already-completed" :record ((:read client) (:occurrence (o/keys-for (:bot-id en) (:job-id en) (:slot cursor))))}
-                              (jobs/recover! client original-job request dir))]
+                              ((if (physics? original-job) physics/recover! jobs/recover!) client original-job request dir))]
                       (post-result! cfg original-job request dir r)))))
         cursor ((:read client) (:cursor ks)) plan (recurring/plan en cursor now)]
     (if-not (= "due" (:state plan))
@@ -56,7 +57,7 @@
                          "Provider none/model deterministic (no inference dispatcher); token forecast not applicable. Goal: one real service observation and the declared local ledger/proposal output.\n"
                          "Unknown outcome freezes; no mail send/registration POST/arbitrary scripts or merge."))
           (throw (ex-info "forecast publication unconfirmed" {})))
-        (let [r (jobs/execute! client job request dir)]
+        (let [r ((if (physics? job) physics/execute! jobs/execute!) client job request dir)]
           (if (contains? #{"completed" "already-completed"} (:state r))
             (post-result! cfg job request dir r)
             (merge {:catalog-bot-id (:catalog-bot-id job) :job-id (:job-id en) :run-id (:run-id request)} (select-keys r [:state :reason :invoked]))))))))

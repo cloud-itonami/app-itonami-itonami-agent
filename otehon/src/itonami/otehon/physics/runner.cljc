@@ -50,17 +50,24 @@
                (throw (ex-info "solver budget invalid" {})))
              (* (reduce max estimates) (+ (count xs) (if boundary (+ 2 n) 0))))))]
   (when-not (<= 0 work 100000000) (throw (ex-info "total simulation budget exceeded" {})))) spec)
+(defn finite-output? [v]
+ (cond (number? v) (Double/isFinite (double v)) (map? v) (every? finite-output? (vals v))
+       (sequential? v) (every? finite-output? v) :else true))
 (defn simulate [spec repository]
  (validate! spec repository)
- (let [r (p/probe spec) measured (and (pos? (:expected r)) (= (:count r) (:expected r)))]
+ (let [raw (p/probe spec) r (if (finite-output? raw) raw
+                            {:physics-probe/schema p/probe-schema :repo repository :count nil :expected (:expected raw)
+                             :problems ["nonfinite-solver-output"] :runs []})
+       measured (and (number? (:count r)) (pos? (:expected r)) (= (:count r) (:expected r)))]
   {:schema "itonami.otehon.physics-measurement.v1" :scope "pinned-otehon-simulation-only"
    :status (if measured "measured" "unobserved") :probe r :native-tests "unmeasured"
    :growth "held" :actuation "disabled"}))
-(defn -main [& [input digest repository output]]
+(defn -main [& [input digest repository output request-sha]]
+ (when-not (re-matches #"[a-f0-9]{64}" (str request-sha)) (throw (ex-info "request fingerprint required" {})))
  (let [text (slurp input)]
   (when-not (and (<= (count (.getBytes text "UTF-8")) 65536) (= digest (io/sha256-utf8 text)))
    (throw (ex-info "spec digest/size mismatch" {})))
   (let [spec (edn/read-string {:readers {} :default (fn [_ _] (throw (ex-info "tagged input forbidden" {})))} text)
-        r (simulate spec repository)]
+        r (assoc (simulate spec repository) :request-sha request-sha :spec-sha digest)]
    (durable/durable! output (pr-str r))
    (println (pr-str (dissoc r :probe))))))
