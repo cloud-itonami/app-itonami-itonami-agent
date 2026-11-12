@@ -116,7 +116,8 @@
             b (str "Scheduled registered Bot readiness review completed; original effectful job remains held.\n"
                    "Bot: " (:catalog-bot-id job) "; source interval: " (:source-interval-minutes job) " minutes.\n"
                    "Run: " (:run-id request) "; source: " (get-in job [:binding :revision]) "; model: Meta/" (:model result) ".\n"
-                   "Observed provider usage (final cumulative snapshot; reasoning is output subset; cached relationship unverified): " (pr-str u) ".\n"
+                   "Observed provider usage (final cumulative snapshot; reasoning is output subset; cached relationship unverified): "
+                   (pr-str (select-keys u [:models :calls :completed_calls :failed_calls :cancelled_calls :children_included])) ".\n"
                    "Acceptance unit: one public-data readiness assessment, not implementation/deployment.\n\n" (:text result))]
         (when-not (publish-comment! cfg (assoc job :run-id (:run-id request)) dir "result" b)
           (throw (ex-info "result publication uncertain; later slots held" {})))))
