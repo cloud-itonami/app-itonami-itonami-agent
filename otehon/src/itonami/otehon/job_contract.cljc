@@ -3,7 +3,10 @@
   grant. No arbitrary URL, shell, mail send, registration POST or Git merge."
   (:require [itonami.otehon.bundle :as bundle]))
 (def operations
-  {"public-bots-registrar"
+  {"cron-health"
+   [{:service "awai-fleet-observations" :method "GET" :origin "http://127.0.0.1:8586"
+     :path "/itonami-fleet-state-AWAI-2795-v1/summary.json" :data-class "public"}]
+   "public-bots-registrar"
    [{:service "itonami-public-registry" :method "GET" :origin "https://itonami.cloud"
      :path "/api/marketplace/public-bots/metrics" :data-class "public"}
     {:service "itonami-public-registry" :method "GET" :origin "https://itonami.cloud"
@@ -14,7 +17,8 @@
     {:service "itonami-public-registry" :method "GET" :origin "https://itonami.cloud"
      :path "/api/marketplace/public-bots/catalog" :data-class "public"}]})
 (def capabilities
-  {"public-bots-registrar" ["registry_public_read" "result_write" "linear_record"]
+  {"cron-health" ["fleet_observation_read" "result_write" "linear_record"]
+   "public-bots-registrar" ["registry_public_read" "result_write" "linear_record"]
    "awai-arb" ["registry_public_read" "result_write" "linear_record"]
    "rule-kaizen" ["repository_snapshot_scan" "encrypted_result_write" "linear_record"]})
 (defn grant-cid [grant] (bundle/cid-raw (bundle/sorted-edn grant)))
@@ -27,6 +31,15 @@
       (false? (:model-tools g)) (false? (:mail-send g)) (false? (:git-merge g))))
 (defn permitted? [grant operation]
  (and (valid-grant? grant) (some #{operation} (:operations grant))))
+(defn fleet-health-result [observations]
+ (let [o (first observations) v (:json o) known? (and (= 200 (:http-status o))
+          (= "awai.fleet-health-summary.v1" (:schema v)) (true? (:fresh v))
+          (every? #(and (integer? %) (<= 0 %)) (vals (:totals v))) (seq (:totals v)))]
+  {:kind "cron-health" :scope "itonami-only-adaptation" :hermes-observed false
+   :http-status (:http-status o) :status (if known? "measured" "unobserved")
+   :source-observed-at (:observedAt v) :totals (when known? (:totals v))
+   :health (if known? (if (pos? (get-in v [:totals :attention] 0)) "attention-recorded" "no-attention-in-selected-records") "unknown")
+   :uptime "unmeasured" :original-business-success-rate "unmeasured" :profiles-modified false}))
 (defn public-registry-result [observations]
  (let [metrics (first observations) catalog (second observations)
        entries (get-in metrics [:json :tenants :registryEntries])

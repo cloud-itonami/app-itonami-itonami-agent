@@ -41,4 +41,13 @@
     (is (nil? (:error (o/completion-plan e (:claim plan) (:position plan) result))))
     (is (= "outcome-unknown-no-retry" (:error (o/completion-plan e (:claim plan) (:position plan)
                                              (assoc-in result [:binding :grant-cid] "stale"))))))))
+(deftest health-migration-never-claims-hermes-or-an-uptime-rate
+ (let [g (assoc grant :job-kind "cron-health" :capabilities (j/capabilities "cron-health") :operations (j/operations "cron-health"))
+       good [{:http-status 200 :json {:schema "awai.fleet-health-summary.v1" :fresh true :totals {:registered 899 :attention 0}}}]]
+  (is (j/valid-grant? g))
+  (is (not (j/permitted? g (assoc (first (:operations g)) :path "/credentials"))))
+  (is (= "measured" (:status (j/fleet-health-result good))))
+  (is (= "unobserved" (:status (j/fleet-health-result (assoc-in good [0 :json :fresh] false)))))
+  (is (= "unmeasured" (:uptime (j/fleet-health-result good))))
+  (is (false? (:hermes-observed (j/fleet-health-result good))))))
 (let [r (run-tests)] (when (pos? (+ (:fail r) (:error r))) (System/exit 1)))

@@ -28,8 +28,19 @@
          :json (when text
                  (try
                    (let [v (json/parse-string text true)]
-                     (if (str/ends-with? (:path operation) "/metrics")
+                     (cond
+                       (= "awai-fleet-observations" (:service operation))
+                       (let [payload (:payloadText v)
+                             _ (when-not (and (= "awai.fleet-summary-artifact.v1" (:schema v)) (string? payload)
+                                              (= (:sha256 v) (hio/sha256-utf8 payload)))
+                                 (throw (ex-info "fleet summary digest mismatch" {})))
+                             summary (json/parse-string payload true)
+                             at (.toEpochMilli (java.time.Instant/parse (:observedAt summary)))
+                             age (- (System/currentTimeMillis) at)]
+                         (assoc (select-keys summary [:schema :observedAt :totals]) :fresh (<= 0 age 180000)))
+                       (str/ends-with? (:path operation) "/metrics")
                        {:tenants (select-keys (:tenants v) [:registryEntries :selfRegisteredOwners :externalTotal])}
+                       :else
                        (let [items (or (:bots v) (:entries v) (when (vector? v) v))]
                          (when (vector? items)
                            {:bots (mapv #(if (string? %) {:id %} (select-keys % [:id])) (take 10000 items))}))))
@@ -117,8 +128,19 @@
             (throw (ex-info "original measurement/grant required" {})))
         result (case (:job-kind grant)
                  "public-bots-registrar" (contract/public-registry-result observations)
-                 "awai-arb" (contract/arb-proposals observations (:slot request)))]
+                 "awai-arb" (contract/arb-proposals observations (:slot request))
+                 "cron-health" (contract/fleet-health-result observations))]
     (durable/durable! (str directory "/measurement.edn") (pr-str measurement))
+    (if (= "cron-health" (:job-kind grant))
+      (let [workspace (:workspace job) state (.getCanonicalPath (java.io.File. (str (System/getProperty "user.home") "/.itonami")))
+            expected (str (System/getProperty "user.home") "/.itonami/profiles/cron-health/workspace")]
+        (when-not (and (= expected workspace)
+                       (= (str state "/profiles/cron-health/workspace") (.getCanonicalPath (java.io.File. workspace))))
+          (throw (ex-info "owned Itonami health workspace required" {})))
+        (durable/private-dir! (str workspace "/measurements"))
+        (let [p (str workspace "/measurements/" (:event-id measurement) ".edn") prior (durable/saved p)]
+          (when (and prior (not= prior measurement)) (throw (ex-info "health event changed" {})))
+          (when-not prior (durable/durable! p (pr-str measurement)))) result)
     (if (= "awai-arb" (:job-kind grant))
       (let [workspace (arb-workspace! job)
             ledger (str workspace "/arb_ledger.jsonl")
@@ -153,10 +175,10 @@
           (when (seq fresh)
             (durable/durable! (str workspace "/pending_proposals_" (:slot request) ".json") (json/generate-string draft)))
           (assoc result :proposals fresh :already-pending (and (seq (:proposals result)) (empty? fresh)))))
-      result))))
+      result)))))
 (defn execute! [client job request directory]
   (let [enrollment (:enrollment job) grant (:grant enrollment)]
-    (when-not (and (contains? #{"public-bots-registrar" "awai-arb"} (:job-kind grant))
+    (when-not (and (contains? #{"public-bots-registrar" "awai-arb" "cron-health"} (:job-kind grant))
                    (= "bounded-job-v1" (:executor enrollment))
                    (contract/valid-grant? grant)
                    (= (:grant-cid request) (contract/grant-cid grant))
