@@ -331,3 +331,22 @@ Owner approved etcd for the Otehon control plane on 2026-11-12 (AWAI-2795).
 pinned official etcdctl binary and authenticated3-node cluster. Certificate-CN
 RBAC is enforced over gRPC; the old HTTP developer transport stays experimental.
 See the protocol document for exact pins, permissions and remaining boundaries.
+
+## Bounded original jobs and mail connection
+
+The operator-enrolled `bounded-job-v1` executor uses exact typed grants and the
+same occurrence admission/recovery fences. Public registry observation and the
+owned arb measurement/pending-draft ledger are deterministic, with no model call.
+AwaiFS artifacts require exact readback; recovery reuses persisted measurements.
+The existing application state anchor can be an owner-managed compatibility
+link, but profile/workspace links below it cannot redirect the arb writer.
+
+`mail-host/observe!` is a read-only operator connector to the selected Itonami
+protocol service `https://relay.itonami.cloud`. It accepts only the private
+Itonami mail account file, exact endpoint, bounded inbox ID and a matching key
+digest. Authorization stays in memory; redirects, account creation, key rotation,
+persona changes and send are unavailable. Only status/count metadata can leave
+the connector. It is not an autonomous enrollment or proof of SMTP/P2P/Native
+mail qualification. Missing owner identity/invite/account keeps actual inbox
+reads and mail cron held before any authenticated request; routes200 alone
+does not establish a usable mailbox. AWAI-893 and AWAI-328 track this dependency.
