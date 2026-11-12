@@ -4,6 +4,7 @@
   No expiring claims, takeover, automatic retry, or external-effect tools."
   (:require [clojure.string :as str]
             [itonami.otehon.io :as hio]
+            [itonami.otehon.job-contract :as job]
             [itonami.otehon.bundle :as bundle]))
 
 (defn encode [v] (bundle/sorted-edn v))
@@ -19,8 +20,14 @@
 (defn enrollment-valid? [e]
   (and (= "itonami.occurrence-enrollment.v1" (:schema e))
        (every? #(text? (get e %)) [:bot-id :job-id :issue-id :project-id :initiative-id :profile-cid :schedule-cid :model])
-       (= "meta" (:provider e)) (= ["inference_muse"] (:capabilities e))
-       (contains? #{"public-test-only" "public-readiness-only"} (:data-class e))
+       (if (= "bounded-job-v1" (:executor e))
+         (and (= "none" (:provider e)) (= "deterministic" (:model e))
+              (= "job-result-metadata-only" (:data-class e))
+              (job/valid-grant? (:grant e)) (= (:grant-cid e) (job/grant-cid (:grant e)))
+              (= (:capabilities e) (get-in e [:grant :capabilities])))
+         (and (contains? #{nil "muse"} (:executor e))
+              (= "meta" (:provider e)) (= ["inference_muse"] (:capabilities e))
+              (contains? #{"public-test-only" "public-readiness-only"} (:data-class e))))
        (contains? #{nil "skip-completed-only"} (:missed-slot-policy e))
        (vector? (:nodes e)) (seq (:nodes e))
        (= (count (:nodes e)) (count (distinct (:nodes e))))
@@ -41,7 +48,7 @@
                       (zero? (mod (- slot (:initial-slot enrollment 0)) period)))
         acceptable-slot? (or (= slot expected)
                              (and (= "skip-completed-only" (:missed-slot-policy enrollment)) aligned?))
-        bound [:bot-id :job-id :issue-id :project-id :initiative-id :profile-cid :schedule-cid :provider :model]]
+        bound [:bot-id :job-id :issue-id :project-id :initiative-id :profile-cid :schedule-cid :provider :model :executor :grant-cid]]
     (cond
       (not (enrollment-valid? enrollment)) {:error "enrollment-invalid"}
       (not (some #{authenticated-node} (:nodes enrollment))) {:error "node-not-enrolled"}
@@ -66,9 +73,9 @@
       (or (not= (:enrollment-sha claim) (digest enrollment))
           (not= position {:state "admitted" :slot (:slot req) :attempt-id (:attempt-id req) :occurrence (:occurrence ks)}))
       {:error "fence-mismatch"}
-      (not (and (= "completed" (:state result)) (= "meta" (:provider result)) (= (:model req) (:model result))
+      (not (and (= "completed" (:state result)) (= (:provider req) (:provider result)) (= (:model req) (:model result))
                 (every? #(= (get req %) (get-in result [:binding %]))
-                        [:attempt-id :input-sha :run-id :slot :bot-id :job-id :profile-cid :schedule-cid :issue-id :project-id :initiative-id])
+                        [:attempt-id :input-sha :run-id :slot :bot-id :job-id :profile-cid :schedule-cid :issue-id :project-id :initiative-id :executor :grant-cid])
                 (string? (:text result)) (<= 1 (count (:text result)) 32768)))
       {:error "outcome-unknown-no-retry"}
       :else

@@ -59,6 +59,7 @@ jobs:
           bb -cp otehon/src otehon/test/etcd_test.clj
           bb -cp otehon/src otehon/test/recurring_test.clj
           bb -cp otehon/src otehon/test/recurring_host_test.clj
+          bb -cp otehon/src otehon/test/job_contract_test.clj
 
       - name: Shared cases on every runner (oracle)
         run: |

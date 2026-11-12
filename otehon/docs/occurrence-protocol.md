@@ -150,3 +150,19 @@ state and credential store are separate from both Hermes and browser state.
 The host requires the existing operator CLI/application connection; if it is
 unavailable, the tick is held before inference. No new Linear credential is made.
 
+# Bounded original-job execution
+
+Owner2026-11-12 requested actual executors/connectors/authority, beyond the
+readiness loop. `bounded-job-v1` enrollments have a separate typed grant, exact
+capability/operation set and grant CID. They currently support deterministic
+public registry observation, a real measured arbitrage ledger/local proposal,
+and a private repository snapshot scan. They declare provider `none` and model
+`deterministic`; they must never be labeled as a Muse call or silently fall back
+from one. Existing Muse enrollments retain their original restrictions.
+
+Host-side operations require operator enrollment and exact operation matching.
+Imported SOUL/prompt text and model output cannot grant arbitrary URLs, shell,
+registration POST, mail send or Git merge. The original enrollment/claim/cursor
+and Issue/input/attempt/profile/schedule/grant fences remain mandatory for
+publication; unknown outcomes are never automatically re-executed.
+
