@@ -166,3 +166,14 @@ registration POST, mail send or Git merge. The original enrollment/claim/cursor
 and Issue/input/attempt/profile/schedule/grant fences remain mandatory for
 publication; unknown outcomes are never automatically re-executed.
 
+`job-host` performs the declared anonymous registry GETs with redirects disabled
+and bounded time/response size. Registry failure is recorded as an observation,
+not registration success. Awai-arb creates its own Itonami measurement event set,
+derived `arb_ledger.jsonl` and deduplicated `PENDING_POST` proposals. It never
+posts those proposals. Existing foreign ledgers or changed projections refuse
+automatic overwrite. A persisted measurement/artifact resumes publication
+without fetching the service again. Public result artifacts have stable CIDs
+and exact WebDAV readback. Private result sealing uses a host-local0600 key,
+AES-256-GCM and full request-bound AAD; it is output encryption, not a claim of
+SMTP delivery, P2P ratchets or qualified private Awai FS replication.
+

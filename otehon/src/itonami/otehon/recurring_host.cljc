@@ -50,7 +50,7 @@
   "Intent persisted before the single write. Ambiguous writes are held until
   a complete comment readback finds the exact marker AND body; never resend."
   [cfg job dir phase body]
-  (let [marker (str "itonami-readiness:" (:run-id job) ":" phase)
+  (let [marker (str (or (:record-prefix job) "itonami-readiness") ":" (:run-id job) ":" phase)
         text (str marker "\n\n" body)
         intent (str dir "/linear-" phase "-intent.edn") done (str dir "/linear-" phase "-confirmed.edn")]
     (if (saved done) true
