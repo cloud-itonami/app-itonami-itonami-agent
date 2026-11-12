@@ -267,3 +267,51 @@ apply verbatim, unresolved-lane message, ledger/queue rows deferred),
 `docs/evidence/otehon-notepad-profile-20261108.md` (219 shared cases;
 `cron notepad` KV verbatim, section wired into run prompts,
 `profile list`/`show` tables verbatim).
+
+## Explicit Muse host adapter (AWAI-2795)
+
+```sh
+otehon/bin/itonami-otehon bb muse-oneshot PROFILE PROMPT_FILE NEW_OUTPUT BINDING.edn
+```
+
+This new Babashka Otehon command actually invokes the installed `muse exec`
+once. It is separate from the unchanged, pending `oneshot` and `run-exec`
+routes, and has no Native fallback. Other runners refuse the host operation.
+A checked Itonami profile must explicitly select `:muse`, the existing
+`https://api.meta.ai/v1` Muse rail metadata, a pinned model and autonomous
+`:inference_muse` capability in yakuwari. No existing profile is edited.
+`BINDING.edn` has schema `awai.bot-run-binding.v1`, nonempty `:issue-id`,
+`:issue-uuid`, `:project-id`, `:initiative-id`, `:run-id`, `:acceptance-unit`,
+a 40-hex `:revision` and a dated forecast map (unknown is allowed).
+
+The host calls the real Meta provider with the pinned model, one model step,
+empty tool preset, shell/write/web/reminders/input disabled and no foreign
+personal context. A task-local empty MCP configuration is used. It links the
+existing host auth file inside a private 0700 output directory; credentials are
+not copied, printed or changed. Keep that directory private and do not publish
+its raw events, prompt, auth link or stderr. Auto-update is disabled for this
+call. Enterprise policy is not bypassed. The shared profile gate still decides.
+
+A new output directory is required; existing/partial runs refuse overwrite.
+Raw CLI JSONL and a binding/intent/result are retained. Success requires the
+same run's real Meta model configuration and completed terminal, not process
+exit alone. Cumulative/replayed usage is deduplicated; reasoning/cached fields
+are not added to input/output totals. Timeout, missing terminal, ambiguous model
+or usage, and unexpected tool calls produce `unknown`; there is no automatic
+retry or provider fallback. A timeout may leave an uncertain provider outcome.
+This adapter alone is not distributed admission, a scheduler, an effect-sink
+fence or crash/power-loss qualification.
+
+Validation 2026-11-12: actual product command completed the public prompt with
+`muse-spark-1.3` / Meta / low, run `01a1cd93-8a43-78a1-a099-4046d9bb24c6`.
+One call: input 19,354; output 30 (reasoning subset 15); raw cached 0;
+cache-read/cache-write unknown; no child calls. The dedicated test profile is
+not one of the 899 registered fleet bots. The first isolated-config probe
+stopped locally with missing credentials and retained an unknown record;
+a separate run used the host auth link. No previous occurrence was retried.
+The live test used base revision 177c2bb plus this worktree's adapter changes;
+the integration commit records those source changes, not a prior deployment.
+
+```sh
+bb -cp otehon/src otehon/test/muse_test.clj
+```
