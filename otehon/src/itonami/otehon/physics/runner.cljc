@@ -4,6 +4,7 @@
   [itonami.otehon.physics.process :as p] [itonami.otehon.physics.process.transport :as transport]
   [itonami.otehon.physics.process.thermal :as thermal] [itonami.otehon.physics.process.fluid :as fluid]
   [itonami.otehon.physics.process.manipulator :as manipulator]
+  [itonami.otehon.physics.process.material :as material]
   [itonami.otehon.recurring-host :as durable]))
 (defn finite? [n] (and (number? n) (Double/isFinite (double n)) (<= (Math/abs (double n)) 1.0e12)))
 (defn data? [v]
@@ -13,6 +14,17 @@
        (vector? v) (and (<= (count v) 128) (every? data? v)) :else false))
 (defn cost [kind params]
  (case kind
+  :material (let [{:keys [elements ramp-transits frames length-m area-m2 youngs-modulus-pa
+                          yield-stress-pa density-kg-m3 hardening-pa]}
+                    (merge material/defaults params)]
+              (when-not (and (integer? elements) (<= 1 elements 4)
+                             (integer? frames) (<= 1 frames 4000) (<= 1 ramp-transits 6400)
+                             (every? pos? [length-m area-m2 youngs-modulus-pa yield-stress-pa density-kg-m3])
+                             (<= 0 hardening-pa))
+                (throw (ex-info "material budget invalid" {})))
+              ;; Both explicit element passes and J2 tensor work; leave the
+              ;; original solver's steps/coefficient values unchanged.
+              (* 128 elements (Math/ceil (/ (* ramp-transits elements) 0.8))))
   :transport (let [v (merge transport/defaults params)] (/ (:max-time-s v) (:dt-s v)))
   :manipulator (let [v (merge manipulator/defaults params)]
                  (when-not (and (pos? (:duration-s v)) (<= 1 (:steps v) 10000)

@@ -12,7 +12,7 @@
   (is (< (Math/abs (- 21.0 (get-in v [:probe :runs 0 :quantities :cycle-time-s]))) 0.1))))
 (deftest unsupported-and-unbounded-input-fail-before-running
  (is (thrown? Exception (r/validate! spec "other/repo")))
- (is (thrown? Exception (r/validate! (assoc-in spec [:cases 0 :kind] :material) "owner/test")))
+ (is (thrown? Exception (r/validate! (assoc-in spec [:cases 0 :kind] :arbitrary-eval) "owner/test")))
  (is (thrown? Exception (r/validate! (assoc-in spec [:cases 0 :params :dt-s] 0) "owner/test")))
  (is (thrown? Exception (r/validate! (assoc-in spec [:cases 0 :sweep :values] (vec (repeat 129 1))) "owner/test")))
  (is (thrown? Exception (r/validate! (assoc-in spec [:cases 0 :params :mass-kg] ##NaN) "owner/test"))))

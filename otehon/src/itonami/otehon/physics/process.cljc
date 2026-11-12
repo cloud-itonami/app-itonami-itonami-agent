@@ -1,5 +1,5 @@
 ; Otehon-only port; source robotics@a1af59c971e37d6c62a313ca52b662c92ba34c25/src/kotoba/robotics/process.cljk.
-; AWAI-2809. Material/J2 is unsupported; never run an old backend as fallback.
+; AWAI-2809. Material/J2 uses the separately pinned Otehon Kudaki namespace port.
 (ns itonami.otehon.physics.process
   "Robot process physics, declared as data and run by one probe.
 
@@ -13,7 +13,7 @@
                    longitudinal dynamics, tip-over margin)
     :manipulator   two-link arm pick-and-place (IK, quintic trajectory,
                    rigid-body inverse dynamics)
-    :material      unsupported in this Otehon port (J2 dependency not ported)
+    :material      pinned explicit J2 truss tension/compression port
     :thermal       transient 1-D conduction through a slab (FTCS)
     :tank-drain    Torricelli drain / fill of a tank (RK2)
     :pipe-flow     Darcy-Weisbach pipe flow, Colebrook friction, pump power
@@ -37,7 +37,8 @@
   (:require [itonami.otehon.physics.process.transport :as transport]
             [itonami.otehon.physics.process.manipulator :as manipulator]
             [itonami.otehon.physics.process.thermal :as thermal]
-            [itonami.otehon.physics.process.fluid :as fluid]))
+            [itonami.otehon.physics.process.fluid :as fluid]
+            [itonami.otehon.physics.process.material :as material]))
 
 (def spec-schema "itonami.physical-ai.spec.v1")
 (def probe-schema "itonami.physical-ai.probe.v1")
@@ -47,6 +48,8 @@
                :cannot #(or (:stalled? %) (false? (:reached? %)))}
    :manipulator {:run manipulator/pick-place :solver "itonami.otehon.physics.process.manipulator (2-link inverse dynamics)"
                  :cannot #(false? (:reachable? %))}
+   :material {:run material/tensile-test :solver "itonami.otehon.physics.process.material (pinned explicit J2 truss)"
+              :cannot (constantly false)}
    :thermal {:run thermal/simulate :solver "itonami.otehon.physics.process.thermal (1-D FTCS)"
              :cannot (constantly false)}
    :tank-drain {:run fluid/tank-drain :solver "itonami.otehon.physics.process.fluid/tank-drain (RK2 Torricelli)"

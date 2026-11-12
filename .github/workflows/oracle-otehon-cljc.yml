@@ -65,6 +65,7 @@ jobs:
           bb -cp otehon/src otehon/test/mail_host_test.clj
           bb -cp otehon/src otehon/test/physics_test.clj
           bb -cp otehon/src otehon/test/physics_host_test.clj
+          bb -cp otehon/src otehon/test/physics_material_test.clj
 
       - name: Shared cases on every runner (oracle)
         run: |

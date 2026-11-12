@@ -1,7 +1,7 @@
 # Otehon physics port — 2026-11-12, AWAI-2809
 
-The five supported kinds are transport, thermal, manipulator, tank-drain and
-pipe-flow. Material/J2 is rejected. This is an Otehon simulation port, separate
+The first deployed wave supported transport, thermal, manipulator, tank-drain and
+pipe-flow. Its immutable a9a1b2f capsule rejects material/J2. This is an Otehon simulation port, separate
 from Native, source app tests, code growth, merge and physical actuation.
 The provenance JSON records exact source/target digests and robotics revision.
 
@@ -32,3 +32,38 @@ nonfinite inputs and oversized sweeps before evaluation, uniform-temperature
 invariance, unconstrained travel time, laminar friction, tank-drain time and arm
 work/potential-energy balance. These port tests may run in the Otehon oracle job;
 the old source oracle above is not a CI/runtime dependency or fallback.
+
+## Material/J2 follow-up — AWAI-2809 / AWAI-2820
+
+The new source additionally ports robotics material at the same immutable
+revision and six Kudaki modules at1948314013c4cdd93415de4f49fa3a0661086630.
+`physics-material-port-provenance.json` pins every original/target digest.
+Changes are namespaces only; no solver coefficients, steps, material inputs or
+source App limits are changed. The old runtime capsule remains unchanged.
+The bounded runner limits elements, frames, wave transits and weighted total
+work before any simulation; no legacy runtime or unbounded numerical fallback.
+
+Dated one-off developer oracle: Babashka1.12.218; `git show REV:path` extracted
+the unchanged seven modules as `.cljc` under
+`.agent-output/material-reference-20261112/src`. No new downloads. Command:
+
+```sh
+bb -cp .agent-output/material-reference-20261112/src -e '(require (quote [kotoba.robotics.process.material :as m])) (let [r (m/tensile-test {:max-force-n 10000.0})] (spit ".agent-output/material-reference-20261112/elastic-result.edn" (pr-str r)) (prn (dissoc r :curve)))'
+```
+
+Reference elastic result:8000 steps, stiffness199993019.82843584 N/m vs theoretical
+200000000 N/m, no yield, relative energy residual0.00012498610888663734.
+The new port's complete result, including curve frames, equals this reference.
+Five full corroded-rebar sweep results from COFOG04.5 physics.edn
+SHA256b2cd410a00ca80efd9175fe6038bc9cdf34f49820444f34f9a38297f85c4162b
+also equal the unchanged reference; the full ported App probe measured11/11
+in5259ms on this developer host. These are bounded equivalence measurements,
+not independent physical/material qualification or Native test results.
+
+`bb -cp otehon/src otehon/test/physics_material_test.clj`:3 tests/13 assertions
+cover elastic stiffness, below-yield behavior, plastic offset yield/energy and
+invalid work bounds. Existing physics4/17 and host2/9 remain passing. Data-only
+planning over the same643 source profiles increases eligibility519→582, with63
+newly qualified specs;61 still fail source/solver/work gates. Planning is not
+enrollment or activation. New deployment and VM persistence/race/restart proofs
+are separately tracked in AWAI-2820 and awai-os PR95.

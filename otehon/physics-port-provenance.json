@@ -8,7 +8,7 @@
       "sourceRevision": "a1af59c971e37d6c62a313ca52b662c92ba34c25",
       "sourceSha256": "3781663c8f0d0f8ceb2249549125019c212cd81f6eafc3d8b2cd4693b44fad78",
       "target": "otehon/src/itonami/otehon/physics/process.cljc",
-      "targetSha256": "dd06528636ca83ec61405ec186612afff9ae0ff7d30af3d45fd9c2be524bd615"
+      "targetSha256": "f8c9dfb0ccbffd0ba4819371f7642b7deea65dd15b6a143b97eeeb3854116b6a"
     },
     {
       "source": "src/kotoba/robotics/process/transport.cljk",
