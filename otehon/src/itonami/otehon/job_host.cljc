@@ -90,10 +90,18 @@
         (finally (.disconnect c))))
     {:cid cid :sha256 (hio/sha256-utf8 bytes) :readback true}))
 (defn arb-workspace! [job]
- (let [workspace (:workspace job) expected (str (System/getProperty "user.home") "/.itonami/profiles/awai-arb/workspace")]
+ (let [workspace (:workspace job) state (str (System/getProperty "user.home") "/.itonami")
+       expected (str state "/profiles/awai-arb/workspace")
+       ;; The existing application state directory may itself be an owner-managed
+       ;; compatibility link. Resolve that anchor, but reject links below it.
+       anchor (.getCanonicalPath (java.io.File. state))
+       resolved (str anchor "/profiles/awai-arb/workspace")]
    (when-not (= expected workspace) (throw (ex-info "owned arb workspace required" {})))
+   (doseq [suffix ["/profiles" "/profiles/awai-arb" "/profiles/awai-arb/workspace"]]
+     (when (Files/isSymbolicLink (Paths/get (str anchor suffix) (make-array String 0)))
+       (throw (ex-info "workspace symlinks forbidden" {}))))
    (durable/private-dir! workspace)
-   (when-not (= expected (.getCanonicalPath (java.io.File. workspace)))
+   (when-not (= resolved (.getCanonicalPath (java.io.File. workspace)))
      (throw (ex-info "workspace symlinks forbidden" {}))) workspace))
 (defn record-public-job!
  ([job request directory]

@@ -57,4 +57,19 @@
   (is (thrown? Exception (host/get-public! grant (assoc (first (:operations grant)) :method "POST"))))
   (is (thrown? Exception (host/execute! client job (assoc request :input-sha "changed") (scratch))))
   (is (thrown? Exception (host/arb-workspace! {:workspace "/tmp/not-owned"})))))
+(deftest owner-state-link-is-supported-without-following-workspace-links
+ (let [root (.getCanonicalPath (java.io.File. (scratch))) real (str root "/state")
+       home (str root "/home") previous (System/getProperty "user.home")]
+  (d/private-dir! real) (d/private-dir! home)
+  (java.nio.file.Files/createSymbolicLink (java.nio.file.Paths/get (str home "/.itonami") (make-array String 0))
+    (java.nio.file.Paths/get real (make-array String 0)) (make-array java.nio.file.attribute.FileAttribute 0))
+  (try
+   (System/setProperty "user.home" home)
+   (let [workspace (str home "/.itonami/profiles/awai-arb/workspace")]
+    (is (= workspace (host/arb-workspace! {:workspace workspace})))
+    (java.nio.file.Files/delete (java.nio.file.Paths/get workspace (make-array String 0)))
+    (java.nio.file.Files/createSymbolicLink (java.nio.file.Paths/get workspace (make-array String 0))
+      (java.nio.file.Paths/get real (make-array String 0)) (make-array java.nio.file.attribute.FileAttribute 0))
+    (is (thrown? Exception (host/arb-workspace! {:workspace workspace}))))
+   (finally (System/setProperty "user.home" previous)))))
 (let [r (run-tests)] (when (pos? (+ (:fail r) (:error r))) (System/exit 1)))
