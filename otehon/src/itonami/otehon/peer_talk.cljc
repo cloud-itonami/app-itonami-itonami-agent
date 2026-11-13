@@ -8,7 +8,7 @@
  (and (= "itonami.peer-cycle-grant.v1" (:schema g))
       (c/valid-session? (:cycle-id g)) (not= "default" (:cycle-id g))
       (= (:cycle-id g) (:session-id g)) (= "operator-one-cycle" (:cycle-source g))
-      (= "AWAI-2861" (:issue-id g)) (= "meta" (:provider g)) (= "muse-spark-1.3" (:model g))
+      (string? (:issue-id g)) (boolean (re-matches #"[A-Z][A-Z0-9]+-[0-9]+" (:issue-id g))) (= "meta" (:provider g)) (= "muse-spark-1.3" (:model g))
       (integer? (:max-turns g)) (<= 1 (:max-turns g) 4) (= [] (:tools g))
       (string? (:goal g)) (<= 1 (count (:goal g)) 800)
       (string? (:snapshot g)) (<= 1 (count (:snapshot g)) 3000)
