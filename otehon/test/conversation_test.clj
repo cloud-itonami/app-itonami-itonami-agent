@@ -14,4 +14,10 @@
  (is (= "/v1/bot-chat/history" (:path (c/request-plan {:action "show" :botId "profile:sample" :sessionId id}))))
  (is (thrown? Exception (c/request-plan {:action "send" :botId "profile:sample" :sessionId id :text "test"})))
  (is (= 2 (:exit (c/command ["list" "--endpoint" "http://localhost" "--bot" "profile:sample"])))))
+(deftest cli-named-flags-reach-the-shared-route
+ (let [seen (atom nil)]
+  (with-redefs [io/spawn-sync! (fn [argv opts] (reset! seen [argv opts]) {:exit 0 :stdout "{}"})]
+   (is (= 0 (:exit (c/command ["show" "--endpoint" "https://agent.example" "--bot" "profile:sample" "--session" id]))))
+   (is (= "https://agent.example/v1/bot-chat/history" (last (first @seen))))
+   (is (= id (get (io/parse-json (get-in @seen [1 :input])) "sessionId"))))))
 (let [r (run-tests 'itonami.otehon.conversation-test)] (when (pos? (+ (:fail r) (:error r))) (System/exit 1)))

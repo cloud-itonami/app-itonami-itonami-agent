@@ -31,6 +31,7 @@ otehon/bin/itonami-otehon <basilisp|bb|nbb> run-exec   <profile-dir> <job-id-or-
 otehon/bin/itonami-otehon <basilisp|bb|nbb> doctor     [--profile P]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> sessions   [list|show <id>|resume] [--profile P] [--limit N]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> conversations list|show|new|send --endpoint https://AGENT:PORT --bot profile:NAME [--session UUID] [--title TITLE] [--model muse-spark-1.3 --request UUID --text-file PATH]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> peer plan|talk|dm --grant FILE --turns FILE [--endpoint https://AGENT:PORT --admission FILE --request UUID]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> notepad    <profile-dir> <job> <verb> [key] [value]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> profile    [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] [--model M] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] [ARTIFACT] [--dry-run] | hy-migrate [<p>|--all] [--dry-run] | did [<p>|--all] [--registry R] [--out F] | bundle <name>]]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> runs       <store> <profile> [--limit N]
@@ -371,3 +372,19 @@ profile `state.db`; it is migration inventory, not the AwaiFS conversation
 store. Existing SQLite/Hermes histories are not automatically merged or copied.
 The native CLI is not qualified by this Otehon route. Current host DNS, service
 availability, source tests and live provider execution are separate checks.
+
+### Itonami peer
+
+`peer plan` returns the next bounded dialogue turn; `peer talk` (`dm`) sends
+exactly that turn to the declared Agent endpoint. A grant binds the goal,
+reviewed public input, two named persona hashes, owning Issue, cycle/session,
+model and maximum4 turns. A matching authenticated distributed occurrence
+admission is required at the inference sink as well as the worker. Unknown
+outcomes freeze; recovery reads the original saved result and never repeats
+inference. A completed dialogue is not proof that its business goal is met.
+
+The first Fleet reliability pilot is one owner-approved cycle, separate from
+source cron schedules. Peer replies are proposals, not authority to run tools,
+change code, grant permissions or start another cycle. Named sessions are the
+same Agent-owned Kotobase/AwaiFS sessions used by Itonami/Soshiki. Legacy
+Hermes state and native qualification remain outside this Otehon path.

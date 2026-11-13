@@ -21,4 +21,11 @@
  (is (not (p/valid-grant? (assoc grant :tools ["shell"]))))
  (is (not (p/valid-grant? (assoc grant :snapshot "changed"))))
  (is (not= (p/grant-cid grant) (p/grant-cid (assoc grant :goal "different")))))
+(deftest peer-cli-plan-uses-the-same-contract-without-transport
+ (let [calls (atom 0)]
+  (with-redefs [io/slurp-utf8 (fn [p] (if (= p "grant.json") (io/json-str grant) "[]"))
+                io/spawn-sync! (fn [& _] (swap! calls inc) {:exit 0 :stdout "not called"})]
+   (let [r (p/command ["plan" "--grant" "grant.json" "--turns" "turns.json"])]
+    (is (= "ready" (get (io/parse-json (first (:lines r))) "state")))
+    (is (zero? @calls))))))
 (let [r (run-tests 'itonami.otehon.peer-talk-test)] (when (pos? (+ (:fail r) (:error r))) (System/exit 1)))

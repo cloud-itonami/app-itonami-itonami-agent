@@ -38,7 +38,7 @@
   (try
     (let [[action & tail] (remove nil? args)
           _ (when (odd? (count tail)) (throw (ex-info "expected named argument/value pairs" {})))
-          flags (into {} (partition 2 tail))
+          flags (into {} (map vec (partition 2 tail)))
           _ (when (some #(not (contains? #{"--endpoint" "--bot" "--session" "--model" "--text-file" "--request" "--title"} %)) (keys flags))
               (throw (ex-info "unknown conversation argument" {})))
           endpoint (get flags "--endpoint")
