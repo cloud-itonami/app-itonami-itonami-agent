@@ -3,7 +3,10 @@
   grant. No arbitrary URL, shell, mail send, registration POST or Git merge."
   (:require [itonami.otehon.bundle :as bundle]))
 (def operations
-  {"cron-health"
+  {"fleet-manifest-drift"
+   [{:service "awai-fleet-observations" :method "GET" :origin "http://127.0.0.1:8586"
+     :path "/itonami-fleet-state-AWAI-2795-v1/summary.json" :data-class "public"}]
+   "cron-health"
    [{:service "awai-fleet-observations" :method "GET" :origin "http://127.0.0.1:8586"
      :path "/itonami-fleet-state-AWAI-2795-v1/summary.json" :data-class "public"}]
    "public-bots-registrar"
@@ -17,7 +20,8 @@
     {:service "itonami-public-registry" :method "GET" :origin "https://itonami.cloud"
      :path "/api/marketplace/public-bots/catalog" :data-class "public"}]})
 (def capabilities
-  {"physical-simulation" ["pinned_physics_read" "physics_simulate_otehon" "result_write" "linear_record"]
+  {"fleet-manifest-drift" ["fleet_manifest_read" "result_write" "linear_record"]
+   "physical-simulation" ["pinned_physics_read" "physics_simulate_otehon" "result_write" "linear_record"]
    "cron-health" ["fleet_observation_read" "result_write" "linear_record"]
    "public-bots-registrar" ["registry_public_read" "result_write" "linear_record"]
    "awai-arb" ["registry_public_read" "result_write" "linear_record"]
@@ -29,6 +33,8 @@
       (= (:capabilities g) (get capabilities (:job-kind g)))
       (= (:operations g) (get operations (:job-kind g) []))
       (= "operator-enrollment" (:authority-source g))
+      (or (not= "fleet-manifest-drift" (:job-kind g))
+          (boolean (re-matches #"[a-f0-9]{64}" (str (:manifest-catalog-sha g)))))
       (false? (:model-tools g)) (false? (:mail-send g)) (false? (:git-merge g))))
 (defn permitted? [grant operation]
  (and (valid-grant? grant) (some #{operation} (:operations grant))))
@@ -41,6 +47,18 @@
    :source-observed-at (:observedAt v) :totals (when known? (:totals v))
    :health (if known? (if (pos? (get-in v [:totals :attention] 0)) "attention-recorded" "no-attention-in-selected-records") "unknown")
    :uptime "unmeasured" :original-business-success-rate "unmeasured" :profiles-modified false}))
+(defn manifest-drift-result [grant observations]
+ (when-not (and (valid-grant? grant) (= "fleet-manifest-drift" (:job-kind grant)))
+  (throw (ex-info "pinned manifest audit grant required" {})))
+ (let [o (first observations) v (:json o)
+       known? (and (= 200 (:http-status o)) (= "awai.fleet-health-summary.v1" (:schema v))
+                   (true? (:fresh v)) (boolean (re-matches #"[a-f0-9]{64}" (str (:catalogSha256 v))))) ]
+  {:kind "fleet-manifest-drift" :scope "itonami-public-manifest-summary-only"
+   :status (if known? "measured" "unobserved") :http-status (:http-status o)
+   :expected-catalog-sha (:manifest-catalog-sha grant) :observed-catalog-sha (when known? (:catalogSha256 v))
+   :drift (when known? (not= (:manifest-catalog-sha grant) (:catalogSha256 v)))
+   :source-observed-at (:observedAt v) :hermes-observed false :source-script-executed false
+   :profiles-modified false :uptime "unmeasured" :full-host-manifest-audit "unmeasured"}))
 (defn public-registry-result [observations]
  (let [metrics (first observations) catalog (second observations)
        entries (get-in metrics [:json :tenants :registryEntries])

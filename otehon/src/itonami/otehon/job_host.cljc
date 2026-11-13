@@ -37,7 +37,7 @@
                              summary (json/parse-string payload true)
                              at (.toEpochMilli (java.time.Instant/parse (:observedAt summary)))
                              age (- (System/currentTimeMillis) at)]
-                         (assoc (select-keys summary [:schema :observedAt :totals]) :fresh (<= 0 age 180000)))
+                         (assoc (select-keys summary [:schema :observedAt :totals :catalogSha256]) :fresh (<= 0 age 180000)))
                        (str/ends-with? (:path operation) "/metrics")
                        {:tenants (select-keys (:tenants v) [:registryEntries :selfRegisteredOwners :externalTotal])}
                        :else
@@ -127,6 +127,7 @@
                          (= (mapv :operation observations) (:operations grant)))
             (throw (ex-info "original measurement/grant required" {})))
         result (case (:job-kind grant)
+                 "fleet-manifest-drift" (contract/manifest-drift-result grant observations)
                  "public-bots-registrar" (contract/public-registry-result observations)
                  "awai-arb" (contract/arb-proposals observations (:slot request))
                  "cron-health" (contract/fleet-health-result observations))]
@@ -178,7 +179,7 @@
       result)))))
 (defn execute! [client job request directory]
   (let [enrollment (:enrollment job) grant (:grant enrollment)]
-    (when-not (and (contains? #{"public-bots-registrar" "awai-arb" "cron-health"} (:job-kind grant))
+    (when-not (and (contains? #{"public-bots-registrar" "awai-arb" "cron-health" "fleet-manifest-drift"} (:job-kind grant))
                    (= "bounded-job-v1" (:executor enrollment))
                    (contract/valid-grant? grant)
                    (= (:grant-cid request) (contract/grant-cid grant))

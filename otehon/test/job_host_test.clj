@@ -4,9 +4,10 @@
            [itonami.otehon.occurrence :as o] [itonami.otehon.recurring-host :as d]))
 (defn scratch [] (let [p (str ".agent-output/job-host-test-" (random-uuid))] (d/private-dir! p) p))
 (defn fixture [kind]
- (let [grant {:schema "itonami.job-grant.v1" :owner-decision "AWAI-2795" :execution "deterministic"
+ (let [grant (cond-> {:schema "itonami.job-grant.v1" :owner-decision "AWAI-2795" :execution "deterministic"
               :job-kind kind :authority-source "operator-enrollment" :capabilities (c/capabilities kind)
               :operations (c/operations kind) :model-tools false :mail-send false :git-merge false}
+               (= kind "fleet-manifest-drift") (assoc :manifest-catalog-sha (apply str (repeat 64 "a"))))
        e {:schema "itonami.occurrence-enrollment.v1" :bot-id kind :job-id "original-job" :issue-id "AWAI-2795"
           :project-id "p" :initiative-id "i" :profile-cid "profile" :schedule-cid "schedule"
           :provider "none" :model "deterministic" :executor "bounded-job-v1" :data-class "job-result-metadata-only"
@@ -72,4 +73,13 @@
       (java.nio.file.Paths/get real (make-array String 0)) (make-array java.nio.file.attribute.FileAttribute 0))
     (is (thrown? Exception (host/arb-workspace! {:workspace workspace}))))
    (finally (System/setProperty "user.home" previous)))))
+(deftest manifest-observation-publication-loss-never-repeats-the-read
+ (let [{:keys [job request client grant]} (fixture "fleet-manifest-drift")
+       reads (atom 0) publishes (atom 0) root (scratch)]
+  (with-redefs [host/get-public! (fn [_ op] (swap! reads inc) {:operation op :http-status 200 :json {:schema "awai.fleet-health-summary.v1" :fresh true :catalogSha256 (:manifest-catalog-sha grant)}})
+                host/publish-artifact! (fn [_] (if (= 1 (swap! publishes inc)) (throw (ex-info "lost ack" {})) {:cid "public" :readback true}))]
+   (is (= "unknown" (:state (host/execute! client job request root))))
+   (is (= 1 @reads))
+   (is (= "completed" (:state (host/recover! client job request root))))
+   (is (= 1 @reads)))))
 (let [r (run-tests)] (when (pos? (+ (:fail r) (:error r))) (System/exit 1)))

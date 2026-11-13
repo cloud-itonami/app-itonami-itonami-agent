@@ -50,4 +50,16 @@
   (is (= "unobserved" (:status (j/fleet-health-result (assoc-in good [0 :json :fresh] false)))))
   (is (= "unmeasured" (:uptime (j/fleet-health-result good))))
   (is (false? (:hermes-observed (j/fleet-health-result good))))))
+(deftest manifest-audit-pins-expected-digest-and-refuses-stale-success
+ (let [g (assoc grant :job-kind "fleet-manifest-drift" :manifest-catalog-sha (apply str (repeat 64 "a"))
+               :capabilities (j/capabilities "fleet-manifest-drift") :operations (j/operations "fleet-manifest-drift"))
+       observed [{:http-status 200 :json {:schema "awai.fleet-health-summary.v1" :fresh true :catalogSha256 (:manifest-catalog-sha g)}}]]
+  (is (j/valid-grant? g)) (is (not (j/valid-grant? (dissoc g :manifest-catalog-sha))))
+  (is (false? (:drift (j/manifest-drift-result g observed))))
+  (is (:drift (j/manifest-drift-result g (assoc-in observed [0 :json :catalogSha256] (apply str (repeat 64 "b"))))))
+  (doseq [bad [(assoc-in observed [0 :http-status] 503) (assoc-in observed [0 :json :fresh] false)
+              (assoc-in observed [0 :json :catalogSha256] nil)]]
+   (is (= "unobserved" (:status (j/manifest-drift-result g bad))))
+   (is (nil? (:drift (j/manifest-drift-result g bad)))))
+  (is (not (j/permitted? g (assoc (first (:operations g)) :path "/credentials"))))))
 (let [r (run-tests)] (when (pos? (+ (:fail r) (:error r))) (System/exit 1)))
