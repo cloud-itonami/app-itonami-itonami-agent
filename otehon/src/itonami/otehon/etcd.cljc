@@ -26,6 +26,9 @@
        (with-open [f (java.io.FileInputStream. path)]
          (loop [] (let [n (.read f buf)] (when (pos? n) (.update md buf 0 n) (recur)))))
        (apply str (map #(format "%02x" (bit-and (int %) 255)) (.digest md))))))
+(defn certificate-cn [subject]
+  ;; LibreSSL adds a space after subject=; OpenSSL does not. Identity stays exact.
+  (second (re-find #"(?:^|[,=])CN=([^,\n]+)" (str/trim (str/replace subject "subject=" "")))))
 (defn client [{:keys [endpoints ca cert key cluster-id authenticated-node etcdctl etcdctl-sha256]}]
   #?(:clj
      (do
@@ -38,7 +41,7 @@
                       (= etcdctl-sha256 (binary-sha etcdctl)))
          (throw (ex-info "pinned binary/cluster/TLS configuration required" {})))
        (let [subject (sh/sh "openssl" "x509" "-in" cert "-noout" "-subject" "-nameopt" "RFC2253")
-             cn (second (re-find #"(?:^|[,=])CN=([^,\n]+)" (str/replace (:out subject) "subject=" "")))]
+             cn (certificate-cn (:out subject))]
          (when-not (and (zero? (:exit subject)) (= cn authenticated-node))
            (throw (ex-info "certificate identity mismatch" {}))))
        (let [argv [etcdctl (str "--endpoints=" (str/join "," endpoints))
