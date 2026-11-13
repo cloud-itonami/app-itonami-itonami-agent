@@ -17,4 +17,10 @@
  (is (= "jun-control" (e/certificate-cn "subject= CN=jun-control\n")))
  (is (not= "jun-control" (e/certificate-cn "subject= CN=other-node\n")))
  (is (nil? (e/certificate-cn "subject=O=no-node\n"))))
+(deftest occurrence-and-daily-budget-are-one-bounded-cas
+ (let [ks (mapv #(str "/itonami/occurrence/v1/cursor/" (apply str (repeat 64 %))) ["a" "b" "c" "d" "e"])
+       tx {:compare (zipmap (take 4 ks) (repeat nil)) :put (zipmap (take 3 ks) (repeat "v"))}]
+  (is (string? (e/transaction-input tx)))
+  (is (thrown? Exception (e/transaction-input (assoc-in tx [:compare (last ks)] nil))))
+  (is (thrown? Exception (e/transaction-input (assoc-in tx [:put (nth ks 3)] "v"))))))
 (let [r (run-tests)] (when (pos? (+ (:fail r) (:error r))) (System/exit 1)))
