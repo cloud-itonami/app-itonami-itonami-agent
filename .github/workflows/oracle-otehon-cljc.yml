@@ -55,6 +55,7 @@ jobs:
       - name: Muse and occurrence negative controls (BB oracle only)
         run: |
           bb -cp otehon/src otehon/test/muse_test.clj
+          bb -cp otehon/src otehon/test/conversation_test.clj
           bb -cp otehon/src otehon/test/occurrence_test.clj
           bb -cp otehon/src otehon/test/etcd_test.clj
           bb -cp otehon/src otehon/test/recurring_test.clj

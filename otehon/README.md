@@ -30,6 +30,7 @@ otehon/bin/itonami-otehon <basilisp|bb|nbb> model      <dir> [NAME] [--provider 
 otehon/bin/itonami-otehon <basilisp|bb|nbb> run-exec   <profile-dir> <job-id-or-name> [--capability c]...
 otehon/bin/itonami-otehon <basilisp|bb|nbb> doctor     [--profile P]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> sessions   [list|show <id>|resume] [--profile P] [--limit N]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> conversations list|show|new|send --endpoint https://AGENT:PORT --bot profile:NAME [--session UUID] [--title TITLE] [--model muse-spark-1.3 --request UUID --text-file PATH]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> notepad    <profile-dir> <job> <verb> [key] [value]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> profile    [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] [--model M] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] [ARTIFACT] [--dry-run] | hy-migrate [<p>|--all] [--dry-run] | did [<p>|--all] [--registry R] [--out F] | bundle <name>]]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> runs       <store> <profile> [--limit N]
@@ -350,3 +351,23 @@ the connector. It is not an autonomous enrollment or proof of SMTP/P2P/Native
 mail qualification. Missing owner identity/invite/account keeps actual inbox
 reads and mail cron held before any authenticated request; routes200 alone
 does not establish a usable mailbox. AWAI-893 and AWAI-328 track this dependency.
+
+### Agent-owned conversation sessions (AWAI-2808)
+
+`conversations` is the explicit Otehon client for the Agent's private HTTPS
+session protocol, also used by the Itonami and Soshiki UI. The canonical
+`itonami.otehon.conversation` module defines owner/Bot/session partitioning,
+minimal private session metadata and bounded requests. History is owned by the
+Agent's Kotobase/AwaiFS store. `show` reads a chosen session; `send` continues
+that same session and requires an explicit request UUID, message file and model.
+`new` requires a new session UUID; no command creates an inference request
+implicitly. Requests validate TLS, do not follow redirects and never retry an
+uncertain result. The service authenticates the operator's Tailnet identity;
+CLI support must be explicitly enabled by its owner. No credentials are accepted
+as command arguments.
+
+The original Bot/default partition is preserved. Legacy `sessions` still reads
+profile `state.db`; it is migration inventory, not the AwaiFS conversation
+store. Existing SQLite/Hermes histories are not automatically merged or copied.
+The native CLI is not qualified by this Otehon route. Current host DNS, service
+availability, source tests and live provider execution are separate checks.

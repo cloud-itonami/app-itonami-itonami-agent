@@ -82,6 +82,7 @@
             [itonami.otehon.run :as run]
             [itonami.otehon.doctor :as doctor]
             [itonami.otehon.sessions :as sessions]
+            [itonami.otehon.conversation :as conversation]
             [itonami.otehon.notepad :as notepad]
             [itonami.otehon.bundle :as bundle]
             [itonami.otehon.manifest :as manifest]
@@ -3809,6 +3810,8 @@
                                    (hio/all-env) nil)]
                  (doseq [l (:lines r)] (println l))
                  (:exit r))
+      "conversations" (let [r (conversation/command (concat [a b] more))]
+                        (doseq [l (:lines r)] (println l)) (:exit r))
       "sessions" (let [{:keys [profile limit pos]} (store-flags (cons b more))
                        r (sessions-for (pause/store-root hio/env) (or profile "default")
                                        (first pos) (second pos) limit)]
