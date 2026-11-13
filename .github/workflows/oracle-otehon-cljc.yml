@@ -52,6 +52,23 @@ jobs:
           pipx install basilisp==0.5.1
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Muse and occurrence negative controls (BB oracle only)
+        run: |
+          bb -cp otehon/src otehon/test/muse_test.clj
+          bb -cp otehon/src otehon/test/conversation_test.clj
+          bb -cp otehon/src otehon/test/peer_talk_test.clj
+          bb -cp otehon/src otehon/test/occurrence_test.clj
+          bb -cp otehon/src otehon/test/etcd_test.clj
+          bb -cp otehon/src otehon/test/recurring_test.clj
+          bb -cp otehon/src otehon/test/recurring_host_test.clj
+          bb -cp otehon/src otehon/test/job_contract_test.clj
+          bb -cp otehon/src otehon/test/job_host_test.clj
+          bb -cp otehon/src otehon/test/original_host_test.clj
+          bb -cp otehon/src otehon/test/mail_host_test.clj
+          bb -cp otehon/src otehon/test/physics_test.clj
+          bb -cp otehon/src otehon/test/physics_host_test.clj
+          bb -cp otehon/src otehon/test/physics_material_test.clj
+
       - name: Shared cases on every runner (oracle)
         run: |
           set -eu
