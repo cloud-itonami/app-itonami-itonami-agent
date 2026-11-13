@@ -5,6 +5,7 @@
   (:require [clojure.string :as str]
             [itonami.otehon.io :as hio]
             [itonami.otehon.job-contract :as job]
+            [itonami.otehon.peer-talk :as peer]
             [itonami.otehon.bundle :as bundle]))
 
 (defn encode [v] (bundle/sorted-edn v))
@@ -20,14 +21,18 @@
 (defn enrollment-valid? [e]
   (and (= "itonami.occurrence-enrollment.v1" (:schema e))
        (every? #(text? (get e %)) [:bot-id :job-id :issue-id :project-id :initiative-id :profile-cid :schedule-cid :model])
-       (if (= "bounded-job-v1" (:executor e))
+       (if (= "peer-conversation-v1" (:executor e))
+         (and (= "meta" (:provider e)) (= "muse-spark-1.3" (:model e))
+              (= "public-fleet-review-only" (:data-class e)) (= ["inference_muse"] (:capabilities e))
+              (peer/valid-grant? (:grant e)) (= (:grant-cid e) (peer/grant-cid (:grant e))))
+        (if (= "bounded-job-v1" (:executor e))
          (and (= "none" (:provider e)) (= "deterministic" (:model e))
               (= "job-result-metadata-only" (:data-class e))
               (job/valid-grant? (:grant e)) (= (:grant-cid e) (job/grant-cid (:grant e)))
               (= (:capabilities e) (get-in e [:grant :capabilities])))
          (and (contains? #{nil "muse"} (:executor e))
               (= "meta" (:provider e)) (= ["inference_muse"] (:capabilities e))
-              (contains? #{"public-test-only" "public-readiness-only"} (:data-class e))))
+              (contains? #{"public-test-only" "public-readiness-only"} (:data-class e)))))
        (contains? #{nil "skip-completed-only"} (:missed-slot-policy e))
        (vector? (:nodes e)) (seq (:nodes e))
        (= (count (:nodes e)) (count (distinct (:nodes e))))
