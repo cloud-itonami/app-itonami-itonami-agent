@@ -30,6 +30,8 @@ otehon/bin/itonami-otehon <basilisp|bb|nbb> model      <dir> [NAME] [--provider 
 otehon/bin/itonami-otehon <basilisp|bb|nbb> run-exec   <profile-dir> <job-id-or-name> [--capability c]...
 otehon/bin/itonami-otehon <basilisp|bb|nbb> doctor     [--profile P]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> sessions   [list|show <id>|resume] [--profile P] [--limit N]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> conversations list|show|new|send --endpoint https://AGENT:PORT --bot profile:NAME [--session UUID] [--title TITLE] [--model muse-spark-1.3 --request UUID --text-file PATH]
+otehon/bin/itonami-otehon <basilisp|bb|nbb> peer plan|talk|dm --grant FILE --turns FILE [--endpoint https://AGENT:PORT --admission FILE --request UUID]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> notepad    <profile-dir> <job> <verb> [key] [value]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> profile    [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] [--model M] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] [ARTIFACT] [--dry-run] | hy-migrate [<p>|--all] [--dry-run] | did [<p>|--all] [--registry R] [--out F] | bundle <name>]]
 otehon/bin/itonami-otehon <basilisp|bb|nbb> runs       <store> <profile> [--limit N]
@@ -267,3 +269,122 @@ apply verbatim, unresolved-lane message, ledger/queue rows deferred),
 `docs/evidence/otehon-notepad-profile-20261108.md` (219 shared cases;
 `cron notepad` KV verbatim, section wired into run prompts,
 `profile list`/`show` tables verbatim).
+
+## Explicit Muse host adapter (AWAI-2795)
+
+```sh
+otehon/bin/itonami-otehon bb muse-oneshot PROFILE PROMPT_FILE NEW_OUTPUT BINDING.edn
+```
+
+This new Babashka Otehon command actually invokes the installed `muse exec`
+once. It is separate from the unchanged, pending `oneshot` and `run-exec`
+routes, and has no Native fallback. Other runners refuse the host operation.
+A checked Itonami profile must explicitly select `:muse`, the existing
+`https://api.meta.ai/v1` Muse rail metadata, a pinned model and autonomous
+`:inference_muse` capability in yakuwari. No existing profile is edited.
+`BINDING.edn` has schema `awai.bot-run-binding.v1`, nonempty `:issue-id`,
+`:issue-uuid`, `:project-id`, `:initiative-id`, `:run-id`, `:acceptance-unit`,
+a 40-hex `:revision` and a dated forecast map (unknown is allowed).
+
+The host calls the real Meta provider with the pinned model, one model step,
+empty tool preset, shell/write/web/reminders/input disabled and no foreign
+personal context. A task-local empty MCP configuration is used. It links the
+existing host auth file inside a private 0700 output directory; credentials are
+not copied, printed or changed. Keep that directory private and do not publish
+its raw events, prompt, auth link or stderr. Auto-update is disabled for this
+call. Enterprise policy is not bypassed. The shared profile gate still decides.
+
+A new output directory is required; existing/partial runs refuse overwrite.
+Raw CLI JSONL and a binding/intent/result are retained. Success requires the
+same run's real Meta model configuration and completed terminal, not process
+exit alone. Cumulative/replayed usage is deduplicated; reasoning/cached fields
+are not added to input/output totals. Timeout, missing terminal, ambiguous model
+or usage, and unexpected tool calls produce `unknown`; there is no automatic
+retry or provider fallback. A timeout may leave an uncertain provider outcome.
+This adapter alone is not distributed admission, a scheduler, an effect-sink
+fence or crash/power-loss qualification.
+
+Validation 2026-11-12: actual product command completed the public prompt with
+`muse-spark-1.3` / Meta / low, run `01a1cd93-8a43-78a1-a099-4046d9bb24c6`.
+One call: input 19,354; output 30 (reasoning subset 15); raw cached 0;
+cache-read/cache-write unknown; no child calls. The dedicated test profile is
+not one of the 899 registered fleet bots. The first isolated-config probe
+stopped locally with missing credentials and retained an unknown record;
+a separate run used the host auth link. No previous occurrence was retried.
+The live test used base revision 177c2bb plus this worktree's adapter changes;
+the integration commit records those source changes, not a prior deployment.
+
+```sh
+bb -cp otehon/src otehon/test/muse_test.clj
+```
+
+## Distributed occurrence integration
+
+The actual Muse adapter can now be called through
+`muse-host/dispatch-muse!` with an authenticated atomic backend, or recovered
+through `recover-muse!` from the original transcript without reinference.
+[Occurrence protocol and tested boundaries](docs/occurrence-protocol.md) describe
+admission, stable identity, cursor freezing, fenced publication and reconciliation.
+The `.cljc` protocol does not select a production backend. The optional etcd
+developer oracle is experimental, outside the production runtime and Native CI.
+
+Owner approved etcd for the Otehon control plane on 2026-11-12 (AWAI-2795).
+`itonami.otehon.etcd/client` now supplies the host transport through an explicitly
+pinned official etcdctl binary and authenticated3-node cluster. Certificate-CN
+RBAC is enforced over gRPC; the old HTTP developer transport stays experimental.
+See the protocol document for exact pins, permissions and remaining boundaries.
+
+## Bounded original jobs and mail connection
+
+The operator-enrolled `bounded-job-v1` executor uses exact typed grants and the
+same occurrence admission/recovery fences. Public registry observation and the
+owned arb measurement/pending-draft ledger are deterministic, with no model call.
+AwaiFS artifacts require exact readback; recovery reuses persisted measurements.
+The existing application state anchor can be an owner-managed compatibility
+link, but profile/workspace links below it cannot redirect the arb writer.
+
+`mail-host/observe!` is a read-only operator connector to the selected Itonami
+protocol service `https://relay.itonami.cloud`. It accepts only the private
+Itonami mail account file, exact endpoint, bounded inbox ID and a matching key
+digest. Authorization stays in memory; redirects, account creation, key rotation,
+persona changes and send are unavailable. Only status/count metadata can leave
+the connector. It is not an autonomous enrollment or proof of SMTP/P2P/Native
+mail qualification. Missing owner identity/invite/account keeps actual inbox
+reads and mail cron held before any authenticated request; routes200 alone
+does not establish a usable mailbox. AWAI-893 and AWAI-328 track this dependency.
+
+### Agent-owned conversation sessions (AWAI-2808)
+
+`conversations` is the explicit Otehon client for the Agent's private HTTPS
+session protocol, also used by the Itonami and Soshiki UI. The canonical
+`itonami.otehon.conversation` module defines owner/Bot/session partitioning,
+minimal private session metadata and bounded requests. History is owned by the
+Agent's Kotobase/AwaiFS store. `show` reads a chosen session; `send` continues
+that same session and requires an explicit request UUID, message file and model.
+`new` requires a new session UUID; no command creates an inference request
+implicitly. Requests validate TLS, do not follow redirects and never retry an
+uncertain result. The service authenticates the operator's Tailnet identity;
+CLI support must be explicitly enabled by its owner. No credentials are accepted
+as command arguments.
+
+The original Bot/default partition is preserved. Legacy `sessions` still reads
+profile `state.db`; it is migration inventory, not the AwaiFS conversation
+store. Existing SQLite/Hermes histories are not automatically merged or copied.
+The native CLI is not qualified by this Otehon route. Current host DNS, service
+availability, source tests and live provider execution are separate checks.
+
+### Itonami peer
+
+`peer plan` returns the next bounded dialogue turn; `peer talk` (`dm`) sends
+exactly that turn to the declared Agent endpoint. A grant binds the goal,
+reviewed public input, two named persona hashes, owning Issue, cycle/session,
+model and maximum4 turns. A matching authenticated distributed occurrence
+admission is required at the inference sink as well as the worker. Unknown
+outcomes freeze; recovery reads the original saved result and never repeats
+inference. A completed dialogue is not proof that its business goal is met.
+
+The first Fleet reliability pilot is one owner-approved cycle, separate from
+source cron schedules. Peer replies are proposals, not authority to run tools,
+change code, grant permissions or start another cycle. Named sessions are the
+same Agent-owned Kotobase/AwaiFS sessions used by Itonami/Soshiki. Legacy
+Hermes state and native qualification remain outside this Otehon path.

@@ -1,0 +1,156 @@
+{
+  "schema" : "itonami.execution-qualification.v1",
+  "quorum-loss" : {
+    "test" : "two-voter-process-loss",
+    "state" : "unknown",
+    "model-callbacks" : 0
+  },
+  "observed-at" : "2026-11-12T02:53:41.578350Z",
+  "leader-loss" : {
+    "test" : "one-voter-process-loss",
+    "state" : "already-completed",
+    "model-callbacks" : 0,
+    "leader-index" : 3
+  },
+  "issue" : "AWAI-2795",
+  "process-restart" : {
+    "test" : "all-voter-process-restart-original-data",
+    "state" : "already-completed",
+    "model-callbacks" : 0
+  },
+  "vke-used" : false,
+  "independent-hosts" : false,
+  "scope" : "public-developer-integration-only",
+  "production-ready" : false,
+  "worker-recovery" : {
+    "before" : "admitted",
+    "normal-replay" : {
+      "state" : "unknown",
+      "invoked" : false
+    },
+    "recovery" : {
+      "state" : "completed",
+      "invoked" : false
+    },
+    "after" : "completed",
+    "result" : {
+      "sha256" : "b195bd7a4a23a41c692bffbc82d483720e40dd65542a7f7843e5e17d63e408b5",
+      "cid" : "bafkreifrsw6xusrduqogsk77xsbnja3sbzan2zkufj7xqq7f4f6whzaiwu",
+      "muse-run-id" : "01a1cda8-1b16-7742-8f30-cc19bd516c57"
+    }
+  },
+  "runs" : [ {
+    "muse-run-id" : "01a1cd93-8a43-78a1-a099-4046d9bb24c6",
+    "coverage" : "selected-run-final-cumulative-snapshot",
+    "state" : "completed",
+    "binding" : {
+      "issue-id" : "AWAI-2795",
+      "project-id" : "e112e15f-5e73-44ee-9874-6dbf8d6f077e",
+      "initiative-id" : "a3ec046c-157a-45ec-bb0e-9c0c9aac4260",
+      "run-id" : "AWAI-2795-itonami-muse-live-2",
+      "revision" : "177c2bb1ae43b21c40ad18a4201e4027a9401308",
+      "acceptance-unit" : "one actual tool-free Itonami Otehon to Muse Meta call"
+    },
+    "usage" : {
+      "models" : [ {
+        "model" : "muse-spark-1.3",
+        "input_tokens" : 19354,
+        "cached_tokens" : 0,
+        "output_tokens" : 30,
+        "reasoning_tokens" : 15,
+        "calls" : 1
+      } ],
+      "calls" : 1,
+      "completed_calls" : 1,
+      "failed_calls" : 0,
+      "children_included" : false
+    },
+    "reasoning-effort" : "low",
+    "fleet-bot" : false,
+    "provider" : "meta",
+    "run-id" : "AWAI-2795-itonami-muse-live-2",
+    "model" : "muse-spark-1.3"
+  }, {
+    "muse-run-id" : "01a1cda4-ac03-72e3-8ea3-a6cff6cc95ac",
+    "coverage" : "selected-run-final-cumulative-snapshot",
+    "state" : "completed",
+    "binding" : {
+      "issue-id" : "AWAI-2795",
+      "project-id" : "e112e15f-5e73-44ee-9874-6dbf8d6f077e",
+      "initiative-id" : "a3ec046c-157a-45ec-bb0e-9c0c9aac4260",
+      "run-id" : "AWAI-2795-quorum-muse-live-1",
+      "revision" : "6c149a51f05d3749a707923dcf79d2610d7b9349",
+      "acceptance-unit" : "one actual tool-free Itonami Otehon to Muse Meta call"
+    },
+    "usage" : {
+      "models" : [ {
+        "model" : "muse-spark-1.3",
+        "input_tokens" : 19375,
+        "cached_tokens" : 0,
+        "output_tokens" : 30,
+        "reasoning_tokens" : 15,
+        "calls" : 1
+      } ],
+      "calls" : 1,
+      "completed_calls" : 1,
+      "failed_calls" : 0,
+      "children_included" : false
+    },
+    "reasoning-effort" : "low",
+    "fleet-bot" : false,
+    "provider" : "meta",
+    "run-id" : "AWAI-2795-quorum-muse-live-1",
+    "model" : "muse-spark-1.3"
+  }, {
+    "muse-run-id" : "01a1cda8-1b16-7742-8f30-cc19bd516c57",
+    "coverage" : "selected-run-final-cumulative-snapshot",
+    "state" : "completed",
+    "binding" : {
+      "issue-id" : "AWAI-2795",
+      "project-id" : "e112e15f-5e73-44ee-9874-6dbf8d6f077e",
+      "initiative-id" : "a3ec046c-157a-45ec-bb0e-9c0c9aac4260",
+      "run-id" : "AWAI-2795-quorum-muse-recovery-1",
+      "revision" : "6c149a51f05d3749a707923dcf79d2610d7b9349",
+      "acceptance-unit" : "one actual tool-free Itonami Otehon to Muse Meta call"
+    },
+    "usage" : {
+      "models" : [ {
+        "model" : "muse-spark-1.3",
+        "input_tokens" : 19378,
+        "cached_tokens" : 0,
+        "output_tokens" : 29,
+        "reasoning_tokens" : 14,
+        "calls" : 1
+      } ],
+      "calls" : 1,
+      "completed_calls" : 1,
+      "failed_calls" : 0,
+      "children_included" : false
+    },
+    "reasoning-effort" : "low",
+    "fleet-bot" : false,
+    "provider" : "meta",
+    "run-id" : "AWAI-2795-quorum-muse-recovery-1",
+    "model" : "muse-spark-1.3"
+  } ],
+  "contention" : {
+    "clients" : 2,
+    "adapter-invocations" : 1,
+    "a" : {
+      "state" : "unknown",
+      "invoked" : false,
+      "reason" : "admission-not-confirmed"
+    },
+    "b" : {
+      "state" : "completed",
+      "invoked" : true
+    }
+  },
+  "normalization" : {
+    "reasoning" : "output subset; do not add",
+    "cached" : "raw field; relation unverified; do not add",
+    "cache-read" : "unknown",
+    "cache-write" : "unknown",
+    "overhead" : "unknown/unallocated"
+  }
+}

@@ -7,6 +7,7 @@
     tick       <profile-dir>
     turn-gate  <profile-dir> <prompt> [--capability <name>]...
     oneshot    <profile-dir> <prompt> [--capability <name>]...
+    muse-oneshot <profile-dir> <prompt-file> <new-output> <binding.edn>
     run-plan   <profile-dir> <job-id-or-name> [--capability <name>]...
                [--script-file <path> | --script-error <text>] [--script-no-wake]
     store-plan --direction import|export --from <dir> --to <dir> [--force]
@@ -59,6 +60,7 @@
             [itonami.otehon.tick :as tick]
             [itonami.otehon.store :as store]
             [itonami.otehon.turn :as turn]
+            [itonami.otehon.muse-host :as muse-host]
             [itonami.otehon.execute :as execute]
             [itonami.otehon.tts :as tts]
             [itonami.otehon.collect :as collect]
@@ -81,6 +83,8 @@
             [itonami.otehon.run :as run]
             [itonami.otehon.doctor :as doctor]
             [itonami.otehon.sessions :as sessions]
+            [itonami.otehon.conversation :as conversation]
+            [itonami.otehon.peer-talk :as peer-talk]
             [itonami.otehon.notepad :as notepad]
             [itonami.otehon.bundle :as bundle]
             [itonami.otehon.manifest :as manifest]
@@ -3870,6 +3874,14 @@
                                             {:capabilities (capabilities-arg more)})]
                       (println (canon r))
                       (exit-for r)))
+      "muse-oneshot" (let [[output binding-file] more]
+                       (if-not (and a b output binding-file)
+                         (usage)
+                         (let [r (muse-host/invoke! (load-dir a (hio/read-text-fn a))
+                                                   (hio/slurp-utf8 b) output
+                                                   (hio/parse-edn (hio/slurp-utf8 binding-file)))]
+                           (println (canon (dissoc r :text :usage)))
+                           (if (= "completed" (:state r)) 0 3))))
       "oneshot" (if-not (and a b)
                   (usage)
                   (let [prof (load-dir a (hio/read-text-fn a))
@@ -3953,6 +3965,10 @@
                                    (hio/all-env) nil)]
                  (doseq [l (:lines r)] (println l))
                  (:exit r))
+      "peer" (let [r (peer-talk/command (concat [a b] more))]
+               (doseq [l (:lines r)] (println l)) (:exit r))
+      "conversations" (let [r (conversation/command (concat [a b] more))]
+                        (doseq [l (:lines r)] (println l)) (:exit r))
       "sessions" (let [{:keys [profile limit pos]} (store-flags (cons b more))
                        r (sessions-for (pause/store-root hio/env) (or profile "default")
                                        (first pos) (second pos) limit)]

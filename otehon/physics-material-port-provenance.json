@@ -1,0 +1,70 @@
+{
+  "schema": "itonami.otehon.material-port.v1",
+  "issue": "AWAI-2809",
+  "scope": "Otehon only; no Native qualification",
+  "sources": [
+    {
+      "repository": "kudaki",
+      "revision": "1948314013c4cdd93415de4f49fa3a0661086630",
+      "source": "src/kudaki/integrate.cljk",
+      "sourceSha256": "ccd00d1722abec0d297de58ca2ea54b3bf4320c2de53fb6d2797f2b980fc0c56",
+      "target": "otehon/src/itonami/otehon/physics/kudaki/integrate.cljc",
+      "targetSha256": "bced66c834f1b395aa95ec7789b6a3eb2357197af76b759b1c53e941a6b18e15",
+      "change": "namespace-only; no solver coefficient change"
+    },
+    {
+      "repository": "kudaki",
+      "revision": "1948314013c4cdd93415de4f49fa3a0661086630",
+      "source": "src/kudaki/linalg.cljk",
+      "sourceSha256": "25c35f53b26b71835225530ccf6709c591dabb4c73610e14b7cad278f631fe6b",
+      "target": "otehon/src/itonami/otehon/physics/kudaki/linalg.cljc",
+      "targetSha256": "6a9a9c2daeafe1699b8fc5e98629387a78b8a7414c5e89e331efb06a728b4685",
+      "change": "namespace-only; no solver coefficient change"
+    },
+    {
+      "repository": "kudaki",
+      "revision": "1948314013c4cdd93415de4f49fa3a0661086630",
+      "source": "src/kudaki/mesh.cljk",
+      "sourceSha256": "88ec216de824097c325a156f4ec35db57d728a5c7267753b76a63a9e05ff7dd7",
+      "target": "otehon/src/itonami/otehon/physics/kudaki/mesh.cljc",
+      "targetSha256": "4edbdea9f1d2242c9c9b17260def54ee35dee1da0320c36b67269cdda9ad2b9f",
+      "change": "namespace-only; no solver coefficient change"
+    },
+    {
+      "repository": "kudaki",
+      "revision": "1948314013c4cdd93415de4f49fa3a0661086630",
+      "source": "src/kudaki/element.cljk",
+      "sourceSha256": "7e4cf5d64136c6bba7fb90671511cbd2eab471831b57e8014932927e7bc4b672",
+      "target": "otehon/src/itonami/otehon/physics/kudaki/element.cljc",
+      "targetSha256": "9a55a971414d8c46130f9c3f300aeeab7664079c06e0a3c2e331ecc001edb194",
+      "change": "namespace-only; no solver coefficient change"
+    },
+    {
+      "repository": "kudaki",
+      "revision": "1948314013c4cdd93415de4f49fa3a0661086630",
+      "source": "src/kudaki/material.cljk",
+      "sourceSha256": "baedc331ed020c93bd47a91fcb9c6539bb3d1ddd0e3f9fbaa841071f2b53f959",
+      "target": "otehon/src/itonami/otehon/physics/kudaki/material.cljc",
+      "targetSha256": "81498b2baf75de75a358ec089aa0050683955f3bf88a0e7e6738bc688c6e0948",
+      "change": "namespace-only; no solver coefficient change"
+    },
+    {
+      "repository": "kudaki",
+      "revision": "1948314013c4cdd93415de4f49fa3a0661086630",
+      "source": "src/kudaki/contact.cljk",
+      "sourceSha256": "03104b64b0670080584e8eed6ba77c41de7da4b0ca813df8cb4f0d014a717e64",
+      "target": "otehon/src/itonami/otehon/physics/kudaki/contact.cljc",
+      "targetSha256": "d7cc8bb5ab5dee1f0327cf438d1c6147af69bff0101120b9d6cee02b2ae40e40",
+      "change": "namespace-only; no solver coefficient change"
+    },
+    {
+      "repository": "robotics",
+      "revision": "a1af59c971e37d6c62a313ca52b662c92ba34c25",
+      "source": "src/kotoba/robotics/process/material.cljk",
+      "sourceSha256": "526ac9067ad7a9bb2d753d538b94cac4adcaf75b9e040a40f0e385e2710b52c5",
+      "target": "otehon/src/itonami/otehon/physics/process/material.cljc",
+      "targetSha256": "f5cc61cddaf19c4408cf63c2fb431873d3960c88ce1fd3caa98a94487cecb061",
+      "change": "namespace-only; no solver coefficient change"
+    }
+  ]
+}
