@@ -1,0 +1,33 @@
+{
+  "schema": "awai.growth.product-inventory.v1",
+  "observedOn": "2026-11-18",
+  "status": "source-inventory-only",
+  "runtimeQualified": false,
+  "targets": [
+    {
+      "id": "x402",
+      "role": "Itonami dapp target; x402 seller requirement, customer wallet approval, facilitator verification, settlement and merchant terminal issuance are separate service roles",
+      "source": {
+        "repo": "network-awai/nexus-x402",
+        "revision": "0614292354c3077f039cb235504b601064fe4c76"
+      },
+      "businessProfile": null,
+      "relatedProfiles": [
+        {
+          "repo": "cloud-itonami/loop-x402-qr-growth",
+          "revision": "c14780cc28574b60c3ef7a3af5ed2df9e43e30ca",
+          "relation": "coexists; QR merchant pilot growth repository profile, admission accepted but not provisioned or scheduled"
+        }
+      ],
+      "pairedApp": "Tauri v3 Awai app for Awai Android (AWAI-3252, not yet built)",
+      "firstOutcome": "A local Base Sepolia x402 payment trial contract and its ledger entry, reviewed before any payment request or settlement",
+      "unknown": [
+        "registered Itonami business bot profile for x402.nexus (none found in the business profile index on 2026-11-18)",
+        "Tauri v3 Awai app build and Awai Android launch",
+        "browser release and canonical broker integration",
+        "x402 payment rail wiring (disabled by default), facilitator and settlement",
+        "native host admission for this profile"
+      ]
+    }
+  ]
+}
