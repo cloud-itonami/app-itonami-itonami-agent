@@ -106,6 +106,20 @@
       "launchMode": "on-demand",
       "activation": "blocked-native-profile-host-unverified",
       "scheduleEnabled": false
+    },
+    {
+      "profile": "awai-growth-isekai-adoption",
+      "role": "isekai-adoption",
+      "issue": "AWAI-3215",
+      "sourceDirectory": "hermes/profiles/awai-growth-isekai-adoption",
+      "targets": [
+        "isekai"
+      ],
+      "firstJob": "tasks/first-turn.md",
+      "bundleCid": "bafkreicm3nb6uycppgon6qpubbf5zjlgoqipfgulsux5jbrpsnrohcmspm",
+      "launchMode": "on-demand",
+      "activation": "blocked-native-profile-host-unverified",
+      "scheduleEnabled": false
     }
   ],
   "authority": "Index only; no grants, deployment or scheduling",
