@@ -1179,12 +1179,17 @@
 
 (defn- check-lines
   "The `profile check` lines for target profiles: one line per problem,
-  then the profile count with its error/warning counts. Otehon drift is
-  empty (soul-block tracking is a later slice), so the drift suffix the
-  legacy command appends never appears."
+  then the profile count with its error/warning counts. A stale bundle
+  CID warns (recorded vs recomputed); soul-block and config-provider
+  drift stay a later slice, so the legacy command's drift suffix never
+  appears."
   [store targets summary?]
   (let [rs (mapv (fn [n]
-                   {:profile n :problems (profile/check (load-home store n))})
+                   (let [prof (load-home store n)
+                         actual (when (:manifest prof)
+                                  (get-in (bundle/with-bundle (:home prof) (:manifest prof))
+                                          [:bundle :cid]))]
+                     {:profile n :problems (profile/check (assoc prof :bundle-actual actual))}))
                  targets)
         level-count (fn [lvl]
                       (count (filter (fn [r] (some #(= lvl (:level %)) (:problems r))) rs)))]
@@ -1432,17 +1437,22 @@
 
 (defn- refresh-bundle-lines
   "The `profile refresh-bundle` line: recompute one manifest's bundle
-  CID and write it back. A profile without a manifest refuses with the
+  CID and write it back, or with dry-run? only report the recorded and
+  recomputed CIDs. A profile without a manifest refuses with the
   itonamify hint (the legacy loader's throw on a missing home reads the
   same way: lite loading never throws, so the guard lives here)."
-  [store name]
+  [store name dry-run?]
   (let [home (str store "/profiles/" name)
         prof (load-home store name)
         m (:manifest prof)]
     (if (nil? m)
       {:exit 2 :lines [(str "profile " name " is not itonamified; run profile itonamify first")]}
-      (let [m' (bundle/refresh-bundle-cid home)]
-        {:exit 0 :lines [(str "refreshed " name " bundle " (get-in m' [:bundle :cid]))]}))))
+      (if dry-run?
+        {:exit 0 :lines [(str "would refresh " name " bundle "
+                              (get-in m [:bundle :cid]) " -> "
+                              (get-in (bundle/with-bundle home m) [:bundle :cid]))]}
+        (let [m' (bundle/refresh-bundle-cid home)]
+          {:exit 0 :lines [(str "refreshed " name " bundle " (get-in m' [:bundle :cid]))]})))))
 
 (defn- release-lines
   "The `profile release` lines: hand scheduler ownership back to Hermes
@@ -1968,7 +1978,7 @@
               "rail" (rail-lines dir targets
                                  (when (:to req) (keyword (str (:to req))))
                                  (boolean (:dry-run req)))
-              "refresh-bundle" (refresh-bundle-lines dir (:name req))
+              "refresh-bundle" (refresh-bundle-lines dir (:name req) (boolean (:dry-run req)))
               "release" (release-lines dir (if (:all req) (listing-names dir) [(:name req)])
                                         (boolean (:dry-run req)) "2026-11-08T00:00:00+09:00")
               ("import" "export")
@@ -3470,7 +3480,7 @@
           :else (recur (next as) (update m :pos conj (first as))))))
 
 (defn- usage []
-  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | oneshot <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | bundle <name> | refresh-bundle <name> | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] <artifact> [--dry-run] | hy-migrate [<p>|--all] [--dry-run] | did [<p>|--all] [--registry R] [--out F]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
+  (println "usage: itonami-otehon check <dir> | dry-run <dir> <job> [--capability c]... | tick <dir> | turn-gate <dir> <prompt> [--capability c]... | oneshot <dir> <prompt> [--capability c]... | run-plan <dir> <job> [--capability c]... [--script-file <path> | --script-error <text>] [--script-no-wake] | store-plan --direction import|export --from <dir> --to <dir> [--force] | pause [reason]... | resume | status | model <dir> [NAME] [--provider P] [--model M] | fallback <dir> [-m M] [--provider P] | run-exec <dir> <job> [--capability c]... | doctor [--profile P] | sessions [list|show <id>|resume] [--profile P] [--limit N] | notepad <profile-dir> <job> <verb> [key] [value] | profile [list | show <name> | check [<name>|--all] [--summary] | readiness [<name>|--all] | refresh [<name>|--all] [--dry-run] | itonamify [<name>|--all] [--force] [--dry-run] | rail <name>|--all --to <rail> [--dry-run] | bundle <name> | refresh-bundle <name> [--dry-run] | release [<name>|--all] [--dry-run] | import [<p>|--all] [--from DIR] [--force] [--dry-run] | export [<p>|--all] [--to DIR] [--force] [--dry-run] | adopt [<p>|--all] [--dry-run] | soul [<p>|--all] --registry R --worlds W [--unit U] [--dry-run] | organize [<p>|--all] --registry R [--dry-run] | hy-stage [<p>|--all] <artifact> [--dry-run] | hy-migrate [<p>|--all] [--dry-run] | did [<p>|--all] [--registry R] [--out F]] | runs <store> <profile> [--limit N] | incidents <store> <profile> [ack <id>] | cas-put <store> <file>... | cas-get <store> <sha> <out> | cas-verify <store> | cas-gc <store> [--apply] [--retain-days N] | cas-reconcile <store> <peerdir>... [--as <node> --registry <reg.edn>] | fleet-status <peerdir>... [--as <node> --registry <reg.edn>] [--copies N] | peer-push <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-pull <store> <peerdir> [--as <node> --registry <reg.edn>] | peer-repair <store> <peerdir>... [--as <node> --registry <reg.edn>] | market-match <asks.edn> <bids.edn> [--today YYYY-MM-DD] [--secrets <secrets.edn>] | market-sign <att.edn> --issuer-secret <secret> | market-verify <att.edn> --suite-secret <secret> [--today YYYY-MM-DD] | test <cases.edn>")
   64)
 
 (defn- exit-for
@@ -4004,7 +4014,7 @@
                                        (when-let [t (opt-val "--to")] (keyword (str t)))
                                        (flag? "--dry-run")))
                       (= sub "refresh-bundle")
-                      (if-not b (usage) (run (refresh-bundle-lines root b)))
+                      (if-not b (usage) (run (refresh-bundle-lines root b (flag? "--dry-run"))))
                       (= sub "adopt")
                       (run (adopt-lines root (if (flag? "--all") (listing-names root) [b])
                                        (flag? "--all") (hio/all-env) (flag? "--dry-run") (:iso (host-now))))

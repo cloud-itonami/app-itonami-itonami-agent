@@ -344,7 +344,8 @@ Exactly one scheduler ticks a profile:
   previews a fleet rollback; `profile release --all` applies it.
 - `profile refresh-bundle <p>` recomputes the CID after files change without
   replacing the rest of `itonami.edn` (including custom bundle directories and
-  scheduler ownership).
+  scheduler ownership). `--dry-run` reports the recorded and recomputed CIDs
+  without writing.
 - `profile hy-stage <p>|--all <artifact-dir> [--dry-run]` verifies the staged
   migration manifest and every source/payload hash before copying sibling `.hy`
   files into profile `scripts/`. It leaves `.py` sources and job references intact;

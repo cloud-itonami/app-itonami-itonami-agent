@@ -76,6 +76,18 @@
       (for [n names :let [v (rail/hermes-provider-verdict n)] :when (not= v "rail/ok")]
         (problem :error "config.yaml" [n] v)))))
 
+(defn- bundle-cid-drift
+  "A stale bundle CID: the manifest records one CID but the profile's
+  files hash to another. The caller recomputes the actual CID (the CLI
+  reads the home directory; shared cases seed it); a profile without a
+  manifest or without a recomputed CID has nothing to compare."
+  [{:keys [manifest bundle-actual]}]
+  (let [recorded (get-in manifest [:bundle :cid])]
+    (when (and (some? manifest) (some? bundle-actual) (not= recorded bundle-actual))
+      [(problem :warn "itonami.edn" [:bundle :cid]
+                (str "stale bundle CID " (pr-str recorded) ", files hash to "
+                     (pr-str bundle-actual) "; run profile refresh-bundle"))])))
+
 (defn check
   "Every problem with a loaded profile: [{:level :file :path :message}].
   A profile is usable when no problem has :level :error."
@@ -91,6 +103,7 @@
     (when (and (= runtime "itonami") (some? manifest))
       (concat
        (tag "itonami.edn" (manifest/validate manifest))
+       (bundle-cid-drift prof)
        (when (and name (map? manifest) (not= name (:profile/id manifest)))
          [(problem :error "itonami.edn" [:profile/id] (str "is " (pr-str (:profile/id manifest)) ", directory is " name))])
        (when (some? yakuwari)
