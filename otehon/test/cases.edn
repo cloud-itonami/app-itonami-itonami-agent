@@ -1423,11 +1423,12 @@
           "profiles/pc/profile.yaml" "name: pc\ndescription: Clean\n"
           "profiles/pc/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
           "profiles/pc/cron/jobs.json" "{\"jobs\": []}\n"
-          "profiles/pc/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"}
+          "profiles/pc/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreial7qfkl66ea2swhsdmhnt2fsakd36ph6wjud4m7yybkfvfe6djei\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"}
    :request {:sub "check" :name "pc"}
    :expect {:exit 0 :lines ["1 profile(s): 0 with errors, 0 with warnings"]}}
   ;; S4b: profile check — a bad manifest schema: schema, deny-hosts and
-  ;; rail findings (3 errors, no warnings; v2-only org/world warn is absent)
+  ;; rail findings (errors; the stale-CID warn is new, v2-only org/world
+  ;; warn is absent)
   {:id :profile-check-errors :op :profile
    :seed {"profiles/pe/SOUL.md" "soul\n"
           "profiles/pe/profile.yaml" "name: pe\n"
@@ -1435,7 +1436,7 @@
           "profiles/pe/cron/jobs.json" "{\"jobs\": []}\n"
           "profiles/pe/itonami.edn" "{:itonami/schema \"nope\" :profile/id \"pe\"}\n"}
    :request {:sub "check" :name "pe"}
-   :expect {:exit 1 :lines ["error  pe  [:itonami/schema] not one of cloud.itonami.profile.v1, cloud.itonami.profile.v2" "error  pe  [:profile/hermes-compatible] missing" "error  pe  [:runtime :engine] missing" "error  pe  [:runtime :scheduler] missing" "error  pe  [:placement :mode] missing" "error  pe  [:placement :order] missing" "error  pe  [:placement :inference-rail] missing" "error  pe  [:state] missing" "error  pe  [:bundle :cid] missing" "error  pe  [:bundle :files] missing" "error  pe  [:capabilities] missing" "error  pe  [:cron?] missing" "error  pe  [:inference :deny-hosts] must name openrouter.ai (Two CLIs: itonami never rides the Hermes rail)" "error  pe  [:inference :rails] rail/itonami-without-rail" "1 profile(s): 1 with errors, 0 with warnings"]}}
+   :expect {:exit 1 :lines ["error  pe  [:itonami/schema] not one of cloud.itonami.profile.v1, cloud.itonami.profile.v2" "error  pe  [:profile/hermes-compatible] missing" "error  pe  [:runtime :engine] missing" "error  pe  [:runtime :scheduler] missing" "error  pe  [:placement :mode] missing" "error  pe  [:placement :order] missing" "error  pe  [:placement :inference-rail] missing" "error  pe  [:state] missing" "error  pe  [:bundle :cid] missing" "error  pe  [:bundle :files] missing" "error  pe  [:capabilities] missing" "error  pe  [:cron?] missing" "error  pe  [:inference :deny-hosts] must name openrouter.ai (Two CLIs: itonami never rides the Hermes rail)" "warn   pe  [:bundle :cid] stale bundle CID nil, files hash to \"bafkreiatqci2ye3z7rjpvp4t7xk5qfxpoafqstfncvy5rtuiu7d4tyhpgi\"; run profile refresh-bundle" "error  pe  [:inference :rails] rail/itonami-without-rail" "1 profile(s): 1 with errors, 1 with warnings"]}}
   ;; S4b: profile check --summary prints only the count line
   {:id :profile-check-summary :op :profile
    :seed {"profiles/pe/SOUL.md" "soul\n"
@@ -1444,7 +1445,7 @@
           "profiles/pe/cron/jobs.json" "{\"jobs\": []}\n"
           "profiles/pe/itonami.edn" "{:itonami/schema \"nope\" :profile/id \"pe\"}\n"}
    :request {:sub "check" :name "pe" :summary true}
-   :expect {:exit 1 :lines ["1 profile(s): 1 with errors, 0 with warnings"]}}
+   :expect {:exit 1 :lines ["1 profile(s): 1 with errors, 1 with warnings"]}}
   ;; S4b: profile check --all over a clean itonami profile and a Hermes
   ;; profile (whose murakumo models read rail/hermes-on-murakumo, twice —
   ;; the count is profiles-with-errors, not problems)
@@ -1453,13 +1454,35 @@
           "profiles/pc/profile.yaml" "name: pc\ndescription: Clean\n"
           "profiles/pc/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
           "profiles/pc/cron/jobs.json" "{\"jobs\": []}\n"
-          "profiles/pc/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"
+          "profiles/pc/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreial7qfkl66ea2swhsdmhnt2fsakd36ph6wjud4m7yybkfvfe6djei\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"
           "profiles/ph/SOUL.md" "soul\n"
           "profiles/ph/profile.yaml" "name: ph\ndescription: Hermes profile\n"
           "profiles/ph/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
           "profiles/ph/cron/jobs.json" "{\"jobs\": []}\n"}
    :request {:sub "check" :all true}
    :expect {:exit 1 :messages-include ["rail/hermes-on-murakumo" "2 profile(s): 1 with errors, 0 with warnings"]}}
+  ;; AWAI-3271: a stale bundle CID warns but stays exit 0 (legacy reports
+  ;; drift without failing). The unedited control is :profile-check-clean
+  ;; above: the same files with the recorded CID check 0/0.
+  {:id :neg/profile-check-stale-bundle-cid :negative true :op :profile
+   :seed {"profiles/pc/SOUL.md" "soul\n"
+          "profiles/pc/profile.yaml" "name: pc\ndescription: Clean\n"
+          "profiles/pc/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/pc/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/pc/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"}
+   :request {:sub "check" :name "pc"}
+   :expect {:exit 0 :messages-include ["stale bundle CID" "1 profile(s): 0 with errors, 1 with warnings"]}}
+  ;; AWAI-3271: refresh-bundle --dry-run reports the rewrite without
+  ;; writing: the manifest file still holds the recorded CID afterwards.
+  {:id :profile-refresh-bundle-dry-run :op :profile
+   :seed {"profiles/pc/SOUL.md" "soul\n"
+          "profiles/pc/profile.yaml" "name: pc\ndescription: Clean\n"
+          "profiles/pc/config.yaml" "model:\n  default: mishima\n  provider: murakumo\n"
+          "profiles/pc/cron/jobs.json" "{\"jobs\": []}\n"
+          "profiles/pc/itonami.edn" "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"}
+   :request {:sub "refresh-bundle" :name "pc" :dry-run true}
+   :expect {:exit 0 :messages-include ["would refresh pc bundle bafkreix -> bafkreial7qfkl66ea2swhsdmhnt2fsakd36ph6wjud4m7yybkfvfe6djei"]
+            :manifest-file "{:itonami/schema \"cloud.itonami.profile.v2\" :profile/id \"pc\" :profile/description \"Clean\" :profile/hermes-compatible true :runtime {:engine :itonami-agent :scheduler :hermes} :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo} :inference {:rails [:murakumo] :authorities [\"api.murakumo.cloud\"] :deny-hosts [\"openrouter.ai\"]} :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host} :bundle {:cid \"bafkreix\" :files 1 :skills []} :capabilities [] :cron? false :org/world :kotoba}\n"}}
   ;; S4b/S4d: profile readiness — job issues only. No model default, no
   ;; state.db, and a live pause marker: the legacy command reads active
   ;; jobs and nothing else, so a jobless profile is ready regardless
