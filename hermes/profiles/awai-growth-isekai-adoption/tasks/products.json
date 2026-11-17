@@ -1,0 +1,25 @@
+{
+  "schema": "awai.growth.product-inventory.v1",
+  "observedOn": "2026-11-18",
+  "status": "source-inventory-only",
+  "runtimeQualified": false,
+  "targets": [
+    {
+      "id": "isekai",
+      "role": "Itonami dapp target; game-fork hub, gem economy and x402 payment are separate service roles",
+      "source": {
+        "repo": "network-awai/network-isekai",
+        "revision": "76fa1f5bd23ae3854cea3f59ccfdd7aca9384f22"
+      },
+      "businessProfile": "bot-profile:network-awai-network-isekai",
+      "pairedApp": "Tauri v3 Awai app for Awai Android (AWAI-3216, not yet built)",
+      "firstOutcome": "A local game-fork draft with did:key authorship and its ledger entry, reviewed before any publication",
+      "unknown": [
+        "Tauri v3 Awai app build and Awai Android launch",
+        "browser release and canonical broker integration",
+        "x402 rail wiring (disabled by default) and live gem mint",
+        "native host admission for this profile"
+      ]
+    }
+  ]
+}
