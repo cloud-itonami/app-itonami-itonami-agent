@@ -1,0 +1,13 @@
+;; Dependencies of this profile's scripts, read by kbb when the itonami-agent
+;; cron runner starts a script here (cwd = scripts/). The ISO 20022 and SWIFT MT
+;; securities messages come from kotoba-lang/kotoba lib/, pinned by sha
+;; (lib/kotoba.swift brings lib/kotoba.securities from the same checkout).
+{:paths ["."]
+ :deps {io.github.kotoba-lang/swift
+        {:git/url "https://github.com/kotoba-lang/kotoba.git"
+         :git/sha "4e7fc2b8e2d46944ea6bb0047c5897a312b64ac0"
+         :deps/root "lib/kotoba.swift"}
+        io.github.kotoba-lang/bytes
+        {:git/url "https://github.com/kotoba-lang/kotoba.git"
+         :git/sha "4e7fc2b8e2d46944ea6bb0047c5897a312b64ac0"
+         :deps/root "lib/kotoba.bytes"}}}

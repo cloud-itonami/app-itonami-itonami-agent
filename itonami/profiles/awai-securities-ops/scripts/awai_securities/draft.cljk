@@ -1,0 +1,189 @@
+(ns awai-securities.draft
+  "Securities settlement drafts and reconciliations for the
+  awai-securities-ops profile (AWAI-3156, network-awai-apex ADR 0042 D4).
+
+  Three request kinds:
+
+    :sese023  build a settlement instruction (ISO 20022 sese.023.001.09)
+              and, when asked, the MT541-style MT54x equivalent for
+              comparison (MT is for reading and comparison only, ADR 0042 D1).
+    :reconcile-settlement
+              compare an instruction with the confirmation (sese.025 or
+              MT544-547) and status advice (sese.024 or MT548) the holder
+              received, field by field.
+    :reconcile-holdings
+              compare a custody statement (semt.002) with the holder's own
+              position list, ISIN by ISIN.
+
+  Pure: no I/O, no clock, no network. Nothing here places an order, sends a
+  message, moves securities or cash, or signs anything. The output is a
+  proposal for the holder to review.
+
+  Levels (ADR 0042 D2): ISO 20022 checks are L1 for the modeled subset of
+  kotoba-lang/kotoba lib/kotoba.swift; MT checks cover only the modeled
+  layout and are not L1 (O3). Market practice (L2) and acceptance by a
+  custodian or CSD (L3) are not checked (O3, O5)."
+  (:require [kotoba.swift :as swift]
+            [kotoba.swift.iso20022 :as iso]
+            [kotoba.swift.securities :as sec]
+            [kotoba.swift.mt5xx :as mt]
+            [kotoba.bytes.sha256 :as sha256]))
+
+(def library
+  "The library revision the drafts are built with; scripts/deps.edn pins the same sha."
+  {:repo "kotoba-lang/kotoba" :paths ["lib/kotoba.swift" "lib/kotoba.securities"]
+   :sha "4e7fc2b8e2d46944ea6bb0047c5897a312b64ac0"})
+
+(def open-points
+  ["L2 (market practice such as SMPG or a CSD's rules) not checked: ADR 0042 O3 is pending."
+   "L3 (acceptance by the holder's custodian or CSD) not checked: ADR 0042 O5 is pending."
+   "Not sent. The account holder reviews the draft and sends it through their own custodian."])
+
+(def ^:private mt-open-point
+  "The MT54x text is for reading and comparison with sese.023 only. Its layout is checked against the modeled skeleton, not the SWIFT Standards MT (ADR 0042 O3); do not send it.")
+
+(defn digest [x] (sha256/sha256-hex (if (string? x) x (pr-str x))))
+
+;; ---------------------------------------------------------------------------
+;; Reading a received message (ISO 20022 XML or MT FIN text)
+;; ---------------------------------------------------------------------------
+
+(defn- read-received
+  "{:standard :message :data} for a received sese.024/025 or MT544-548, or
+  {:refusal ...} when the text is neither a valid modeled ISO 20022 securities
+  message nor a valid modeled MT54x."
+  [text]
+  (cond
+    (and (string? text) (re-find #"^\s*(<\?xml|<Document)" text))
+    (if-let [{:keys [message data]} (try (sec/read-message (iso/parse-xml text)) (catch :default _ nil))]
+      {:standard "iso20022" :message message :data data}
+      {:refusal {:reason :unreadable-iso20022}})
+
+    (and (string? text) (re-find #"^\{1:" text))
+    (if-let [{:keys [mt data]} (try (mt/read-message (swift/parse-mt-wire text)) (catch :default _ nil))]
+      {:standard "swift-mt" :message (str "MT" mt) :data data}
+      {:refusal {:reason :unreadable-mt}})
+
+    :else {:refusal {:reason :unknown-format}}))
+
+;; ---------------------------------------------------------------------------
+;; Kinds
+;; ---------------------------------------------------------------------------
+
+(defn- check [rule ok?] {:level :l1 :rule rule :result (if ok? :pass :fail)})
+
+(defn- sese023-draft [{:keys [params mt]}]
+  (if-let [doc (sec/settlement-instruction params)]
+    (let [wire (iso/xml->str doc)
+          back (iso/parse-xml wire)
+          checks [(check "kotoba.swift.securities/validate" (:swift/valid? (sec/validate doc)))
+                  (check "parse-xml(xml->str doc) = doc" (= doc back))
+                  (check "read-message gives the request back" (= params (:data (sec/read-message back))))]
+          mt-record (when mt (mt/settlement-instruction (merge (dissoc params :tx-id) mt {:reference (:tx-id params)})))]
+      (cond
+        (some #(= :fail (:result %)) checks) {:refusal {:reason :check-failed :checks checks}}
+        (and mt (nil? mt-record)) {:refusal {:reason :mt-builder-refused}}
+        :else
+        {:wire wire
+         :mt-wire (some-> mt-record swift/mt->wire)
+         :draft {:message {:standard "iso20022" :id "sese.023.001.09" :body-sha256 (digest wire)}
+                 :validation checks
+                 :comparison (when mt-record
+                               {:standard "swift-mt" :id (str "MT" (:swift/mt mt-record))
+                                :body-sha256 (digest (swift/mt->wire mt-record))
+                                :layout (if (:swift/valid? (mt/validate mt-record)) :modeled-skeleton-pass :fail)})
+                 :open-points (cond-> open-points mt-record (conj mt-open-point))}}))
+    {:refusal {:reason :builder-refused
+               :detail "sese.023.001.09 builder returned no document: a required field is missing, or a value is outside the XSD or the modeled subset (ISIN check digit, quantity, amount, code, date)"}}))
+
+(defn- canonical-decimal
+  "\"100.0\" and \"100\" compare equal: strip leading zeros of the whole part
+  and trailing zeros of the fraction. Anything else is returned as it is."
+  [s]
+  (if-let [[_ w f] (and (string? s) (re-matches #"([0-9]+)(?:\.([0-9]*))?" s))]
+    (let [w (or (second (re-matches #"0*([0-9]+)" w)) w)
+          f (some->> f (re-matches #"([0-9]*[1-9])?0*") second)]
+      (if (seq f) (str w "." f) w))
+    s))
+
+(defn- comparable [k v]
+  (case k
+    :quantity (canonical-decimal v)
+    :amount (when v (update v :value canonical-decimal))
+    v))
+
+(def ^:private compared-keys
+  [:direction :payment-type :isin :quantity :safekeeping-account :transaction-type :place-of-settlement :agent :amount])
+
+(defn- reconcile-settlement [{:keys [instruction]} texts]
+  (let [received (mapv read-received texts)
+        bad (first (filter :refusal received))
+        confirmations (filter #(#{"sese.025.001.09" "MT544" "MT545" "MT546" "MT547"} (:message %)) received)
+        statuses (filter #(#{"sese.024.001.10" "MT548"} (:message %)) received)
+        ref (:tx-id instruction)
+        refers? (fn [{:keys [message data]}]
+                  (= ref (if (= "sese.025.001.09" message) (:account-owner-tx-id data)
+                             (if (= "sese.024.001.10" message) (:account-owner-tx-id data) (:related-reference data)))))]
+    (cond
+      bad {:refusal (:refusal bad)}
+      (not (sec/settlement-instruction instruction)) {:refusal {:reason :instruction-invalid}}
+      :else
+      {:reconciliation
+       {:instruction-tx-id ref
+        :messages (mapv (fn [r t] {:message (:message r) :body-sha256 (digest t) :refers-to-instruction? (refers? r)}) received texts)
+        :confirmations (vec (for [c confirmations]
+                              {:message (:message c)
+                               :effective-settlement-date (get-in c [:data :effective-settlement-date])
+                               :differences (vec (for [k compared-keys
+                                                       :let [want (get instruction k) got (get-in c [:data k])]
+                                                       :when (not= (comparable k want) (comparable k got))]
+                                                   {:field k :instructed want :confirmed got}))}))
+        :status (vec (for [s statuses] {:message (:message s) :status (select-keys (:data s) [:processing :matching :settlement])}))
+        :settled? (boolean (some (fn [c] (and (refers? c) (empty? (for [k compared-keys :when (not= (comparable k (get instruction k)) (comparable k (get-in c [:data k])))] k))))
+                                 confirmations))}})))
+
+(defn- reconcile-holdings [{:keys [positions]} [text]]
+  (let [r (read-received text)]
+    (cond
+      (:refusal r) {:refusal (:refusal r)}
+      (not= "semt.002.001.10" (:message r)) {:refusal {:reason :not-a-statement}}
+      :else
+      (let [signed (fn [{:keys [quantity short?]}] (str (when short? "-") (canonical-decimal quantity)))
+            stated (into {} (for [b (get-in r [:data :balances])] [(:isin b) (signed b)]))
+            mine (into {} (for [p positions] [(:isin p) (signed p)]))
+            isins (sort (distinct (concat (keys stated) (keys mine))))]
+        {:reconciliation
+         {:statement {:message (:message r) :body-sha256 (digest text)
+                      :statement-date (get-in r [:data :statement-date])
+                      :safekeeping-account (get-in r [:data :safekeeping-account])}
+          :lines (vec (for [i isins]
+                        {:isin i :statement (stated i) :holder (mine i)
+                         :result (cond (nil? (stated i)) :missing-in-statement
+                                       (nil? (mine i)) :missing-in-positions
+                                       (= (stated i) (mine i)) :match
+                                       :else :quantity-differs)}))}}))))
+
+(defn draft
+  "Handle one request {:request/id :kind ...}; `texts` are the received
+  message texts the request names (reconciliations only).
+
+  Returns {:result {...} :wire? :mt-wire?} or {:refusal {...}}. The result
+  is an `awai.fin-draft/1` bundle for :sese023 and an
+  `awai.fin-reconciliation/1` record for the reconciliations; both carry
+  :sent? false and the open points."
+  ([request] (draft request []))
+  ([{:keys [kind] :as request} texts]
+   (let [id (:request/id request)
+         base {:request/id id :domain :securities :sources [{:request-sha256 (digest request)}]
+               :produced-by {:profile "awai-securities-ops" :library library} :sent? false}
+         out (case kind
+               :sese023 (sese023-draft request)
+               :reconcile-settlement (reconcile-settlement request texts)
+               :reconcile-holdings (reconcile-holdings request texts)
+               {:refusal {:reason :unsupported-kind
+                          :detail "supported kinds: :sese023 :reconcile-settlement :reconcile-holdings"}})]
+     (cond
+       (:refusal out) {:refusal (assoc (:refusal out) :request/id id :kind kind)}
+       (= kind :sese023) {:wire (:wire out) :mt-wire (:mt-wire out)
+                          :result (merge base {:kind "awai.fin-draft/1"} (:draft out))}
+       :else {:result (merge base {:kind "awai.fin-reconciliation/1" :open-points open-points} (:reconciliation out))}))))
