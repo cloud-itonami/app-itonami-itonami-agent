@@ -1,0 +1,1 @@
+{:kind :pain001, :reason :builder-refused, :detail "pain.001.001.09 builder returned no document: a required field is missing, or a value is outside the XSD (identifier length, UETR form, date, code)", :request/id "pain001-refused-uppercase-uetr"}

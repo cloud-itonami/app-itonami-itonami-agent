@@ -306,7 +306,15 @@ plain: true
     (is (= ["kbb" "--backend" "sci" "/tmp/job.cljk"]
            (cron/script-command {:config {} :env {}} {} "/tmp/job.cljk")))
     (is (= ["node" "/tmp/job.mjs"]
-           (cron/script-command {:config {} :env {}} {} "/tmp/job.mjs")))))
+           (cron/script-command {:config {} :env {}} {} "/tmp/job.mjs"))))
+  (testing "a .cljk script next to a deps.edn goes through kbb's deps door (AWAI-3155)"
+    (let [dir (h/join (h/tmp-dir) (str "itonami-script-deps-" (h/random-hex 4)))]
+      (try
+        (h/mkdirs dir)
+        (h/spit (h/join dir "deps.edn") "{:paths [\".\"]}")
+        (is (= ["kbb" (h/join dir "job.cljk")]
+               (cron/script-command {:config {} :env {}} {} (h/join dir "job.cljk"))))
+        (finally (h/rm dir))))))
 
 (deftest agent-loop-desktop-turn-context
   (testing "prior user/assistant turns are kept in order and tool/system rows are excluded"

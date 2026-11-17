@@ -1,0 +1,12 @@
+;; Fictional test values only. MT103 is drafted for reading and for comparison
+;; with pacs.008; ADR 0042 D1 says not to send new cross-border MT103.
+{:request/id "mt103-usd"
+ :kind :mt103
+ :params {:sender-bic "COBADEFFXXX" :receiver-bic "CHASUS33XXX"
+          :transaction-reference "AWAIMT1030001" :bank-operation-code "CRED"
+          :value-date "261119" :currency "USD" :amount-minor 7500000
+          :ordering-customer-account "DE89370400440532013000"
+          :ordering-customer-name-address "Example Holder\nExamplestrasse 1\nBerlin"
+          :beneficiary-account "GB82WEST12345698765432"
+          :beneficiary-name-address "Example Importer Inc\n1 Example Street\nNew York"
+          :remittance-information "Invoice 2026-118" :details-of-charges "SHA"}}

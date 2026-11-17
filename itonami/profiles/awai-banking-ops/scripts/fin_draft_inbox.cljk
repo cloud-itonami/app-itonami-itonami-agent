@@ -1,0 +1,42 @@
+;; Draft the requests the account holder placed in <profile>/workspace/inbox/
+;; (AWAI-3155).
+;;
+;; For each <name>.edn request it writes, under <profile>/workspace/drafts/:
+;;   <request-id>.draft.edn   the awai.fin-draft/1 bundle
+;;   <request-id>.xml|.fin    the wire text
+;; or <request-id>.refusal.edn when no message could be built. The workspace is
+;; host-local and never part of the profile bundle. Nothing is sent: the holder
+;; reviews the draft and sends it through their own bank.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/).
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[cljs.reader :as reader]
+         '[awai-banking.draft :as d])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def inbox (path/join home "workspace" "inbox"))
+(def drafts (path/join home "workspace" "drafts"))
+
+(defn safe-id? [s] (boolean (and (string? s) (re-matches #"[A-Za-z0-9][A-Za-z0-9._-]{0,63}" s))))
+
+(fs/mkdirSync drafts #js {:recursive true})
+(let [files (if (fs/existsSync inbox)
+              (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync inbox))))
+              [])]
+  (doseq [file files]
+    (let [request (reader/read-string (str (fs/readFileSync (path/join inbox file) "utf8")))
+          id (:request/id request)]
+      (if-not (safe-id? id)
+        (println (str "skip  " file "  :request/id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+        (let [{:keys [draft wire refusal]} (d/draft request)]
+          (if refusal
+            (do (fs/writeFileSync (path/join drafts (str id ".refusal.edn")) (str (pr-str refusal) "\n"))
+                (println (str "refused  " id "  " (name (:reason refusal)))))
+            (let [ext (if (= "swift-mt" (get-in draft [:message :standard])) ".fin" ".xml")]
+              (fs/writeFileSync (path/join drafts (str id ".draft.edn")) (str (pr-str draft) "\n"))
+              (fs/writeFileSync (path/join drafts (str id ext)) wire)
+              (println (str "drafted  " id "  " (get-in draft [:message :id])
+                            "  sha256=" (get-in draft [:message :body-sha256])))))))))
+  (println (str (count files) " request(s) read from workspace/inbox")))

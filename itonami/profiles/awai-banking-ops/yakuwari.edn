@@ -1,0 +1,22 @@
+;; What awai-banking-ops may do (AWAI-3155, network-awai-apex ADR 0042 D4).
+;; Drafting and checking only. Sending, moving money, trading and signing are
+;; blocked; the account holder sends a reviewed draft through their own bank.
+{:yakuwari/capabilities
+ [{:capability :read_source :decision :autonomous :note "Only the holder's request files in workspace/inbox and the profile's fixtures; no credentials or network access"}
+  {:capability :review_source :decision :autonomous :note "Checks of drafted messages only; no approval minting"}
+  {:capability :draft_artifact :decision :autonomous :note "Payment-message drafts in its own host-local workspace; a draft is not a sent message"}
+  {:capability :record_local_receipt :decision :autonomous :note "Own job evidence only; no settlement or paid-work claim"}
+  {:capability :delegate_task :decision :blocked}
+  {:capability :external_messaging :decision :blocked :note "No message to a bank, SWIFTNet or any other party"}
+  {:capability :publish :decision :blocked}
+  {:capability :spend :decision :blocked}
+  {:capability :transfer_funds :decision :blocked :note "No payment, transfer or trade of any kind"}
+  {:capability :storage_upload :decision :blocked}
+  {:capability :delete_data :decision :blocked}
+  {:capability :manage_services :decision :blocked}
+  {:capability :git_push :decision :blocked}
+  {:capability :git_merge :decision :blocked}
+  {:capability :use_signing_identity :decision :blocked :note "No signing of messages or transactions"}
+  {:capability :export_private_keys :decision :blocked}
+  {:capability :enable_cron :decision :blocked}]
+ :yakuwari/runners [{:runner :itonami-agent :weight 1}]}

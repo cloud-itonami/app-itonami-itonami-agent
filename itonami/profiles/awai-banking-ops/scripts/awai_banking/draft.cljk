@@ -1,0 +1,103 @@
+(ns awai-banking.draft
+  "Payment-message drafts for the awai-banking-ops profile (AWAI-3155).
+
+  A request names one message kind and the fields to put in it. `draft` builds
+  the message with kotoba-lang/kotoba lib/kotoba.swift, checks it, and returns
+  an `awai.fin-draft/1` bundle (network-awai-apex ADR 0042 D4) together with
+  the wire text, or a refusal that says why no message was built.
+
+  Pure: no I/O, no clock, no network. The draft is a proposal. Nothing here
+  sends a message, moves money or signs anything; the account holder reviews
+  the draft and sends it through their own bank (ADR 0042 D1).
+
+  Levels (ADR 0042 D2): the checks here are L1 (syntax) for the element subset
+  kotoba.swift emits. L2 (usage guidelines such as CBPR+) and L3 (acceptance
+  by a bank) are not checked; they wait on the owner decisions O3 and O5."
+  (:require [kotoba.swift :as swift]
+            [kotoba.swift.iso20022 :as iso]
+            [kotoba.bytes.sha256 :as sha256]))
+
+(def library
+  "The library revision the drafts are built with; scripts/deps.edn pins the
+  same sha."
+  {:repo "kotoba-lang/kotoba" :paths ["lib/kotoba.swift"]
+   :sha "2e3b9ef25f06ef98924daa450c36da1b7c712189"})
+
+(def open-points
+  "Stated on every draft: what this draft does not establish."
+  ["L2 (usage guidelines such as CBPR+) not checked: ADR 0042 O3 is pending."
+   "L3 (acceptance by the holder's bank) not checked: ADR 0042 O5 is pending."
+   "Not sent. The account holder reviews the draft and sends it through their own bank."])
+
+(def ^:private mt103-open-point
+  "MT103 is drafted for reading and for comparison with pacs.008 only; do not send a new cross-border MT103 (ADR 0042 D1).")
+
+(defn- check [rule ok?]
+  {:level :l1 :rule rule :result (if ok? :pass :fail)})
+
+(defn- iso-draft [kind build message-id params]
+  (if-let [doc (build params)]
+    (let [wire (iso/xml->str doc)
+          back (iso/parse-xml wire)
+          checks [(check "kotoba.swift.iso20022/validate-iso20022" (:swift/valid? (iso/validate-iso20022 doc)))
+                  (check "parse-xml(xml->str doc) = doc" (= doc back))
+                  (check "validate-iso20022 of the parsed wire" (:swift/valid? (iso/validate-iso20022 back)))]]
+      {:standard "iso20022" :message-id message-id :kind kind :wire wire :checks checks})
+    {:refusal {:kind kind :reason :builder-refused
+               :detail (str message-id " builder returned no document: a required field is missing, "
+                            "or a value is outside the XSD (identifier length, UETR form, date, code)")}}))
+
+(defn- mt103-draft [params]
+  (if-let [m (swift/mt103 params)]
+    (let [wire (swift/mt->wire m)
+          back (swift/parse-mt-wire wire)
+          checks [(check "kotoba.swift/validate-mt" (:swift/valid? (swift/validate-mt m)))
+                  (check "validate-mt of the parsed wire" (:swift/valid? (swift/validate-mt back)))]]
+      {:standard "swift-mt" :message-id "MT103" :kind :mt103 :wire wire :checks checks})
+    {:refusal {:kind :mt103 :reason :builder-refused
+               :detail "MT103 builder returned no message: a mandatory field is missing or malformed"}}))
+
+(defn- build [{:keys [kind params]}]
+  (case kind
+    :pain001 (iso-draft kind iso/pain001-doc "pain.001.001.09" params)
+    :pacs008 (iso-draft kind iso/pacs008-doc "pacs.008.001.08" params)
+    :mt103 (mt103-draft params)
+    {:refusal {:kind kind :reason :unsupported-kind
+               :detail "supported kinds: :pain001 :pacs008 :mt103"}}))
+
+(defn request-digest
+  "SHA-256 of the request as data, so a draft names exactly what it was built from."
+  [request]
+  (sha256/sha256-hex (pr-str request)))
+
+(defn draft
+  "Build one draft from a request
+  {:request/id string :kind :pain001|:pacs008|:mt103 :params {...}}.
+
+  Returns {:draft fin-draft :wire string} when every check passes, or
+  {:refusal {...}} when the message cannot be built or a check fails. A
+  refused request yields no wire text at all."
+  [request]
+  (let [id (:request/id request)
+        built (build request)]
+    (cond
+      (:refusal built)
+      {:refusal (assoc (:refusal built) :request/id id)}
+
+      (some #(= :fail (:result %)) (:checks built))
+      {:refusal {:request/id id :kind (:kind built) :reason :check-failed :checks (:checks built)}}
+
+      :else
+      {:wire (:wire built)
+       :draft {:kind "awai.fin-draft/1"
+               :domain :banking
+               :request/id id
+               :message {:standard (:standard built)
+                         :id (:message-id built)
+                         :body-sha256 (sha256/sha256-hex (:wire built))}
+               :validation (:checks built)
+               :sources [{:request-sha256 (request-digest request)}]
+               :open-points (cond-> open-points
+                              (= :mt103 (:kind built)) (conj mt103-open-point))
+               :produced-by {:profile "awai-banking-ops" :library library}
+               :sent? false}})))
