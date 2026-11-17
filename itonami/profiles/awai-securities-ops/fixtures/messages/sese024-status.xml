@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:sese.024.001.10"><SctiesSttlmTxStsAdvc><TxId><AcctOwnrTxId>AWAI-SEC-0001</AcctOwnrTxId><AcctSvcrTxId>SVCR-0001</AcctSvcrTxId></TxId><PrcgSts><AckdAccptd><NoSpcfdRsn>NORE</NoSpcfdRsn></AckdAccptd></PrcgSts><MtchgSts><Mtchd/></MtchgSts></SctiesSttlmTxStsAdvc></Document>

@@ -1,0 +1,1 @@
+{:reason :builder-refused, :detail "sese.023.001.09 builder returned no document: a required field is missing, or a value is outside the XSD or the modeled subset (ISIN check digit, quantity, amount, code, date)", :request/id "sese023-refused-isin", :kind :sese023}

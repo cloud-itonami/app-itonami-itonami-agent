@@ -1,0 +1,46 @@
+;; Fixture test for the awai-securities-ops drafts and reconciliations (AWAI-3156).
+;;
+;; For every request in <profile>/fixtures/requests/ it runs awai-securities.draft
+;; (received messages named in :messages are read from <profile>/fixtures/) and
+;; compares the result with <profile>/fixtures/expected/: <id>.result.edn plus
+;; <id>.xml / <id>.fin for wire text, or <id>.refusal.edn. Prints one line per
+;; fixture and exits 1 on any difference. Reads only; it writes nothing.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/, so kbb reads
+;; scripts/deps.edn), or directly: cd scripts && kbb fin_securities_self_test.cljk
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[cljs.reader :as reader]
+         '[awai-securities.draft :as d])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def fixtures (path/join home "fixtures"))
+(def expected-dir (path/join fixtures "expected"))
+
+(defn slurp [p] (when (fs/existsSync p) (str (fs/readFileSync p "utf8"))))
+(defn read-edn [p] (some-> (slurp p) reader/read-string))
+(defn safe-rel? [s] (boolean (and (string? s) (re-matches #"messages/[A-Za-z0-9][A-Za-z0-9._-]{0,63}" s))))
+
+(defn compare-one [file]
+  (let [request (read-edn (path/join fixtures "requests" file))
+        id (:request/id request)
+        texts (mapv #(when (safe-rel? %) (slurp (path/join fixtures %))) (:messages request))
+        {:keys [result wire mt-wire refusal]} (d/draft request texts)
+        expect (fn [ext] (slurp (path/join expected-dir (str id ext))))]
+    (if refusal
+      (let [e (read-edn (path/join expected-dir (str id ".refusal.edn")))]
+        {:id id :outcome :refused :ok? (= e refusal) :problem (when (not= e refusal) {:expected e :actual refusal})})
+      (let [e (read-edn (path/join expected-dir (str id ".result.edn")))
+            ok? (and (= e result) (= (expect ".xml") wire) (= (expect ".fin") mt-wire))]
+        {:id id :outcome (if (= "awai.fin-draft/1" (:kind result)) :drafted :reconciled) :ok? ok?
+         :problem (when-not ok? {:expected e :actual result :wire-ok? (= (expect ".xml") wire) :mt-ok? (= (expect ".fin") mt-wire)})}))))
+
+(let [files (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync (path/join fixtures "requests")))))
+      results (mapv compare-one files)
+      failed (remove :ok? results)]
+  (doseq [{:keys [id outcome ok? problem]} results]
+    (println (str (if ok? "ok    " "FAIL  ") (name outcome) "  " id))
+    (when problem (prn problem)))
+  (println (str (count results) " fixtures, " (count failed) " failed"))
+  (when (seq failed) (js/process.exit 1)))

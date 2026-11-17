@@ -1,0 +1,45 @@
+;; Handle the requests the account holder placed in <profile>/workspace/inbox/
+;; (AWAI-3156). Received messages a request names in :messages are read from
+;; <profile>/workspace/inbox/messages/.
+;;
+;; For each <name>.edn request it writes, under <profile>/workspace/drafts/:
+;;   <request-id>.result.edn  the awai.fin-draft/1 or awai.fin-reconciliation/1 record
+;;   <request-id>.xml / .fin  wire text of a drafted instruction (and its MT comparison)
+;; or <request-id>.refusal.edn. The workspace is host-local and never part of the
+;; profile bundle. Nothing is sent, ordered or moved.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/).
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[cljs.reader :as reader]
+         '[awai-securities.draft :as d])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def inbox (path/join home "workspace" "inbox"))
+(def drafts (path/join home "workspace" "drafts"))
+
+(defn safe-id? [s] (boolean (and (string? s) (re-matches #"[A-Za-z0-9][A-Za-z0-9._-]{0,63}" s))))
+(defn safe-rel? [s] (boolean (and (string? s) (re-matches #"messages/[A-Za-z0-9][A-Za-z0-9._-]{0,63}" s))))
+(defn slurp [p] (when (fs/existsSync p) (str (fs/readFileSync p "utf8"))))
+(defn spit [p s] (fs/writeFileSync p (str s)))
+
+(fs/mkdirSync drafts #js {:recursive true})
+(let [files (if (fs/existsSync inbox)
+              (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync inbox))))
+              [])]
+  (doseq [file files]
+    (let [request (reader/read-string (slurp (path/join inbox file)))
+          id (:request/id request)]
+      (if-not (and (safe-id? id) (every? safe-rel? (:messages request)))
+        (println (str "skip  " file "  bad :request/id or :messages path"))
+        (let [texts (mapv #(slurp (path/join inbox %)) (:messages request))
+              {:keys [result wire mt-wire refusal]} (d/draft request texts)]
+          (if refusal
+            (do (spit (path/join drafts (str id ".refusal.edn")) (str (pr-str refusal) "\n"))
+                (println (str "refused  " id "  " (name (:reason refusal)))))
+            (do (spit (path/join drafts (str id ".result.edn")) (str (pr-str result) "\n"))
+                (when wire (spit (path/join drafts (str id ".xml")) wire))
+                (when mt-wire (spit (path/join drafts (str id ".fin")) mt-wire))
+                (println (str (if wire "drafted  " "reconciled  ") id))))))))
+  (println (str (count files) " request(s) read from workspace/inbox")))

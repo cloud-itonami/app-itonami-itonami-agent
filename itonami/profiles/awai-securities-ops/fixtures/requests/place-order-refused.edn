@@ -1,0 +1,4 @@
+;; Must be refused: this profile never places orders (yakuwari: transfer_funds and spend are blocked).
+{:request/id "place-order-refused"
+ :kind :place-order
+ :params {:isin "US0378331005" :side :buy :quantity "100"}}

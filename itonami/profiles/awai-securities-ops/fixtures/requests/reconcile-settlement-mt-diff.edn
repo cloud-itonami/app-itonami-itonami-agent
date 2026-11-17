@@ -1,0 +1,8 @@
+;; An MT545 confirmation for 90 units against an instruction for 100, and an MT548 status.
+{:request/id "reconcile-settlement-mt-diff"
+ :kind :reconcile-settlement
+ :instruction {:tx-id "AWAI-SEC-0001" :direction :receive :payment-type :against-payment :settlement-date "2026-11-20"
+            :isin "US0378331005" :description "Example equity" :quantity "100" :safekeeping-account "SAFE-0001"
+            :transaction-type "TRAD" :place-of-settlement "DTCYUS33XXX" :agent "CHASUS33XXX"
+            :amount {:currency "USD" :value "18950.00"}}
+ :messages ["messages/mt545-confirmation-90.fin" "messages/mt548-status.fin"]}

@@ -1,0 +1,8 @@
+;; The custodian's sese.025 confirmation and sese.024 status match the instruction.
+{:request/id "reconcile-settlement-iso"
+ :kind :reconcile-settlement
+ :instruction {:tx-id "AWAI-SEC-0001" :direction :receive :payment-type :against-payment :settlement-date "2026-11-20"
+            :isin "US0378331005" :description "Example equity" :quantity "100" :safekeeping-account "SAFE-0001"
+            :transaction-type "TRAD" :place-of-settlement "DTCYUS33XXX" :agent "CHASUS33XXX"
+            :amount {:currency "USD" :value "18950.00"}}
+ :messages ["messages/sese025-confirmation.xml" "messages/sese024-status.xml"]}

@@ -1,0 +1,6 @@
+;; Must be refused: the ISIN check digit is wrong (US0378331005 is correct).
+{:request/id "sese023-refused-isin"
+ :kind :sese023
+ :params {:tx-id "AWAI-SEC-0002" :direction :receive :payment-type :free :settlement-date "2026-11-20"
+          :isin "US0378331006" :quantity "100" :safekeeping-account "SAFE-0001"
+          :transaction-type "TRAD" :place-of-settlement "DTCYUS33XXX" :agent "CHASUS33XXX"}}
