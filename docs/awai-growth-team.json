@@ -120,6 +120,20 @@
       "launchMode": "on-demand",
       "activation": "blocked-native-profile-host-unverified",
       "scheduleEnabled": false
+    },
+    {
+      "profile": "awai-growth-x402-adoption",
+      "role": "x402-adoption",
+      "issue": "AWAI-3251",
+      "sourceDirectory": "hermes/profiles/awai-growth-x402-adoption",
+      "targets": [
+        "x402"
+      ],
+      "firstJob": "tasks/first-turn.md",
+      "bundleCid": "bafkreied6j7pyqqnowo72spxjdhmp5aiq7jb326adkhuup6pg75bh3krwy",
+      "launchMode": "on-demand",
+      "activation": "blocked-native-profile-host-unverified",
+      "scheduleEnabled": false
     }
   ],
   "authority": "Index only; no grants, deployment or scheduling",
