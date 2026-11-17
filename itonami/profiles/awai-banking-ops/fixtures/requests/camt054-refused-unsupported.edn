@@ -1,0 +1,4 @@
+;; Must be refused: statement reconciliation is not a draft kind of this profile yet.
+{:request/id "camt054-refused-unsupported"
+ :kind :camt054
+ :params {}}

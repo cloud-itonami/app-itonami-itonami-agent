@@ -1,0 +1,11 @@
+;; Must be refused: the XSD UUIDv4Identifier pattern is lowercase.
+{:request/id "pain001-refused-uppercase-uetr"
+ :kind :pain001
+ :params {:msg-id "AWAI-PAIN-0002" :creation-date-time "2026-11-18T09:00:00Z"
+          :initiating-party-name "Example Holder" :payment-info-id "PMT-0002"
+          :requested-execution-date "2026-11-19"
+          :debtor-name "Example Holder" :debtor-iban "DE89370400440532013000" :debtor-bic "COBADEFFXXX"
+          :transactions [{:end-to-end-id "E2E-0002" :uetr "EB6305C4-3E7A-4B29-9A1F-8D2CE5A71B30"
+                          :amount-minor 100 :currency "EUR"
+                          :creditor-name "Example Supplier SARL" :creditor-iban "FR1420041010050500013M02606"
+                          :creditor-bic "BNPAFRPPXXX"}]}}

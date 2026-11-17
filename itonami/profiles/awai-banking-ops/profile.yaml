@@ -1,0 +1,2 @@
+name: awai-banking-ops
+description: Draft and check ISO 20022 / SWIFT MT payment messages for the account holder's own transfers; never send, transfer or sign

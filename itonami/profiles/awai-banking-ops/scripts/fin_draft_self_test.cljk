@@ -1,0 +1,49 @@
+;; Fixture test for the awai-banking-ops drafts (AWAI-3155).
+;;
+;; Builds a draft for every request in <profile>/fixtures/requests/ and compares
+;; the result with <profile>/fixtures/expected/: <id>.draft.edn and the wire
+;; text <id>.xml / <id>.fin for a draft, <id>.refusal.edn for a refusal.
+;; Prints one line per fixture and exits 1 on any difference. Reads only; it
+;; writes nothing.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/, so kbb reads
+;; scripts/deps.edn), or directly: cd scripts && kbb fin_draft_self_test.cljk
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[cljs.reader :as reader]
+         '[awai-banking.draft :as d])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def requests-dir (path/join home "fixtures" "requests"))
+(def expected-dir (path/join home "fixtures" "expected"))
+
+(defn slurp [p] (when (fs/existsSync p) (str (fs/readFileSync p "utf8"))))
+(defn read-edn [p] (some-> (slurp p) reader/read-string))
+
+(defn compare-one [file]
+  (let [request (read-edn (path/join requests-dir file))
+        id (:request/id request)
+        result (d/draft request)
+        wire-ext (if (= :mt103 (:kind request)) ".fin" ".xml")]
+    (if-let [refusal (:refusal result)]
+      (let [expected (read-edn (path/join expected-dir (str id ".refusal.edn")))]
+        {:id id :outcome :refused :ok? (= expected refusal)
+         :problem (when (not= expected refusal) {:expected expected :actual refusal})})
+      (let [expected-draft (read-edn (path/join expected-dir (str id ".draft.edn")))
+            expected-wire (slurp (path/join expected-dir (str id wire-ext)))
+            draft-ok? (= expected-draft (:draft result))
+            wire-ok? (= expected-wire (:wire result))]
+        {:id id :outcome :drafted :ok? (and draft-ok? wire-ok?)
+         :problem (cond-> nil
+                    (not draft-ok?) (assoc :draft {:expected expected-draft :actual (:draft result)})
+                    (not wire-ok?) (assoc :wire {:expected expected-wire :actual (:wire result)}))}))))
+
+(let [files (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync requests-dir))))
+      results (mapv compare-one files)
+      failed (remove :ok? results)]
+  (doseq [{:keys [id outcome ok? problem]} results]
+    (println (str (if ok? "ok    " "FAIL  ") (name outcome) "  " id))
+    (when problem (prn problem)))
+  (println (str (count results) " fixtures, " (count failed) " failed"))
+  (when (seq failed) (js/process.exit 1)))

@@ -470,6 +470,11 @@
                    "python3")]
     (cond
       (re-find #"\.(sh|bash)$" ext) ["bash" path]
+      ;; A .cljk script whose directory carries a deps.edn names its own
+      ;; dependencies (pinned git deps, e.g. kotoba-lang/kotoba lib/). kbb's
+      ;; deps door (`kbb <script>`) resolves that file; `--backend sci` only
+      ;; takes an explicit classpath. Without a deps.edn the runner is unchanged.
+      (and (re-find #"\.cljk$" ext) (h/file? (h/join (h/dirname path) "deps.edn"))) ["kbb" path]
       (re-find #"\.cljk$" ext) ["kbb" "--backend" "sci" path]
       (re-find #"\.(m?js)$" ext) ["node" path]
       (re-find #"\.hy$" ext) [python "-c" hy-script-bootstrap path]

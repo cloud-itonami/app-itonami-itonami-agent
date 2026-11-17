@@ -2,3 +2,10 @@ node_modules/
 .cpcache/
 .nbb/
 /target/
+# itonami agent profile run state (host-local; never part of the definition)
+/itonami/profiles/*/workspace/
+/itonami/profiles/*/cron/output/
+/itonami/profiles/*/cron/*.db
+/itonami/profiles/*/cron/*.jsonl
+/itonami/profiles/*/.itonami/
+/itonami/profiles/*/.env

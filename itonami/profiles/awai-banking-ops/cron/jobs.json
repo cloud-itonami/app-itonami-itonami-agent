@@ -1,0 +1,85 @@
+{
+  "jobs": [
+    {
+      "last_status": "ok",
+      "failure_streak": 0,
+      "paused_at": "2026-11-18T05:10:00+09:00",
+      "paused_reason": "Run on demand only (itonami-agent-kbb cron run <id>); no schedule until the owner decides ADR 0042 O1-O5.",
+      "skills": [],
+      "origin": null,
+      "model": null,
+      "no_agent": true,
+      "enabled_toolsets": null,
+      "workdir": null,
+      "next_run_at": null,
+      "repeat": {
+        "times": null,
+        "completed": 1
+      },
+      "last_run_at": "2026-11-18T05:02:59.643000+09:00",
+      "enabled": false,
+      "id": "efece4c1ecc5",
+      "provider": null,
+      "name": "fin-draft-self-test",
+      "schedule": {
+        "kind": "interval",
+        "minutes": 1440,
+        "display": "every 1440m"
+      },
+      "base_url": null,
+      "script": "fin_draft_self_test.cljk",
+      "prompt": "",
+      "monitor_url": null,
+      "monitor_script": null,
+      "state": "error",
+      "context_from": null,
+      "created_at": "2026-11-18T05:10:00+09:00",
+      "skill": null,
+      "last_delivery_error": null,
+      "last_error": "Failed to compute next run for recurring schedule.",
+      "deliver": "local",
+      "schedule_display": "every 1440m"
+    },
+    {
+      "last_status": "ok",
+      "failure_streak": 0,
+      "paused_at": "2026-11-18T05:10:00+09:00",
+      "paused_reason": "Run on demand only (itonami-agent-kbb cron run <id>); no schedule until the owner decides ADR 0042 O1-O5.",
+      "skills": [],
+      "origin": null,
+      "model": null,
+      "no_agent": true,
+      "enabled_toolsets": null,
+      "workdir": null,
+      "next_run_at": null,
+      "repeat": {
+        "times": null,
+        "completed": 1
+      },
+      "last_run_at": "2026-11-18T05:04:25.043000+09:00",
+      "enabled": false,
+      "id": "881b5d26983b",
+      "provider": null,
+      "name": "fin-draft-inbox",
+      "schedule": {
+        "kind": "interval",
+        "minutes": 1440,
+        "display": "every 1440m"
+      },
+      "base_url": null,
+      "script": "fin_draft_inbox.cljk",
+      "prompt": "",
+      "monitor_url": null,
+      "monitor_script": null,
+      "state": "error",
+      "context_from": null,
+      "created_at": "2026-11-18T05:10:00+09:00",
+      "skill": null,
+      "last_delivery_error": null,
+      "last_error": "Failed to compute next run for recurring schedule.",
+      "deliver": "local",
+      "schedule_display": "every 1440m"
+    }
+  ],
+  "updated_at": "2026-11-18T05:05:31.343000+09:00"
+}
