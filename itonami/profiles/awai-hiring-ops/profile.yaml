@@ -1,0 +1,2 @@
+name: awai-hiring-ops
+description: Check the user's own company's job postings against recruit and isic-6399 gates, publish them to a host-local index and search it; never post externally

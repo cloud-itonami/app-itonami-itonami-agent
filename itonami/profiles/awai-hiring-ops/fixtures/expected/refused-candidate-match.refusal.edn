@@ -1,0 +1,1 @@
+{:request/id "refused-candidate-match", :kind :match-candidates, :reason :unsupported-kind, :detail "supported kinds: :publish :search"}

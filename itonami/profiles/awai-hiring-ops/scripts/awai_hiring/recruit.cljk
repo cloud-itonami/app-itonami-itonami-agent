@@ -1,0 +1,58 @@
+(ns awai-hiring.recruit
+  "Loads cloud-itonami/recruit's own gate source for awai-hiring-ops
+  (AWAI-3173).
+
+  recruit's only source is src/recruit/murakumo.kotoba. The kbb engine
+  resolves namespaces from .cljk/.cljs/.cljc files only, so
+  `(require 'recruit.murakumo)` fails although scripts/deps.edn puts the
+  pinned recruit checkout on the classpath (measured 2026-11-18,
+  org-babashka-nbb 1675e6a: `Could not find namespace: recruit.murakumo`).
+
+  This namespace finds that file on the classpath, refuses it unless its
+  SHA-256 is the pinned digest, and evaluates it unchanged. Nothing is copied
+  or rewritten; a different file fails closed. recruit's own dependency
+  (kotoba-lang/kotoba lib/kotoba.text) is pinned in scripts/deps.edn at
+  recruit's own sha."
+  (:require ["node:fs" :as fs]
+            ["node:path" :as path]
+            [clojure.string :as str]
+            [nbb.classpath :as cp]
+            [kotoba.bytes.sha256 :as sha256]
+            ;; Loaded here because recruit's ns form requires it, and a
+            ;; require inside load-string cannot load a namespace that is not
+            ;; loaded yet on nbb (namespace loading is asynchronous there).
+            [kotoba.lang.text]))
+
+(def pinned
+  "The recruit source this profile evaluates. :git/sha matches scripts/deps.edn."
+  {:repo "cloud-itonami/recruit"
+   :git/sha "cacff0c10f05215e67e886c8e9cb91a3ba9fbd01"
+   :file "recruit/murakumo.kotoba"
+   :sha256 "0450dbbfe6a57815d937bbefffd926245ccbf54971ec4f0e3b37de9e02b255bd"})
+
+(defn- locate []
+  (let [roots (str/split (str (cp/get-classpath)) #":")]
+    (some (fn [root]
+            (let [f (path/join root (:file pinned))]
+              (when (fs/existsSync f) f)))
+          roots)))
+
+(defn- load-recruit! []
+  (let [f (locate)]
+    (when-not f
+      (throw (ex-info "recruit source not on the classpath; is scripts/deps.edn resolved?"
+                      {:file (:file pinned)})))
+    (let [src (str (fs/readFileSync f "utf8"))
+          digest (sha256/sha256-hex src)]
+      (when-not (= digest (:sha256 pinned))
+        (throw (ex-info "recruit source digest does not match the pin; refusing to evaluate it"
+                        {:file f :expected (:sha256 pinned) :actual digest})))
+      (load-string src)
+      f)))
+
+(def loaded-from (load-recruit!))
+
+(defn cell-plan
+  "recruit.murakumo/cell-plan, from the verified source."
+  [cell input]
+  ((resolve 'recruit.murakumo/cell-plan) cell input))

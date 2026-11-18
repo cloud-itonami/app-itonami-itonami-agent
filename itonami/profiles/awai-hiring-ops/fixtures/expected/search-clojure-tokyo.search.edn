@@ -1,0 +1,1 @@
+{:request/id "search-clojure-tokyo", :query {:text "engineer", :location "Tokyo", :skill "Clojure"}, :hits [{:postingId "posting-001", :title "Backend Engineer", :employer "Example Logistics KK", :location "Tokyo"}]}

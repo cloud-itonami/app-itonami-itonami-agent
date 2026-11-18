@@ -1,0 +1,4 @@
+;; Fictional test values only. Finds posting-001 (published above).
+{:kind :search,
+ :query {:text "engineer", :location "Tokyo", :skill "Clojure"},
+ :request/id "search-clojure-tokyo"}

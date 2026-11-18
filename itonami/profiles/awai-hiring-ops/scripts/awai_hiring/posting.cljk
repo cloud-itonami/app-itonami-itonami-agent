@@ -1,0 +1,216 @@
+(ns awai-hiring.posting
+  "Job postings for the awai-hiring-ops profile (AWAI-3173).
+
+  Scope: network-awai-apex ADR 0043 S1 -- the user's own company's hiring
+  only. A `:publish` request carries one posting of the user's own company
+  and the operator's recruit attestations. `publish` holds it to
+
+    1. the S1 boundary (own company, fictional or own data, local index only),
+    2. the content checks of the isic-6399 Job Search Portal Governor
+       (network-awai/app-itonami-cloud-itonami-isic-6399 6f076c1,
+       src/jobsearchops/governor.cljk: stale-vacancy, ad-content-
+       discriminatory, displayed-compensation-mismatch,
+       source-consent-unverified), re-implemented here because that
+       repository's deps resolve only inside the monorepo, and
+    3. cloud-itonami/recruit's seven common gates, through its own
+       `recruit.murakumo/cell-plan :jobposting` (pinned in scripts/deps.edn,
+       loaded digest-checked by awai-hiring.recruit).
+
+  When everything passes it returns recruit's `:ready` plan (one
+  `:mst/put-record` effect) plus an announcement draft. The caller writes the
+  record to the host-local posting index only. Otherwise it returns
+  `{:blocked ...}` with every failed check and every missing recruit gate,
+  and no effect at all.
+
+  `search` reads a posting index (a seq of published records) and returns
+  the postings that match a query.
+
+  Pure apart from awai-hiring.recruit reading recruit's pinned source once
+  when it loads: no other I/O, no clock, no network. Nothing here posts to LinkedIn,
+  Indeed, a job board or anyone; the user posts an announcement themselves
+  (ADR 0043 D2, D3)."
+  (:require [clojure.string :as str]
+            [awai-hiring.recruit :as recruit]
+            [kotoba.bytes.sha256 :as sha256]))
+
+(def sources
+  "Where the gates come from; scripts/deps.edn pins the same recruit sha."
+  {:recruit {:repo "cloud-itonami/recruit" :path "src/recruit/murakumo.kotoba"
+             :sha "cacff0c10f05215e67e886c8e9cb91a3ba9fbd01"}
+   :isic-6399 {:repo "network-awai/app-itonami-cloud-itonami-isic-6399"
+               :path "src/jobsearchops/governor.cljk"
+               :sha "6f076c10456a1f34d10d96b8609e317abcdf7554"}
+   :library {:repo "kotoba-lang/kotoba" :paths ["lib/kotoba.bytes"]
+             :sha "2e3b9ef25f06ef98924daa450c36da1b7c712189"}})
+
+(def allowed-requirements
+  "What a posting may state as a requirement. Anything else is refused, so a
+  requirement nobody reviewed cannot slip in."
+  #{:skills :experience-years :languages :certifications :work-authorization :work-hours :location})
+
+(def protected-requirements
+  "Characteristics an advertisement must never require (the isic-6399
+  ad-content-discriminatory check; equal-treatment law on job ads)."
+  #{:age :birth-date :gender :sex :sexual-orientation :marital-status :family
+    :pregnancy :nationality :race :ethnicity :birthplace :religion :belief
+    :disability :health :photo :union-membership})
+
+(def allowed-origins #{:fixture :user-supplied})
+
+(def open-points
+  "Stated on every plan: what publishing here does not establish."
+  ["Published to the host-local posting index only. Not posted to LinkedIn, Indeed or any job board; the user posts the announcement themselves (ADR 0043 D2, D3)."
+   "recruit attestations are the operator's statements; this profile records them and does not verify them."
+   "Only the user's own company's hiring (ADR 0043 S1). Publishing for other employers is 特定募集情報等提供 (S3) and waits on owner decision O1."])
+
+;; ---------------------------------------------------------------- checks
+
+(defn- check [id source ok? detail]
+  (cond-> {:check id :source source :result (if ok? :pass :fail)}
+    (not ok?) (assoc :detail detail)))
+
+(defn- displayed-pay-matches?
+  "isic-6399 displayed-compensation-mismatch, in integer minor units:
+  hourly wage x monthly hours must equal the displayed monthly pay."
+  [{:keys [hourly-wage-minor monthly-hours displayed-monthly-minor]}]
+  (and (integer? hourly-wage-minor) (integer? monthly-hours) (integer? displayed-monthly-minor)
+       (= (* hourly-wage-minor monthly-hours) displayed-monthly-minor)))
+
+(defn checks
+  "The S1 boundary and the isic-6399 content checks, all evaluated so a
+  blocked result names every one that failed."
+  [{:keys [on-behalf-of requester-org-did posting target] :as request}]
+  (let [origin (:data/origin request)
+        req-keys (set (keys (:requirements posting)))
+        protected (sort (filter protected-requirements req-keys))
+        unknown (sort (remove (into allowed-requirements protected-requirements) req-keys))
+        pay (:pay posting)]
+    [(check :hiring/own-company :s1
+            (and (= :own-company on-behalf-of)
+                 (some? requester-org-did)
+                 (= requester-org-did (:employer-did posting)))
+            "Only the user's own company's postings (ADR 0043 S1): the posting's employer DID must be the requester's organisation DID. Publishing for other employers is S3 (owner decision O1).")
+     (check :hiring/fixture-or-own-data :s1 (contains? allowed-origins origin)
+            (str "data origin must be one of " (sort allowed-origins) "; got " (pr-str origin)))
+     (check :hiring/local-index-only :s1 (= :local-index target)
+            (str "the only publication target is :local-index; posting to LinkedIn, Indeed or a job board is not a bot effect (ADR 0043 D3); got "
+                 (pr-str target)))
+     (check :isic-6399/stale-vacancy :isic-6399 (false? (:vacancy-closed? posting))
+            "the vacancy is closed (or not stated open); a closed vacancy is never published (職業安定法5条の4 的確表示)")
+     (check :isic-6399/ad-content-discriminatory :isic-6399
+            (and (empty? protected) (empty? unknown) (not (true? (:ad-content-discriminatory? posting))))
+            (cond
+              (seq protected) (str "the posting requires protected characteristics: " (pr-str (vec protected)))
+              (seq unknown) (str "requirements outside the reviewed set " (sort allowed-requirements) ": " (pr-str (vec unknown)))
+              :else "the posting is marked :ad-content-discriminatory? true"))
+     (check :isic-6399/displayed-compensation-mismatch :isic-6399 (displayed-pay-matches? pay)
+            (str "hourly-wage-minor x monthly-hours must equal displayed-monthly-minor; got " (pr-str pay)))
+     (check :isic-6399/source-consent-unverified :isic-6399
+            (or (not (true? (:requires-source-consent? posting)))
+                (true? (:source-consent-verified? posting)))
+            "the posting comes from a source that requires republication consent, and the consent is not verified")]))
+
+;; ---------------------------------------------------------------- publish
+
+(defn- record-of
+  "The posting record recruit plans to put. Only what a public job ad shows."
+  [{:keys [posting]}]
+  (let [{:keys [id title employer employer-did location occupation-isco requirements pay]} posting]
+    {:rkey id
+     :postingId id
+     :title title
+     :employer employer
+     :employerDid employer-did
+     :location location
+     :occupationIsco occupation-isco
+     :requirements requirements
+     :displayedMonthlyMinor (:displayed-monthly-minor pay)
+     :currency (:currency pay)}))
+
+(defn- announcement-text
+  [{:keys [posting announcement]}]
+  (let [{:keys [title employer location requirements pay]} posting]
+    (str title " at " employer " (" location ")\n\n"
+         (when-let [s (seq (:skills requirements))] (str "Skills: " (str/join ", " s) "\n"))
+         (when-let [y (:experience-years requirements)] (str "Experience: " y "+ years\n"))
+         "Monthly pay: " (:displayed-monthly-minor pay) " " (:currency pay) " (minor units)\n\n"
+         (when-let [c (:call-to-action announcement)] (str c "\n")))))
+
+(defn request-digest [request] (sha256/sha256-hex (pr-str request)))
+
+(defn publish
+  "Plan one publication.
+
+  Request: {:request/id string :kind :publish :on-behalf-of :own-company
+            :requester-org-did did :data/origin :fixture|:user-supplied
+            :target :local-index :computed-at iso-string
+            :attestations {<recruit gate> true ...}
+            :posting {...} :announcement {:call-to-action string?}}
+
+  Returns {:plan {...} :announcement string} when every check passes and
+  recruit returns :ready, otherwise {:blocked {...}}."
+  [request]
+  (let [id (:request/id request)
+        cs (checks request)
+        failed (filterv #(= :fail (:result %)) cs)
+        plan (recruit/cell-plan :jobposting
+                                {:attestations (:attestations request)
+                                 :computed-at (:computed-at request)
+                                 :request-id id
+                                 :record (record-of request)})
+        missing (:missing-gates plan)]
+    (if (or (seq failed) (seq missing))
+      {:blocked {:request/id id
+                 :failed-checks (mapv :check failed)
+                 :recruit {:status (:status plan) :missing-gates missing}
+                 :checks cs}}
+      (let [text (announcement-text request)]
+        {:announcement text
+         :plan {:kind "awai.hiring-draft/1"
+                :domain :hiring
+                :request/id id
+                :artifact {:type :job-announcement :body-sha256 (sha256/sha256-hex text)}
+                :checks cs
+                :recruit {:status (:status plan)
+                          :required-gates (:required-gates plan)
+                          :missing-gates missing
+                          :effects (:effects plan)}
+                :index-target :local-index
+                :sources [{:request-sha256 (request-digest request)}]
+                :open-points open-points
+                :produced-by {:profile "awai-hiring-ops" :gates sources}
+                :sent? false}}))))
+
+;; ---------------------------------------------------------------- search
+
+(defn- matches? [{:keys [text location skill]} record]
+  (and (or (nil? text)
+           (some #(str/includes? (str/lower-case (str %)) (str/lower-case text))
+                 [(:title record) (:employer record)]))
+       (or (nil? location) (= location (:location record)))
+       (or (nil? skill) (some #{skill} (get-in record [:requirements :skills])))))
+
+(defn search
+  "Find published records in `index` (a seq of records as put by a ready
+  plan) that match the query {:text s? :location s? :skill s?}."
+  [index {:keys [query] :as request}]
+  {:request/id (:request/id request)
+   :query query
+   :hits (->> index
+              (filter #(matches? query %))
+              (sort-by :postingId)
+              (mapv #(select-keys % [:postingId :title :employer :location])))})
+
+(defn handle
+  "Dispatch one request. `:search` needs the current index."
+  [index request]
+  (case (:kind request)
+    :publish (publish request)
+    :search {:search (search index request)}
+    {:refusal {:request/id (:request/id request) :kind (:kind request) :reason :unsupported-kind
+               :detail "supported kinds: :publish :search"}}))
+
+(defn published-record
+  "The record a ready plan puts, for writing it to the index."
+  [plan]
+  (get-in plan [:recruit :effects 0 :record]))

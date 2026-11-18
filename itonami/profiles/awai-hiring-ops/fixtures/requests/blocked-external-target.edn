@@ -1,0 +1,36 @@
+;; Fictional test values only. Negative control: exactly one change from
+;; publish-backend-engineer.edn. hiring/local-index-only: the request asks to post to LinkedIn.
+{:request/id "blocked-external-target",
+ :announcement {:call-to-action "Apply through our careers page."},
+ :attestations
+ {:council-charter-attestation true,
+  :no-platform-held-key-baseline true,
+  :no-probing-baseline true,
+  :murakumo-only-inference-baseline true,
+  :did-primary-baseline true,
+  :append-only-gate-baseline true,
+  :kotoba-only-substrate-baseline true},
+ :data/origin :fixture,
+ :on-behalf-of :own-company,
+ :computed-at "2026-11-18T10:00:00+09:00",
+ :requester-org-did "did:web:example-logistics.example",
+ :kind :publish,
+ :target :linkedin,
+ :posting
+ {:requirements
+  {:skills ["Clojure" "PostgreSQL"],
+   :experience-years 3,
+   :languages ["ja"]},
+  :employer "Example Logistics KK",
+  :occupation-isco "2512",
+  :vacancy-closed? false,
+  :requires-source-consent? false,
+  :title "Backend Engineer",
+  :id "posting-001",
+  :pay
+  {:hourly-wage-minor 3000,
+   :monthly-hours 160,
+   :displayed-monthly-minor 480000,
+   :currency "JPY"},
+  :employer-did "did:web:example-logistics.example",
+  :location "Tokyo"}}

@@ -1,0 +1,20 @@
+;; Dependencies of this profile's scripts, read by kbb when the itonami-agent
+;; cron runner starts a script here (cwd = scripts/). Pinned by sha:
+;; - cloud-itonami/recruit: the seven common gates and cell-plan;
+;; - kotoba-lang/kotoba lib/kotoba.text at recruit's own pin: recruit requires
+;;   kotoba.lang.text, and kbb's deps door did not put recruit's transitive
+;;   deps on the classpath (measured 2026-11-18), so it is named here;
+;; - kotoba-lang/kotoba lib/kotoba.bytes: SHA-256 (same pin as the other
+;;   awai-* profiles).
+{:paths ["."]
+ :deps {io.github.cloud-itonami/recruit
+        {:git/url "https://github.com/cloud-itonami/recruit.git"
+         :git/sha "cacff0c10f05215e67e886c8e9cb91a3ba9fbd01"}
+        io.github.kotoba-lang/text
+        {:git/url "https://github.com/kotoba-lang/kotoba.git"
+         :git/sha "4bf68e1a1b205674c70f386d59e430801fae3572"
+         :deps/root "lib/kotoba.text"}
+        io.github.kotoba-lang/bytes
+        {:git/url "https://github.com/kotoba-lang/kotoba.git"
+         :git/sha "2e3b9ef25f06ef98924daa450c36da1b7c712189"
+         :deps/root "lib/kotoba.bytes"}}}

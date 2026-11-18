@@ -1,0 +1,28 @@
+;; Fictional test values only: no real company, DID or posting.
+;; The user's own company's posting (ADR 0043 S1); every check and all seven
+;; recruit gates pass, so recruit returns :ready.
+{:request/id "publish-backend-engineer"
+ :kind :publish
+ :on-behalf-of :own-company
+ :requester-org-did "did:web:example-logistics.example"
+ :data/origin :fixture
+ :target :local-index
+ :computed-at "2026-11-18T10:00:00+09:00"
+ :attestations {:council-charter-attestation true
+                :no-platform-held-key-baseline true
+                :no-probing-baseline true
+                :murakumo-only-inference-baseline true
+                :did-primary-baseline true
+                :append-only-gate-baseline true
+                :kotoba-only-substrate-baseline true}
+ :posting {:id "posting-001"
+           :title "Backend Engineer"
+           :employer "Example Logistics KK"
+           :employer-did "did:web:example-logistics.example"
+           :location "Tokyo"
+           :occupation-isco "2512"
+           :vacancy-closed? false
+           :requires-source-consent? false
+           :requirements {:skills ["Clojure" "PostgreSQL"] :experience-years 3 :languages ["ja"]}
+           :pay {:hourly-wage-minor 3000 :monthly-hours 160 :displayed-monthly-minor 480000 :currency "JPY"}}
+ :announcement {:call-to-action "Apply through our careers page."}}
