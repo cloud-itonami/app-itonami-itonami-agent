@@ -1,0 +1,90 @@
+;; Run the contributions placed in <profile>/workspace/inbox/ through the
+;; reward pipeline (AWAI-3208).
+;;
+;; Each <name>.edn holds one request: the server-resolved contribution record,
+;; its training-use receipt and the epoch pool (see fixtures/requests/). For a
+;; request that passes every stage it writes, under <profile>/workspace/:
+;;   records/<id>.rights.edn      the rights and consent decision
+;;   records/<id>.use.edn         the training-use decision
+;;   requests/<id>.request.edn    the awai.training-reward-request/1
+;;   results/<id>.result.edn      the test-stage calculation
+;;   receipts/<id>.receipt.edn    sha256 of each file above, written and read back
+;; and refusals/<id>.refusal.edn otherwise. index/content.edn is the bot's
+;; duplicate index (content sha256 -> contribution id). The workspace is
+;; host-local and never part of the profile bundle.
+;;
+;; Nothing is paid, minted, reserved, signed or sent. Run by itonami-agent as a
+;; no-agent cron job (cwd = scripts/).
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[cljs.reader :as reader]
+         '[awai-contrib.contract :as contract])
+
+(def pin (contract/load!))
+(require '[awai-contrib.flow :as flow])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def ws (path/join home "workspace"))
+(def inbox (path/join ws "inbox"))
+(def index-file (path/join ws "index" "content.edn"))
+
+(defn slurp [p] (str (fs/readFileSync p "utf8")))
+
+(defn write-read-back!
+  "Write `value`, read the file back and check both its bytes and its value.
+  Returns {:file <relative path> :sha256 <hex>} or throws."
+  [rel value]
+  (let [abs (path/join ws rel)
+        text (str (pr-str value) "\n")]
+    (fs/mkdirSync (path/dirname abs) #js {:recursive true})
+    (fs/writeFileSync abs text)
+    (let [back (slurp abs)]
+      (when-not (and (= text back) (= value (reader/read-string back)))
+        (throw (ex-info (str "read-back mismatch: " rel) {:file rel})))
+      {:file rel :sha256 (contract/sha256-hex back)})))
+
+(def index (atom (if (fs/existsSync index-file) (reader/read-string (slurp index-file)) {})))
+
+(fs/mkdirSync inbox #js {:recursive true})
+(let [files (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync inbox))))
+      failed (atom 0)]
+  (doseq [file files]
+    (let [request (reader/read-string (slurp (path/join inbox file)))
+          id (:request/id request)
+          out (flow/process request @index pin)]
+      (if (= :refused (:outcome out))
+        (let [r {:schema "awai.contribution-refusal/1" :request/id id
+                 :stage (:stage out) :error (:error out) :payout? false}]
+          (if (flow/intake-error request)
+            (println (str "skip     " file "  " (name (:error out))))
+            (do (write-read-back! (str "refusals/" id ".refusal.edn") r)
+                (println (str "refused  " id "  " (name (:stage out)) " " (name (:error out)))))))
+        (let [record (:contribution request)
+              _ (swap! index assoc (.toLowerCase (:contribution/content-sha256 record))
+                       (:contribution/id record))
+              _ (write-read-back! "index/content.edn" @index)
+              files* [(write-read-back! (str "records/" id ".rights.edn")
+                                        {:request/id id :decision (:rights out)})
+                      (write-read-back! (str "records/" id ".use.edn")
+                                        {:request/id id :decision (:use out)})
+                      (write-read-back! (str "requests/" id ".request.edn") (:request out))
+                      (write-read-back! (str "results/" id ".result.edn") (:result out))]
+              result-back (reader/read-string (slurp (path/join ws "results" (str id ".result.edn"))))
+              problems (flow/readback-problems (:request out) result-back)
+              receipt {:schema "awai.contribution-receipt/1" :request/id id
+                       :contract (select-keys pin [:repo :sha :stage :files])
+                       :files files* :read-back (if problems {:ok? false :problems problems} {:ok? true})
+                       :payout? false}]
+          (write-read-back! (str "receipts/" id ".receipt.edn") receipt)
+          (if problems
+            (do (swap! failed inc)
+                (println (str "FAIL     " id "  read-back " (pr-str problems))))
+            (println (str "requested " id "  epoch " (get-in out [:request :epoch/id])
+                          "  allocations " (pr-str (mapv (juxt :training/human-id :training/yata-units)
+                                                         (get-in out [:result :allocations])))
+                          "  unallocated " (get-in out [:result :unallocated-units])
+                          "  result sha256=" (:sha256 (nth files* 3)))))))))
+  (println (str (count files) " request(s) read from workspace/inbox; contract "
+                (:repo pin) "@" (subs (:sha pin) 0 7)))
+  (when (pos? @failed) (js/process.exit 1)))

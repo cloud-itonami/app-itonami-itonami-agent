@@ -1,0 +1,46 @@
+;; Fixture test for the awai-data-contribution-rewards pipeline (AWAI-3208).
+;;
+;; Runs every request in <profile>/fixtures/requests/ through awai-contrib.flow
+;; with an empty duplicate index (or the fixture's :fixture/known-content) and
+;; compares the whole outcome with <profile>/fixtures/expected/<id>.edn.
+;; The fixtures include refusals: a contribution without a rights basis must
+;; never reach a reward request. Prints one line per fixture and exits 1 on
+;; any difference. Reads only; it writes nothing.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/).
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[cljs.reader :as reader]
+         '[awai-contrib.contract :as contract])
+
+(def pin (contract/load!))
+(require '[awai-contrib.flow :as flow])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def requests-dir (path/join home "fixtures" "requests"))
+(def expected-dir (path/join home "fixtures" "expected"))
+
+(defn read-edn [p] (when (fs/existsSync p) (reader/read-string (str (fs/readFileSync p "utf8")))))
+
+(let [files (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync requests-dir))))
+      results (mapv (fn [file]
+                      (let [request (read-edn (path/join requests-dir file))
+                            id (:request/id request)
+                            actual (flow/process request (or (:fixture/known-content request) {}) pin)
+                            expected (read-edn (path/join expected-dir (str id ".edn")))
+                            readback (when (= :requested (:outcome actual))
+                                       (flow/readback-problems (:request actual) (:result actual)))]
+                        {:id id :outcome (:outcome actual)
+                         :ok? (and (= expected actual) (nil? readback))
+                         :problem (cond-> nil
+                                    (not= expected actual) (assoc :expected expected :actual actual)
+                                    readback (assoc :readback readback))}))
+                    files)
+      failed (remove :ok? results)]
+  (doseq [{:keys [id outcome ok? problem]} results]
+    (println (str (if ok? "ok    " "FAIL  ") (name outcome) "  " id))
+    (when problem (prn problem)))
+  (println (str (count results) " fixtures, " (count failed) " failed; contract "
+                (:repo pin) "@" (subs (:sha pin) 0 7)))
+  (when (seq failed) (js/process.exit 1)))
