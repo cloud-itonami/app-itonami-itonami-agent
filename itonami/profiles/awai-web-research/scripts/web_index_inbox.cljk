@@ -1,0 +1,56 @@
+;; Build the index draft from the Kumade snapshots the user placed in
+;; <profile>/workspace/inbox/*.json (AWAI-3164, network-awai-apex ADR 0043 D5, D8).
+;;
+;; Writes, under <profile>/workspace/:
+;;   drafts/<batch>.edn   the awai.web-index-draft/1 bundle (host-local, not published)
+;;   awai/<batch>.awai    its index rows as an Awai file (awai.table/1, CARv2, DAG-CBOR)
+;; and prints the batch id and the .awai root CID. Nothing is fetched or uploaded:
+;; persisting to Yataverse is the separate, approval-gated job web-index-persist.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/).
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '["node:crypto" :as crypto]
+         '[awai.fs.document :as doc]
+         '[awai-web-research.index :as ix])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def inbox (path/join home "workspace" "inbox"))
+(def drafts (path/join home "workspace" "drafts"))
+(def awai-dir (path/join home "workspace" "awai"))
+(def max-file-bytes (* 4 1024 1024))
+
+(defn hash-bytes [v] (vec (js/Array.from (.digest (.update (.createHash crypto "sha256") (js/Buffer.from (clj->js (vec v))))))))
+
+(defn read-snapshot [file]
+  (let [p (path/join inbox file) st (fs/lstatSync p)]
+    (cond
+      (not (.isFile st)) {"id" file "_skip" "not a regular file"}
+      (> (.-size st) max-file-bytes) {"id" file "_skip" "over 4 MiB"}
+      :else (try (js->clj (js/JSON.parse (str (fs/readFileSync p "utf8"))))
+                 (catch :default _ {"id" file "_skip" "not JSON"})))))
+
+(let [files (if (fs/existsSync inbox)
+              (vec (sort (filter #(.endsWith % ".json") (js->clj (fs/readdirSync inbox)))))
+              [])
+      parsed (mapv read-snapshot files)
+      skipped (filter #(get % "_skip") parsed)]
+  (doseq [s skipped] (println (str "skip  " (get s "id") "  " (get s "_skip"))))
+  (if (empty? files)
+    (println "0 snapshot(s) in workspace/inbox")
+    (let [{:keys [batch file-id table bundle]} (ix/build (vec (remove #(get % "_skip") parsed)) hash-bytes)
+          rows (get table "rows")]
+      (doseq [{:keys [id reason]} (:excluded bundle)] (println (str "excluded  " id "  " (name reason))))
+      (if (empty? rows)
+        (println (str "no indexable snapshot among " (count files) " file(s)"))
+        (let [encoded (doc/encode file-id table hash-bytes)
+              bundle (assoc-in bundle [:produced-by :awai-root] (:basis encoded))]
+          ;; Decode what was encoded before writing, so a bad table never lands.
+          (doc/decode (:bytes encoded) hash-bytes)
+          (fs/mkdirSync drafts #js {:recursive true})
+          (fs/mkdirSync awai-dir #js {:recursive true})
+          (fs/writeFileSync (path/join drafts (str batch ".edn")) (str (pr-str bundle) "\n"))
+          (fs/writeFileSync (path/join awai-dir (str batch ".awai")) (js/Buffer.from (clj->js (:bytes encoded))))
+          (println (str "indexed  " batch "  " (count rows) " row(s)  root " (:basis encoded)))))
+      (println (str (count files) " snapshot file(s) read from workspace/inbox")))))

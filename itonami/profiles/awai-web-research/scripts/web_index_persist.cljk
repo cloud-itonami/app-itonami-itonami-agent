@@ -1,0 +1,124 @@
+;; Persist index Awai files to Yataverse, one approved write at a time
+;; (AWAI-3164, network-awai-apex ADR 0043 D8; capability storage_upload :approval-required).
+;;
+;; For each workspace/awai/<batch>.awai this job looks for the user's approval
+;; workspace/approvals/<batch>.edn:
+;;   {:approval/operation "yataverse car-put" :approval/root "<root CID of that .awai>"
+;;    :approval/destination "<Yataverse write URL>" :approval/by "<who>" :approval/at "<ISO time>"}
+;; Without a matching approval nothing is sent. With one it runs, through the
+;; yataverse CLI named by YATAVERSE_CLI:
+;;   car-put <file>                     write (the CLI exports it back and compares)
+;;   car-get <root> -o <tmp> --scope all independent readback
+;; then checks every block of the readback against the local file, records
+;; workspace/receipts/<batch>.persist.edn and renames the approval to .used
+;; (an approval is good for one write).
+;;
+;; AwaiFS volume: when AWAI_VOL_DIR is set, the .awai is also copied there and read
+;; back. If that directory is missing or does not answer, the job stops; it never
+;; writes to a substitute directory.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/).
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '["node:os" :as os]
+         '["node:crypto" :as crypto]
+         '["node:child_process" :as cp]
+         '[cljs.reader :as reader]
+         '[clojure.string :as str]
+         '[awai.fs.car :as car]
+         '[awai.fs.document :as doc])
+
+(def env (.-env js/process))
+(def home (or (aget env "ITONAMI_PROFILE_HOME") (path/resolve (js/process.cwd) "..")))
+(def ws (path/join home "workspace"))
+(def awai-dir (path/join ws "awai"))
+(def approvals (path/join ws "approvals"))
+(def receipts (path/join ws "receipts"))
+
+(defn hash-bytes [v] (vec (js/Array.from (.digest (.update (.createHash crypto "sha256") (js/Buffer.from (clj->js (vec v))))))))
+(defn read-bytes [p] (vec (js/Array.from (fs/readFileSync p))))
+(defn now [] (.toISOString (js/Date.)))
+
+(defn cli-argv [args]
+  (let [cli (aget env "YATAVERSE_CLI")]
+    (when-not (seq cli) (throw (ex-info "YATAVERSE_CLI is not set" {})))
+    (if (re-find #"\.m?js$" cli) (into [(.-execPath js/process) cli] args) (into [cli] args))))
+
+(defn yataverse! [args]
+  (let [[cmd & more] (cli-argv args)
+        r (cp/spawnSync cmd (clj->js more) #js {:encoding "utf8" :timeout 180000 :env env})]
+    {:status (.-status r) :stdout (str (.-stdout r)) :stderr (str (.-stderr r))}))
+
+(defn destination []
+  ;; `status` reads local configuration only (names, no secrets, no request).
+  (let [{:keys [status stdout]} (yataverse! ["status"])]
+    (when (zero? status) (get (js->clj (js/JSON.parse stdout)) "url"))))
+
+(defn block-set [blocks] (into #{} (map (fn [{:keys [cid bytes]}] [(vec cid) (vec bytes)]) blocks)))
+
+(defn verified-readback
+  "Every block in the readback CAR hashes to its CID, and the local block set is in it."
+  [local-bytes readback-bytes]
+  (let [local (car/carv2-decode local-bytes)
+        back (car/carv1-decode readback-bytes)
+        hashes-ok (every? (fn [{:keys [cid bytes]}] (= (vec (drop 4 cid)) (hash-bytes bytes))) (:blocks back))]
+    {:roots-match (= (map vec (:roots local)) (map vec (:roots back)))
+     :blocks-hash-ok hashes-ok
+     :local-blocks (count (:blocks local))
+     :readback-blocks (count (:blocks back))
+     :local-blocks-present (every? (block-set (:blocks back)) (block-set (:blocks local)))}))
+
+(defn awai-vol! [file batch root]
+  (let [dir (aget env "AWAI_VOL_DIR")]
+    (cond
+      (not (seq dir)) {:awai-vol :not-configured}
+      :else
+      (let [probe (cp/spawnSync "test" #js ["-d" dir "-a" "-w" dir] #js {:timeout 10000})]
+        (when-not (zero? (.-status probe))
+          (throw (ex-info (str "AWAI_VOL_DIR " dir " is missing or did not answer; stopping without a substitute") {})))
+        (let [target (path/join dir (str batch ".awai"))]
+          (fs/copyFileSync file target)
+          (let [back (read-bytes target)]
+            {:awai-vol {:path target :root (:basis (doc/decode back hash-bytes))
+                        :match (= root (:basis (doc/decode back hash-bytes)))}}))))))
+
+(defn persist! [batch file]
+  (let [bytes (read-bytes file)
+        root (:basis (doc/decode bytes hash-bytes))
+        ap (path/join approvals (str batch ".edn"))
+        approval (when (fs/existsSync ap) (reader/read-string (str (fs/readFileSync ap "utf8"))))]
+    (cond
+      (nil? approval)
+      (println (str "not approved  " batch "  root " root "  (no workspace/approvals/" batch ".edn; nothing sent)"))
+
+      (not (and (= "yataverse car-put" (:approval/operation approval)) (= root (:approval/root approval))
+                (seq (:approval/by approval)) (seq (:approval/at approval))))
+      (println (str "not approved  " batch "  approval does not name this operation and root " root "; nothing sent"))
+
+      :else
+      (let [dest (destination)]
+        (if (not= dest (:approval/destination approval))
+          (println (str "not approved  " batch "  approval destination " (:approval/destination approval)
+                        " differs from configured " dest "; nothing sent"))
+          (let [put (yataverse! ["car-put" file])
+                tmp (path/join (os/tmpdir) (str "awai-web-research-" batch "-" (.randomUUID crypto) ".car"))
+                get* (when (zero? (:status put)) (yataverse! ["car-get" root "-o" tmp "--scope" "all"]))
+                check (when (and get* (zero? (:status get*)) (fs/existsSync tmp)) (verified-readback bytes (read-bytes tmp)))
+                ok (and check (every? true? (vals (select-keys check [:roots-match :blocks-hash-ok :local-blocks-present]))))
+                vol (when ok (awai-vol! file batch root))
+                receipt (merge {:kind "awai.web-index-persist/1" :batch batch :root root :destination dest
+                                :approval (select-keys approval [:approval/by :approval/at])
+                                :car-put {:status (:status put) :stdout (str/trim (:stdout put)) :stderr (str/trim (:stderr put))}
+                                :car-get (when get* {:status (:status get*) :stderr (str/trim (:stderr get*))})
+                                :readback check :ok (boolean ok) :at (now)}
+                               vol)]
+            (when (fs/existsSync tmp) (fs/unlinkSync tmp))
+            (fs/mkdirSync receipts #js {:recursive true})
+            (fs/writeFileSync (path/join receipts (str batch ".persist.edn")) (str (pr-str receipt) "\n"))
+            (fs/renameSync ap (str ap ".used"))
+            (println (str (if ok "persisted  " "FAILED  ") batch "  root " root "  to " dest))
+            (when-not ok (set! (.-exitCode js/process) 1))))))))
+
+(let [files (if (fs/existsSync awai-dir) (vec (sort (filter #(.endsWith % ".awai") (js->clj (fs/readdirSync awai-dir))))) [])]
+  (doseq [f files] (persist! (subs f 0 (- (count f) 5)) (path/join awai-dir f)))
+  (println (str (count files) " index file(s) in workspace/awai")))

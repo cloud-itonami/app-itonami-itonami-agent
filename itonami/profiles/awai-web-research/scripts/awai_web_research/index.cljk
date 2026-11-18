@@ -1,0 +1,114 @@
+(ns awai-web-research.index
+  "Pure: Kumade snapshots -> an awai.web-index-draft/1 bundle and the awai.table/1
+  rows that are persisted (network-awai-apex ADR 0043 D5, D8; AWAI-3164).
+
+  The hash function is passed in (bytes -> 32 digest bytes), so this namespace does
+  no I/O. Only index columns leave the host: page text, links and HTML never enter
+  the table."
+  (:require [clojure.string :as str]))
+
+(def limits {:max-snapshots 100 :max-url 2048 :max-title 200 :max-summary 280 :max-tags 8})
+
+(def columns
+  [{"name" "id" "type" "string"}
+   {"name" "snapshot" "type" "string"}
+   {"name" "requested_url" "type" "string"}
+   {"name" "final_url" "type" "string"}
+   {"name" "captured_at" "type" "string"}
+   {"name" "title" "type" "string"}
+   {"name" "summary" "type" "string"}
+   {"name" "tags" "type" "string"}
+   {"name" "lang" "type" "string"}
+   {"name" "duplicate_of" "type" "string"}])
+
+(defn- code-points [s] #?(:cljs (vec (js/Array.from s)) :default (mapv str (.toArray (.codePoints ^String s)))))
+(defn- clip
+  "Collapse whitespace and keep at most n code points (no split surrogate pair)."
+  [s n]
+  (let [s (str/trim (str/replace (str s) #"\s+" " ")) cps (code-points s)]
+    (if (<= (count cps) n) s (str (str/trimr (apply str (take (dec n) cps))) "…"))))
+
+(defn- host [url] (second (re-find #"^https?://([^/:?#]+)" url)))
+(defn- https-url? [s] (and (string? s) (<= (count s) (:max-url limits)) (some? (re-find #"^https?://[^\s/?#]+[^\s]*$" s))))
+(def ^:private private-host
+  #"(?i)^(localhost|.*\.localhost|.*\.local|.*\.internal|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|169\.254\.\d+\.\d+|0\.0\.0\.0|\[.*\])$")
+
+(defn check
+  "nil when s looks like a Kumade snapshot export, otherwise the reason keyword."
+  [s]
+  (let [x (get s "extracted")]
+    (cond
+      (not (map? s)) :not-a-snapshot
+      (not (re-matches #"sha256:[0-9a-f]{64}" (str (get s "id")))) :bad-id
+      (not (and (https-url? (get s "requestedUrl")) (https-url? (get s "finalUrl")))) :bad-url
+      (some #(re-matches private-host (or (host %) "")) [(get s "requestedUrl") (get s "finalUrl")]) :private-host
+      (not= (host (get s "requestedUrl")) (host (get s "finalUrl"))) :cross-origin-redirect
+      (not (re-matches #"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z" (str (get s "capturedAt")))) :bad-captured-at
+      (not (and (map? x) (= "kumade.extract.v1" (get x "version")))) :bad-extract
+      :else nil)))
+
+(defn noindex? [s] (boolean (re-find #"(?i)\bnoindex\b" (str (get-in s ["extracted" "robots"])))))
+
+(defn- summary
+  "The page's own description, else its body blocks without headings, else its whole text."
+  [x]
+  (let [d (str/trim (str (get x "description")))
+        body (->> (str/split (str (get x "markdown")) #"\n\n") (remove #(str/starts-with? % "#")) (str/join " "))]
+    ;; Pages without p/li/blockquote blocks (e.g. only dl/dt) fall back to their whole text.
+    (clip (cond (seq d) d (seq (str/trim body)) body :else (str (get x "text"))) (:max-summary limits))))
+
+(defn- lang
+  "Only what the text shows: kana means Japanese; otherwise undetermined."
+  [x]
+  (if (re-find #"[\u3040-\u30ff]" (str (get x "title") " " (get x "text"))) "ja" "und"))
+
+(defn- tags [s]
+  (let [u (get s "finalUrl") seg (second (re-find #"^https?://[^/]+/([^/?#]+)" u))]
+    (vec (take (:max-tags limits) (cond-> [(str "host:" (host u))] seg (conj (str "path:" (clip seg 40))))))))
+
+(defn row-id [snapshot-id] (str "sha256-" (subs snapshot-id 7)))
+
+(defn- hex [bytes] (apply str (map #(let [h (.toString (bit-and % 0xff) 16)] (if (= 1 (count h)) (str "0" h) h)) bytes)))
+
+(defn- utf8 [s] #?(:cljs (vec (js/Array.from (.encode (js/TextEncoder.) s))) :default (vec (.getBytes ^String s "UTF-8"))))
+
+(defn build
+  "snapshots: parsed Kumade exports (string keys). hash-fn: byte vector -> digest bytes.
+  Returns {:bundle .. :table {\"columns\" .. \"rows\" ..} :file-id .. :batch ..}."
+  [snapshots hash-fn]
+  (when (> (count snapshots) (:max-snapshots limits))
+    (throw (ex-info "too many snapshots" {:reason :snapshot-bound :max (:max-snapshots limits)})))
+  (let [checked (map (fn [s] [s (check s)]) snapshots)
+        rejected (vec (for [[s r] checked :when r] {:id (str (get s "id")) :reason r}))
+        ok (->> checked (remove second) (map first) (group-by #(get % "id")) vals (map first) (sort-by #(get % "id")))
+        excluded (vec (for [s ok :when (noindex? s)] {:id (get s "id") :reason :noindex}))
+        indexed (remove noindex? ok)
+        ;; Same normalized text under different snapshot ids (e.g. two URLs, one page).
+        fp (fn [s] (hex (hash-fn (utf8 (str/replace (str/trim (str (get-in s ["extracted" "text"]))) #"\s+" " ")))))
+        ;; The first of a group is the earliest capture, then the shortest final URL.
+        canonical (fn [s] [(get s "capturedAt") (count (get s "finalUrl")) (get s "finalUrl") (get s "id")])
+        groups (->> indexed (group-by fp) vals (filter #(> (count %) 1))
+                    (map #(mapv (fn [s] (get s "id")) (sort-by canonical %))) (sort-by first) vec)
+        dup-of (into {} (for [g groups id (rest g)] [id (first g)]))
+        entries (vec (for [s indexed :let [x (get s "extracted")]]
+                       {:snapshot-id (get s "id") :title (clip (get x "title") (:max-title limits))
+                        :summary (summary x) :tags (tags s) :lang (lang x)}))
+        rows (vec (for [s indexed :let [e (first (filter #(= (get s "id") (:snapshot-id %)) entries))]]
+                    {"id" (row-id (get s "id")) "snapshot" (get s "id")
+                     "requested_url" (get s "requestedUrl") "final_url" (get s "finalUrl")
+                     "captured_at" (get s "capturedAt") "title" (:title e) "summary" (:summary e)
+                     "tags" (str/join "," (:tags e)) "lang" (:lang e) "duplicate_of" (str (get dup-of (get s "id") ""))}))
+        batch (subs (hex (hash-fn (utf8 (str/join "\n" (map #(get % "id") ok))))) 0 16)]
+    {:batch batch
+     :file-id (str "awai-web-research/" batch)
+     :table {"columns" columns "rows" rows}
+     :bundle {:kind "awai.web-index-draft/1"
+              :snapshots (vec (for [s indexed] {:id (get s "id") :requested-url (get s "requestedUrl")
+                                                 :final-url (get s "finalUrl") :captured-at (get s "capturedAt")}))
+              :entries entries
+              :duplicates groups
+              :excluded (into excluded rejected)
+              :open-points (cond-> []
+                             (some #(= "und" (:lang %)) entries) (conj "lang is \"und\" where the text has no kana; no language model was run")
+                             (seq groups) (conj "duplicates are judged on identical normalized text only"))
+              :produced-by {:profile "awai-web-research" :batch batch}}}))

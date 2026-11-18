@@ -1,0 +1,19 @@
+{
+  "id": "sha256:e56820349fd58c5c791e7945f0bd7c937926c994fd2f37a82722e4ddd7777078",
+  "requestedUrl": "https://example.org/notes",
+  "finalUrl": "https://example.org/notes",
+  "capturedAt": "2026-11-18T00:00:00.000Z",
+  "byteCount": 491,
+  "extracted": {
+    "version": "kumade.extract.v1",
+    "title": "Field notes",
+    "description": "",
+    "author": "",
+    "robots": "",
+    "markdown": "# Field notes\n\nAn illustrative page with no meta description. The summary therefore comes from the page text, cut at 280 characters so that long pages stay bounded in the index. This sentence keeps going to make the text longer than the limit, so the cut and the trailing ellipsis are both exercised by the fixture test, which compares the whole bundle.",
+    "text": "Field notes Field notes An illustrative page with no meta description. The summary therefore comes from the page text, cut at 280 characters so that long pages stay bounded in the index. This sentence keeps going to make the text longer than the limit, so the cut and the trailing ellipsis are both exercised by the fixture test, which compares the whole bundle. next",
+    "links": [
+      "https://example.org/next"
+    ]
+  }
+}

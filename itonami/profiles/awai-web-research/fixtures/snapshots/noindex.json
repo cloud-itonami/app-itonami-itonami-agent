@@ -1,0 +1,17 @@
+{
+  "id": "sha256:c33ff5a0d641230416a0558566e8f755452c1b63044e075ab3b1b19b85ce6486",
+  "requestedUrl": "https://example.org/draft",
+  "finalUrl": "https://example.org/draft",
+  "capturedAt": "2026-11-18T00:00:00.000Z",
+  "byteCount": 172,
+  "extracted": {
+    "version": "kumade.extract.v1",
+    "title": "Private draft",
+    "description": "",
+    "author": "",
+    "robots": "noindex, nofollow",
+    "markdown": "This page asks not to be indexed.",
+    "text": "Private draft This page asks not to be indexed.",
+    "links": []
+  }
+}
