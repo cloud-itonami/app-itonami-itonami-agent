@@ -11,9 +11,10 @@ GitHub redirected the source push from `kotoba-lang/itonami-agent` to
 The existing local checkout is preserved; new profile source IDs use the
 current GitHub owner. Earlier Linear pointers to the former owner are historical.
 
-These are Itonami profiles. The existing `hermes/profiles/` source directory
-names the inherited file layout; these definitions belong only in the
-Itonami store, never the Hermes store. The machine-readable roster is
+These are Itonami profiles. Their source directory is `itonami/profiles/`
+(moved from `hermes/profiles/` on 2026-11-18, AWAI-3319, per root
+ADR-2610222100); these definitions belong only in the Itonami store, never
+the Hermes store. The machine-readable roster is
 [awai-growth-team.json](awai-growth-team.json). It is a source index, not a
 registry registration, grant or scheduler.
 

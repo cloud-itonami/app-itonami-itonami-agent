@@ -273,8 +273,8 @@
   normalized — content identical, reads back the same)."
   [home m]
   (hio/replace-file! (str home "/itonami.edn")
-                     (str ";; itonami profile (" (:itonami/schema m manifest/schema-v2) "). Additive to the Hermes layout:\n"
-                          ";; Hermes ignores this file; removing it returns the profile to plain Hermes.\n"
+                     (str ";; itonami profile (" (:itonami/schema m manifest/schema-v2) "). An itonami agent only (ADR-2610222100):\n"
+                          ";; it lives in itonami/profiles/ and ~/.itonami/profiles/, never in a Hermes store.\n"
                           (sorted-edn m) "\n")))
 
 (defn with-bundle

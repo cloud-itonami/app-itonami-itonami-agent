@@ -263,9 +263,14 @@ does not implement; it never silently narrows a caller's requested tool set.
 
 `profile itonamify <p>|--all` adds `itonami.edn` (schema
 `cloud.itonami.profile.v2`; v1 manifests stay valid) to a profile in the
-itonami store. The manifest is additive: deleting itonami.edn returns the
-profile to a plain Hermes-format profile, and `profile export` copies such a
-profile back into a Hermes home as-is.
+itonami store. From then on the profile is an itonami agent only
+(ADR-2610222100 §2): the written header says so, and the manifest is not an
+add-on that Hermes reads past. The rest of the files keep the Hermes file
+format, which is what `import`/`export` copy during a migration.
+
+In a repository, an itonami agent's definition lives in
+`itonami/profiles/<p>/` (ADR-2610222100 §3), never `hermes/profiles/`. This
+repository's own profiles are in [`itonami/profiles/`](itonami/profiles/).
 
 ```clojure
 {:itonami/schema "cloud.itonami.profile.v1"
