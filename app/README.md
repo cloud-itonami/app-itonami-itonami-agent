@@ -53,9 +53,45 @@ npm run build        # dist/: index.html, style.css, app.js, profiles.json
 ANDROID_HOME=… NDK_HOME=… npm run build:android      # arm64 debug APK
 ```
 
+Tauri embeds `dist/` when the Rust crate compiles, and neither Cargo nor
+Gradle notices a changed `dist/` by itself. After a UI change, run
+`touch src-tauri/src/lib.rs` and remove `src-tauri/gen/android/app/build`
+before `build:android`, then check that the APK's SHA-256 changed.
+
 The APK lands in
 `src-tauri/gen/android/app/build/outputs/apk/universal/debug/`. Install with
 `adb install -r <apk>`.
+
+## Autonomy (Org tab)
+
+Shows how far the bots get on their own by joining three files the person
+imports. Files are read on the device and kept in memory only; nothing is
+sent.
+
+| file | from | read as |
+|---|---|---|
+| organization | the `awai.bot-fleet.v1` catalog Soshiki imports, or Soshiki's saved state | circles, roles, bots, each bot's schedule |
+| board | a Dandori (or Linear) GraphQL issues export, `data.issues.nodes` | issues; a bot's issues are those assigned to it or named by its own receipts |
+| activity | `itonami.autonomy-snapshot.v1` from `scripts/autonomy-snapshot.clj` | receipts per bot and per hour, last run, Linear issues |
+
+```
+bb -cp src scripts/autonomy-snapshot.clj OUT.json RECEIPT-DIR... -- OBSERVATION.json...
+```
+
+The snapshot holds bot ids, job ids, Linear issue ids, counts and times only,
+but it is private operational data: keep it out of the repository.
+
+States come from observations only:
+- **Active**: a receipt within 24 h.
+- **Stale**: receipts exist, but none within 24 h.
+- **Scheduled**: a verified schedule with no receipt yet. A schedule alone is not evidence of a run.
+- **Held**: no source schedule, or verification failed.
+
+"Next" is the issue the bot would take under Dandori's work rules
+(`take-reason` and the ordering in `before?`, ported from
+`kotoba/dandori/work.kotoba`). An export carries no claims or blockers, so
+none are assumed. When the newest observation is older than 24 h, a banner
+says so and no bot is shown as active.
 
 ## Reaching the Agent
 

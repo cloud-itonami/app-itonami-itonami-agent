@@ -6,10 +6,12 @@
   Every Agent request goes through `globalThis.itonamiAgent` (agent-client.js,
   the shared consent broker): the person approves each one, denying sends
   nothing, and nothing is retried automatically."
+  (:refer-clojure :exclude [uuid])
   (:require [cljs.reader :as reader]
             [clojure.string :as str]
             [itonami.app.core :as core]
-            [itonami.app.chat :as chat]))
+            [itonami.app.chat :as chat]
+            [itonami.app.autonomy :as autonomy]))
 
 (def readers
   {:parse-edn reader/read-string
@@ -29,7 +31,14 @@
          :busy nil
          :notice nil
          :sent []
-         :recall nil}))
+         :recall nil
+         ;; Autonomy: files the person imported, kept in memory only.
+         :org nil
+         :board nil
+         :activity nil
+         :sources {}
+         :org-q ""
+         :circle nil}))
 
 ;; ------------------------------------------------------------ dom helpers
 
@@ -276,14 +285,162 @@
               (map session-row (cons {:id "default" :title "Bot Chat"}
                                      (remove #(= "default" (:id %)) (get sessions bot)))))))))
 
+;; ------------------------------------------------------------ autonomy
+
+(defn- now-ms [] (.now js/Date))
+
+(defn- ago [ms]
+  (when ms
+    (let [d (- (now-ms) ms) h (quot d autonomy/hour)]
+      (cond (< d 0) "just now" (< h 1) "<1 h ago" (< h 48) (str h " h ago") :else (str (quot h 24) " days ago")))))
+
+(defn- iso-min [ms] (when ms (subs (.toISOString (js/Date. ms)) 0 16)))
+
+(def state-labels {:active "Active" :stale "Stale" :scheduled "Scheduled" :held "Held" :unknown "Unknown"})
+
+(defn- read-file! [file]
+  (-> (.text file)
+      (.then (fn [text]
+               (let [v (try (js->clj (.parse js/JSON text)) (catch :default _ nil))
+                     k (autonomy/kind-of v)
+                     parsed (case k :org (autonomy/org-from v) :board (autonomy/board-from v)
+                                  :activity (autonomy/activity-from v) {:error "unrecognized file"})]
+                 (if (:error parsed)
+                   (set-state! assoc :notice (str (.-name file) ": " (:error parsed)))
+                   (do (set-state! #(-> % (assoc k parsed :view :autonomy)
+                                        (assoc-in [:sources k] (.-name file))
+                                        (assoc :notice (str "Imported " (name k) " from " (.-name file)))))
+                       (let [shown (:notice @state)]
+                         (js/setTimeout #(when (= shown (:notice @state)) (set-state! assoc :notice nil)) 5000)))))))))
+
+(defn- import-button []
+  (let [input (el :input {:type "file" :multiple true :accept "application/json,.json" :class "visually-hidden"
+                          :id "autonomy-file"})]
+    (.addEventListener input "change" (fn [_] (doseq [f (array-seq (.-files input))] (read-file! f))))
+    (el :label {:class "btn primary file-btn"} "Import files…" input)))
+
+(defn- state-dots [states]
+  (el :span {:class "dots-row"}
+      (for [k autonomy/state-order :let [n (get states k 0)] :when (pos? n)]
+        (el :span {:class (str "sdot " (name k)) :title (str (state-labels k) " " n)} (str n)))))
+
+(defn- circle-list []
+  (let [{:keys [org board activity org-q circle]} @state
+        rows (autonomy/circle-rows org activity (:issues board) (now-ms) org-q)]
+    (el :ul {:class "list" :aria-label "Circles"}
+        (for [c (take 200 rows)]
+          (el :li {:class (str "row" (when (= circle (:id c)) " selected"))}
+              (el :button {:class "row-main" :type "button"
+                           :on-click #(set-state! assoc :circle (:id c) :view :autonomy :drawer? false)}
+                  (el :span {:class "row-text"}
+                      (el :span {:class "row-title"} (:name c))
+                      (el :span {:class "row-sub"} (str (:bots c) " bots ") (state-dots (:states c))))))))))
+
+(defn- org-pane []
+  (let [{:keys [org sources]} @state
+        search (el :input {:class "search" :type "search" :placeholder "Search circles or bots"
+                           :value (:org-q @state) :aria-label "Search circles or bots"})]
+    (.addEventListener search "input"
+                       (fn [_] (swap! state assoc :org-q (.-value search))
+                         (when-let [n ($ "circle-list")] (.replaceChildren n (circle-list)))))
+    (el :div {:class "pane"}
+        (el :div {:class "pane-actions"}
+            (import-button)
+            (el :button {:class "btn" :type "button" :on-click #(set-state! assoc :view :autonomy :circle nil :drawer? false)}
+                "Overview"))
+        (el :p {:class "row-sub sources"}
+            (str/join " · " (for [k [:org :board :activity]]
+                              (str (case k :org "Org" :board "Board" :activity "Activity") ": "
+                                   (get sources k "—")))))
+        (if org
+          (list search (el :div {:id "circle-list"} (circle-list)))
+          (el :p {:class "muted"} "Import the Soshiki/fleet catalog, a Dandori board export and an activity snapshot.")))))
+
+(defn- tile [label value sub]
+  (el :div {:class "tile"} (el :span {:class "tile-label"} label) (el :strong {:class "tile-value"} (str value))
+      (when sub (el :span {:class "row-sub"} sub))))
+
+(defn- hourly-chart [activity]
+  (let [w (autonomy/hourly-window activity 48)
+        mx (max 1 (apply max (map second w)))]
+    (el :figure {:class "hourly"}
+        (el :div {:class "bars" :role "img"
+                  :aria-label (str "Job receipts per hour, 48 hours to " (iso-min (first (last w))) " UTC")}
+            (for [[h n] w]
+              (doto (el :span {:class "bar" :title (str (iso-min h) "Z · " n " runs")})
+                (-> .-style (.setProperty "--v" (str (/ n mx)))))))
+        (el :figcaption {:class "row-sub"}
+            (str "Fleet receipts per hour, " (iso-min (first (first w))) " → " (iso-min (first (last w))) " UTC")))))
+
+(defn- bot-card [b st]
+  (el :li {:class "bot-card"}
+      (el :div {:class "bot-card-head"}
+          (avatar (:id b) (:name b))
+          (el :div {:class "row-text"}
+              (el :span {:class "row-title"} (:name b))
+              (el :span {:class "row-sub"} (or (:purpose b) "")))
+          (el :span {:class (str "state " (name (:state st)))} (state-labels (:state st))))
+      (el :div {:class "bot-card-facts row-sub"}
+          (str/join " · " (remove nil?
+                                  [(if (:last-at st) (str (:runs st) " runs · last " (ago (:last-at st)))
+                                       (str (:jobs b) " jobs · " (or (:schedule-state b) "no schedule")))
+                                   (when (seq (:issues st)) (str "Linear " (str/join ", " (take 3 (:issues st)))
+                                                                 (when (> (count (:issues st)) 3) "…")))
+                                   (when (seq (:board st))
+                                     (str "board " (str/join " " (for [[k n] (sort-by (comp autonomy/state-index key) (:board st))] (str k " " n)))))])))
+      (when-let [n (:next st)]
+        (el :div {:class "next"} (el :span {:class "row-sub"} "Next: ")
+            (el :strong {} (:id n)) " " (or (:title n) "") (el :span {:class "row-sub"} (str " (" (:reason n) ")"))))
+      (el :button {:class "btn small" :type "button" :on-click #(select-bot! (:id b))} "Chat")))
+
+(defn- autonomy-view []
+  (let [{:keys [org board activity circle]} @state
+        now (now-ms)
+        issues (:issues board)]
+    (if-not (or org activity)
+      (el :div {:class "welcome"}
+          (el :h2 {} "Autonomy")
+          (el :p {:class "muted"} "See how far the bots get on their own. Import the organization (Soshiki or the fleet catalog), a Dandori board export and an activity snapshot. Files stay on this device.")
+          (import-button))
+      (let [c (first (filter #(= circle (:id %)) (:circles org)))
+            scope (if c (update org :bots (fn [bs] (filterv #(= circle (:circle %)) bs))) org)
+            sm (when org (autonomy/summary scope activity issues now))
+            bots (->> (:bots org)
+                      (filter #(or (nil? circle) (= circle (:circle %))))
+                      (map (fn [b] [b (autonomy/bot-status b activity issues now)]))
+                      (sort-by (fn [[b st]] [(.indexOf (to-array autonomy/state-order) (:state st)) (- (or (:last-at st) 0)) (:name b)])))]
+        (el :div {:class "autonomy"}
+            (el :h2 {} (if c (:name c) "Fleet autonomy"))
+            (when (:purpose c) (el :p {:class "muted"} (:purpose c)))
+            (when-let [o (:observed-at activity)]
+              (let [t (.parse js/Date o)]
+                (el :p {:class (str "banner " (if (> (- now t) autonomy/stale-after) "warn" "ok"))}
+                    (if (> (- now t) autonomy/stale-after)
+                      (str "Last observation " (subs o 0 16) "Z (" (ago t) "). Nothing newer has been recorded, so no bot is shown as active now.")
+                      (str "Observed " (subs o 0 16) "Z (" (ago t) ").")))))
+            (when sm
+              (el :div {:class "tiles"}
+                  (tile "Registered" (:registered sm) nil)
+                  (tile "Schedule verified" (:verified sm) "not proof of running")
+                  (tile "Ran at least once" (:ran sm) "from receipts")
+                  (tile "Active (24 h)" (:active sm) nil)
+                  (when-not c
+                    (tile "Board" (count issues) (when (seq (:board sm)) (str (get (:board sm) "started" 0) " started · " (get (:board sm) "completed" 0) " done"))))))
+            (when (seq (:hourly activity)) (hourly-chart activity))
+            (when org
+              (list
+               (el :h3 {} (str (if c "Bots in this circle" "Bots") " (" (count bots) ")"))
+               (el :ul {:class "bot-cards"} (for [[b st] (take 120 bots)] (bot-card b st)))
+               (when (> (count bots) 120) (el :p {:class "row-sub"} "Showing 120. Pick a circle in Org to narrow.")))))))))
+
 (defn- sidebar []
   (let [tab (:tab @state)
         tab-btn (fn [k label] (el :button {:class (str "tab" (when (= tab k) " active")) :type "button"
                                            :role "tab" :aria-selected (str (= tab k))
                                            :on-click #(set-state! assoc :tab k)} label))]
     (el :div {:class "sidebar-inner"}
-        (el :div {:class "tabs" :role "tablist"} (tab-btn :sessions "Sessions") (tab-btn :bots "Bots"))
-        (if (= tab :bots) (bots-pane) (sessions-pane)))))
+        (el :div {:class "tabs" :role "tablist"} (tab-btn :sessions "Sessions") (tab-btn :bots "Bots") (tab-btn :org "Org"))
+        (case tab :bots (bots-pane) :org (org-pane) (sessions-pane)))))
 
 (defn- message-node [{:keys [role text state note request]}]
   (case [role state]
@@ -353,8 +510,8 @@
                      :aria-expanded (str (:drawer? @state))
                      :on-click #(set-state! update :drawer? not)} "☰")
         (el :div {:class "title"}
-            (el :strong {} (if bot (bot-name bot) "Itonami"))
-            (when bot (el :span {:class "muted"}
+            (el :strong {} (cond (= :autonomy (:view @state)) "Autonomy" bot (bot-name bot) :else "Itonami"))
+            (when (and bot (not= :autonomy (:view @state))) (el :span {:class "muted"}
                           (if (= session "default") "Bot Chat" (get titles session "Session")))))
         (when busy (el :span {:class "chip"} "Waiting for approval or the Agent…")))))
 
@@ -370,11 +527,13 @@
     (.toggle (.-classList (.-body js/document)) "drawer-open" (boolean drawer?))
     (mount! "topbar" (topbar))
     (mount! "sidebar" (sidebar))
-    (mount! "content" (if (and (= view :bot) bot) (bot-view) (chat-view)))
+    (mount! "content" (cond (= view :autonomy) (autonomy-view)
+                            (and (= view :bot) bot) (bot-view)
+                            :else (chat-view)))
     (mount! "notice" (if notice (el :p {:class "notice" :role "status"} notice) (el :span {})))
     (mount! "statusbar" (statusbar))
     (set! (.-disabled ($ "composer-send")) (boolean (or busy (nil? bot))))
-    (set! (.-hidden ($ "composer")) (= view :bot))
+    (set! (.-hidden ($ "composer")) (contains? #{:bot :autonomy} view))
     (when-let [log (.querySelector js/document ".transcript")]
       (set! (.-scrollTop log) (.-scrollHeight log)))))
 
