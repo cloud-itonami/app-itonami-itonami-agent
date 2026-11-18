@@ -47,7 +47,7 @@ def main():
         refused("README unreadable: " + str(exc))
     try:
         prs = subprocess.run(
-            ["gh", "pr", "list", "--repo", "kotoba-lang/itonami-agent", "--state", "open",
+            ["gh", "pr", "list", "--repo", "cloud-itonami/itonami-agent", "--state", "open",
              "--json", "number,title"],
             capture_output=True, text=True, timeout=60)
         print("OPEN_PRS: " + prs.stdout.strip())

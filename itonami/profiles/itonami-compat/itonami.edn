@@ -1,16 +1,3 @@
 ;; itonami profile (cloud.itonami.profile.v2). An itonami agent only (ADR-2610222100):
 ;; it lives in itonami/profiles/ and ~/.itonami/profiles/, never in a Hermes store.
-{:itonami/schema "cloud.itonami.profile.v2"
- :profile/id "itonami-compat"
- :profile/description "Hermes-compatibility implementer for itonami-agent (1 tick = 1 gap item = at most 1 PR)"
- :agent/kind :worker
- :runtime {:engine :itonami-agent :scheduler :hermes}
- :placement {:mode :local :inference-rail :murakumo}
- :inference {:rails [:murakumo] :authorities ["api.murakumo.cloud"] :deny-hosts ["openrouter.ai"]}
- :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host}
- :ids {:repo "kotoba-lang/itonami-agent"}
- :authority {:default-decision :approval-required :source :yakuwari :ref "yakuwari.edn"}
- :capabilities []
- :org/world :host
- :invocation :resident
- :cron? true}
+{:agent/kind :worker, :authority {:default-decision :approval-required, :ref "yakuwari.edn", :source :yakuwari}, :bundle {:cid "bafkreict6dkooxq2uhp3zbe6ojms3qs2xibx22ove5hagg6mvviyvxjmvm", :files 6}, :capabilities [], :cron? true, :ids {:repo "cloud-itonami/itonami-agent"}, :inference {:authorities ["api.murakumo.cloud"], :deny-hosts ["openrouter.ai"], :rails [:murakumo]}, :invocation :resident, :itonami/schema "cloud.itonami.profile.v2", :org/world :host, :placement {:inference-rail :murakumo, :mode :local}, :profile/description "Hermes-compatibility implementer for itonami-agent (1 tick = 1 gap item = at most 1 PR)", :profile/id "itonami-compat", :runtime {:engine :itonami-agent, :scheduler :hermes}, :state {:results :cid-receipts, :secrets :never-leave-host, :workspace :host-local}}
