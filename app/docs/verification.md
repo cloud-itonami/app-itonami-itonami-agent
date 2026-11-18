@@ -23,5 +23,6 @@ Source, browser, Android VM and physical acceptance are separate claims.
     - list-sessions returned no sessions besides the default.
     - read-history for `awai-banking-ops` returned 404, because that bot is not in the Agent catalog. The app now says so.
   - A denied send: no message was sent, the draft was restored, and the notice said "Not sent".
-- **Not verified.** A live send, which runs Muse inference and writes the owner's history, was not exercised. Session creation (a write) was not exercised either. Also not verified: a physical Awai OS device on the tailnet, signing, OTA and TalkBack.
+- **Live send (owner approved, 2026-11-18 02:22Z).** One message to `hiraku-soudan`, default session, from the same emulator and APK, after "Allow once" in the send-message dialog. The reply arrived in 14 s and passed every reply check (same request, bot and session; provider `meta`; model `muse-spark-1.3`; `store.owner` `itonami-agent` with readback). A fresh read-history after reopening the session returned the same two messages from the Agent. Screenshot: `preview-android-chat.png`.
+- **Not verified.** Session creation (a write). Also not verified: a physical Awai OS device on the tailnet, signing, OTA and TalkBack.
 - **Interference.** During this run another session's ADB forward reused local port 9334 for its own emulator. CDP moved to port 47391 and every reading above is from this app's WebView.
