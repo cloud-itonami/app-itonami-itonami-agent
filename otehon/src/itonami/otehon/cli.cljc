@@ -303,12 +303,6 @@
                                  :called-with @called))
     :decide (let [p (load-dir dir read-text)]
               (yakuwari/decide (:yakuwari p) (get-in p [:manifest :authority]) (:capability c)))
-    :additive (let [full (load-dir dir read-text)
-                    bare (load-dir dir (profile/hermes-view read-text))]
-                {:hermes-files-same (= (select-keys full [:config :profile-yaml :jobs])
-                                       (select-keys bare [:config :profile-yaml :jobs]))
-                 :runtime-full (:runtime full)
-                 :runtime-bare (:runtime bare)})
     :yaml (try {:value (yaml/parse (:text c))}
                (catch #?(:lpy python/Exception :clj Exception :cljs :default) e
                  {:refused (or (:yaml/refused (ex-data e)) :error)}))

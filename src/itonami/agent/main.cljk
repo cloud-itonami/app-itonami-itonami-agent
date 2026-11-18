@@ -12,7 +12,7 @@
     itonami-agent profile list | show <p>
 
   itonami layer:
-    itonami-agent profile itonamify <p>|--all [--dry-run]   write itonami.edn (additive)
+    itonami-agent profile itonamify <p>|--all [--dry-run]   write itonami.edn (makes it an itonami agent)
     itonami-agent profile readiness <p>|--all              audit Kotoba cron compatibility
     itonami-agent profile adopt <p>|--all|--ready-only [--dry-run] itonami ticks selected cron; Hermes stops
     itonami-agent profile hy-stage <p>|--all <artifact-dir> [--dry-run] copy verified sibling .hy sources into profile scripts/

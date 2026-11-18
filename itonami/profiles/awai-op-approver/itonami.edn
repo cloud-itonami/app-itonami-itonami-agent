@@ -1,7 +1,6 @@
 {:itonami/schema "cloud.itonami.profile.v2"
  :profile/id "awai-op-approver"
  :profile/description "Judge one bot operation request as an Agent separate from the requester"
- :profile/hermes-compatible true
  :agent/kind :approver
  :org/world :awai :org/path [:etzhayyim :awai :cloud-itonami]
  :org/github "cloud-itonami" :org/unit :awai-control :awai/business :awai-network

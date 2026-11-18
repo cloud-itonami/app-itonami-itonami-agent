@@ -109,10 +109,11 @@ placement standard live in [PORTABILITY.md](./PORTABILITY.md).
 
 ## Compatibility kept
 
-- **Layout.** The six files above, at the paths Hermes uses. itonami.edn is
-  additive: the `:additive` case reads a profile with and without the two
-  itonami files and requires the Hermes files to parse identically, the
-  runtime flipping from `itonami` to `hermes`.
+- **Layout.** The six files above, in the Hermes file format. A profile with
+  itonami.edn is an itonami agent only (root ADR-2610222100 §2): the additive
+  manifest and its `:profile/hermes-compatible` flag are retired, and a
+  manifest that still carries the flag gets a `retired` warning (not an
+  error) from `check`.
 - **Two CLIs** (`AGENTS.md`). A profile with itonami.edn is an itonami agent;
   every provider and model it names (config `model`, `providers`,
   `fallback_providers`, each job's pin) must be on the murakumo rail, the
