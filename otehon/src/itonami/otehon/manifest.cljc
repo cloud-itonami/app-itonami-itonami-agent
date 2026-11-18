@@ -87,7 +87,6 @@
               [[[:itonami/schema] true schemas (str "not one of " (str/join ", " (sort schemas)))]
                [[:profile/id] true #(boolean (and (string? %) (re-matches #"^[a-z0-9][a-z0-9_-]{0,63}$" %))) "not a profile name"]
                [[:profile/description] false #(or (nil? %) (string? %)) "not a string"]
-               [[:profile/hermes-compatible] true true? "must be true: Hermes ignores itonami.edn"]
                [[:runtime :engine] true #{:itonami-agent} "not :itonami-agent"]
                [[:runtime :scheduler] true #{:hermes :itonami :launchd} "not one of :hermes :itonami :launchd"]
                [[:placement :mode] true #{:p2p :local} "not one of :p2p :local"]
@@ -127,6 +126,10 @@
                (when-not (or (and (vector? deny) (some #{required-deny-host} deny))
                                (openrouter-opt-in? m))
                  (err [:inference :deny-hosts] (str "must name " required-deny-host " (Two CLIs: itonami never rides the Hermes rail)")))
+               ;; ADR-2610222100 §2: one profile, one side. The flag that said
+               ;; Hermes reads past itonami.edn (the additive manifest) is retired.
+               (when (contains? m :profile/hermes-compatible)
+                 (warn [:profile/hermes-compatible] "retired (ADR-2610222100): an itonami profile is not read by Hermes; delete this key"))
                (when (and v2? (nil? world))
                  (warn [:org/world] "v2 manifest not placed in the organisation (profile organize)"))
                (when (and (= :host world) (seq path))

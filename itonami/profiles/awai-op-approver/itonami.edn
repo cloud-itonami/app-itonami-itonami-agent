@@ -1,7 +1,6 @@
 {:itonami/schema "cloud.itonami.profile.v2"
  :profile/id "awai-op-approver"
  :profile/description "Judge one bot operation request as an Agent separate from the requester"
- :profile/hermes-compatible true
  :agent/kind :approver
  :org/world :awai :org/path [:etzhayyim :awai :cloud-itonami]
  :org/github "cloud-itonami" :org/unit :awai-control :awai/business :awai-network
@@ -10,7 +9,7 @@
  :placement {:mode :local :order [:local] :inference-rail :murakumo}
  :inference {:rails [:murakumo] :authorities ["api.murakumo.cloud"] :deny-hosts ["openrouter.ai"]}
  :state {:workspace :host-local :results :cid-receipts :secrets :never-leave-host}
- :ids {:repo "kotoba-lang/itonami-agent" :yakuwari/id "awai-op-approver"}
+ :ids {:repo "cloud-itonami/itonami-agent" :yakuwari/id "awai-op-approver"}
  :authority {:default-decision :blocked :source :yakuwari :ref "yakuwari.edn"}
  :bundle {:cid "bafkreifi44bgxdygevcuwbbsptnk7ebd6lsa6jacpitjerpmpljl5cgjyi" :files 6 :skills [] :dirs ["policy"]}
  :capabilities [{:capability :review_source :decision :autonomous :note "Only the request and evidence the broker supplies; no credentials or network access"}

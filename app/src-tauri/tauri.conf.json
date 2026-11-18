@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/3",
+  "productName": "Itonami Agent",
+  "version": "0.1.0",
+  "identifier": "cloud.itonami.agent",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Itonami Agent",
+        "width": 1100,
+        "height": 780,
+        "minWidth": 360,
+        "minHeight": 480,
+        "useHttpsScheme": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.png"],
+    "android": {
+      "minSdkVersion": 35
+    }
+  }
+}

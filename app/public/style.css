@@ -1,0 +1,33 @@
+:root {
+  --bg: #fafaf8; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc; --card: #ffffff;
+  --ok: #1f7a4d; --held: #9a6700; --refused: #b42318; --info: #3b5bdb;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151514; --fg: #ecece8; --muted: #a0a09a; --line: #2e2e2b; --card: #1e1e1c;
+          --ok: #4cc38a; --held: #e3b341; --refused: #f97066; --info: #91a7ff; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+       font: 15px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+header, main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 22px; margin: 8px 0 4px; }
+.muted { color: var(--muted); margin: 0; }
+.summary { margin: 0 0 12px; color: var(--muted); }
+.error { color: var(--refused); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin: 0 0 10px; }
+.card > summary { cursor: pointer; padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 48px; }
+.card[open] > summary { border-bottom: 1px solid var(--line); }
+.name { font-weight: 600; overflow-wrap: anywhere; }
+.counts { color: var(--muted); font-size: 13px; }
+.badge { font-size: 12px; border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; }
+.badge.ok { color: var(--ok); } .badge.held, .badge.warn { color: var(--held); }
+.badge.refused, .badge.error { color: var(--refused); } .badge.itonami, .badge.hermes, .badge.unknown { color: var(--info); }
+.problems { margin: 0; padding: 10px 14px 10px 30px; }
+.problem { margin: 4px 0; overflow-wrap: anywhere; }
+.problem code { font-size: 13px; margin-left: 6px; }
+.card > p { padding: 10px 14px; }
+.table-wrap { overflow-x: auto; padding: 0 0 6px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 14px; border-top: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+td:first-child { min-width: 10em; overflow-wrap: anywhere; }

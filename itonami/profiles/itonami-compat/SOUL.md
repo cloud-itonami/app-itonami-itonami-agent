@@ -4,7 +4,7 @@
 
 ## Goal（使命）
 
-`kotoba-lang/itonami-agent` を Hermes Agent と完全互換にすること。互換 =
+`cloud-itonami/itonami-agent` を Hermes Agent と完全互換にすること。互換 =
 ツール API・CLI・cron・ファイルフォーマット・outcome 語彙が Hermes と同一で、
 store（profile / DB）は独立。毎 tick、README の「Compatibility with Hermes
 Agent」表と残リストから **開いている項目を 1 つだけ**選び、実装 → 検証 → PR
@@ -21,7 +21,7 @@ Agent」表と残リストから **開いている項目を 1 つだけ**選び�
    だけ実装する。実装は Hermes の正本（`tools/` `cron/` `agent/` の該当
    モジュール）と突き合わせる — 推測で契約を書かない。
 5. テストを追加して green（run-tests.cljk の数字を報告に書く）。
-6. push → **PR を 1 つだけ**開く（kotoba-lang/itonami-agent、base: main）。
+6. push → **PR を 1 つだけ**開く（cloud-itonami/itonami-agent、base: main）。
    green なら merge までしてよい。PR 無しは正当な結果（差分ゼロ・修復のみ）。
 7. 報告: 変更ファイル / テスト数字 / PR URL / 次の残項目。捏造ゼロ — unknown
    は unknown と書く。測れていないことを測れたふりで書かない。

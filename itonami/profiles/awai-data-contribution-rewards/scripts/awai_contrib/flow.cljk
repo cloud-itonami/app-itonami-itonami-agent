@@ -1,0 +1,120 @@
+(ns awai-contrib.flow
+  "One participant data contribution through the reward pipeline (AWAI-3208):
+
+    intake -> rights and consent -> training use -> reward-calculation request
+           -> test-stage calculation -> read back
+
+  The decisions are cloud-murakumo-api's pure contract
+  (`training-contribution-rights`, `training-economy/allocate-pool`), loaded by
+  `awai-contrib.contract` before this namespace. This namespace adds no rule of
+  its own except the shape of the request and the read-back check.
+
+  Pure: no I/O, no clock, no network. Nothing here mints, reserves, signs or
+  transfers YATA. A calculation result is a test-stage allocation, not a payout
+  and not a claim of paid work."
+  (:require [local-murakumo.training-economy :as economy]
+            [local-murakumo.training-contribution-rights :as rights]))
+
+(def request-schema "awai.training-reward-request/1")
+(def result-schema "awai.training-reward-result/1")
+
+(def open-points
+  "Stated on every request and result."
+  ["Test stage only: the calculation is the pinned contract run on this host. cloud-murakumo-api has no training-reward route in production."
+   "No payout: production payout stays disabled (ADR-261016)."
+   "Legal questions in ADR-261118 are open; this result does not establish that a reward may be paid."])
+
+(defn- refused [stage decision]
+  {:outcome :refused :stage stage :error (:error decision)})
+
+(defn intake-error
+  "Shape errors the bot can see before the contract runs."
+  [request]
+  (cond
+    (not (map? request)) :invalid-request
+    (not (re-matches #"[A-Za-z0-9][A-Za-z0-9._-]{0,63}" (str (:request/id request)))) :invalid-request-id
+    (not (map? (:contribution request))) :missing-contribution
+    (not (map? (:training-use request))) :missing-training-use
+    (not (string? (get-in request [:epoch :pool-units]))) :missing-epoch-pool
+    :else nil))
+
+(defn reward-request
+  "The calculation request for one epoch, built from the contract's review rows."
+  [request reviews contract]
+  {:schema request-schema
+   :request/id (:request/id request)
+   :epoch/id (get-in request [:training-use :use/epoch-id])
+   :epoch/pool-units (get-in request [:epoch :pool-units])
+   :contribution/id (get-in request [:contribution :contribution/id])
+   :reviews reviews
+   :calculator {:repo (:repo contract) :sha (:sha contract) :stage (:stage contract)
+                :fn "local-murakumo.training-economy/allocate-pool"}
+   :payout? false
+   :open-points open-points})
+
+(defn calculate
+  "Run the test-stage calculation for a request."
+  [req]
+  (let [r (economy/allocate-pool (:epoch/pool-units req) (:reviews req))]
+    {:schema result-schema
+     :request/id (:request/id req)
+     :epoch/id (:epoch/id req)
+     :ok? (boolean (:ok? r))
+     :error (:error r)
+     :pool-units (:pool-units r)
+     :distributed-units (:distributed-units r)
+     :unallocated-units (:unallocated-units r)
+     :allocations (mapv #(select-keys % [:training/human-id :training/contributor-did
+                                         :training/contribution-id :training/share-bps
+                                         :training/yata-units])
+                        (:allocations r))
+     :payout? false
+     :open-points open-points}))
+
+(defn readback-problems
+  "Check a result read back from disk against the request it answers. Returns
+  nil when it matches, else a vector of keywords."
+  [req result]
+  (let [problems
+        (cond-> []
+          (not= result-schema (:schema result)) (conj :schema)
+          (not= (:request/id req) (:request/id result)) (conj :request-id)
+          (not= (:epoch/id req) (:epoch/id result)) (conj :epoch-id)
+          (not (true? (:ok? result))) (conj :not-ok)
+          (not= (:epoch/pool-units req) (:pool-units result)) (conj :pool-units)
+          (not= (mapv :training/human-id (:reviews req))
+                (mapv :training/human-id (:allocations result))) (conj :contributors)
+          (not (false? (:payout? result))) (conj :payout-flag)
+          (and (:ok? result)
+               (not= (:pool-units result)
+                     (reduce economy/add-yata-units (:unallocated-units result)
+                             (map :training/yata-units (:allocations result)))))
+          (conj :units-do-not-add-up))]
+    (when (seq problems) problems)))
+
+(defn process
+  "Run the stages for one request. `known-content` is the bot's host-local
+  duplicate index (content sha256 -> contribution id). Returns
+  {:outcome :requested :rights ... :use ... :request ... :result ...} or
+  {:outcome :refused :stage <stage> :error <keyword>}."
+  [request known-content contract]
+  (if-let [e (intake-error request)]
+    {:outcome :refused :stage :intake :error e}
+    (let [record (:contribution request)
+          use (:training-use request)
+          rights-decision (rights/record-decision record known-content)]
+      (if-not (:ok? rights-decision)
+        (refused :rights rights-decision)
+        (let [use-decision (rights/training-use-decision record use known-content)]
+          (if-not (:ok? use-decision)
+            (refused :training-use use-decision)
+            (let [{:keys [reviews] :as rr} (rights/reward-reviews record use known-content)]
+              (if-not (:ok? rr)
+                (refused :reward-reviews rr)
+                (let [req (reward-request request reviews contract)
+                      result (calculate req)]
+                  {:outcome :requested
+                   :rights rights-decision
+                   :use use-decision
+                   :request req
+                   :result result})))))))))

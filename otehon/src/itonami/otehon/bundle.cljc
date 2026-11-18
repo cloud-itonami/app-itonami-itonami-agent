@@ -218,7 +218,6 @@
     {:itonami/schema manifest/schema-v2
      :profile/id (:name prof)
      :profile/description (get-in prof [:profile-yaml "description"])
-     :profile/hermes-compatible true
      :runtime {:engine :itonami-agent
                :scheduler :hermes}
      :placement {:mode :p2p

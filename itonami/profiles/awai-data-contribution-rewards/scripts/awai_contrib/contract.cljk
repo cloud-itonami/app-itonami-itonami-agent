@@ -1,0 +1,62 @@
+(ns awai-contrib.contract
+  "Loads the reward contract from network-awai/cloud-murakumo-api at a pinned
+  commit (AWAI-3208).
+
+  The contract is two pure namespaces, merged in cloud-murakumo-api PR #375
+  (AWAI-3210). They are read with `git show <sha>:<path>` from a local clone,
+  so a dirty or checked-out-elsewhere working tree does not matter. Each file's
+  sha256 is checked against the digest pinned here before its text is
+  evaluated; the exact bytes that were checked are the bytes that run. No
+  network request is made, and nothing falls back to another source: a
+  missing clone, a missing commit or a digest difference stops the job."
+  (:require ;; The contract's one library. load-string cannot load a namespace
+            ;; from the classpath on this engine, so it is loaded here first,
+            ;; from kbb's implicit kotoba stdlib.
+            [kotoba.lang.text]
+            ["node:child_process" :as cp]
+            ["node:crypto" :as crypto]
+            ["node:os" :as os]
+            ["node:path" :as path]))
+
+(def pin
+  {:repo "network-awai/cloud-murakumo-api"
+   :sha "62715161e9b2a42a311df0551c0ca6807519240b"
+   :stage :test
+   :files [{:ns 'local-murakumo.training-economy
+            :path "src/local_murakumo/training_economy.cljk"
+            :sha256 "b1a3dd5077ab5eec85ce0c60256d25bb76efa8325ae9ea084803e189db02d1f2"}
+           {:ns 'local-murakumo.training-contribution-rights
+            :path "src/local_murakumo/training_contribution_rights.cljk"
+            :sha256 "e9141f7b70ffc2f443620449652d923ce4a50cb3c5db87b4768a732c694164ba"}]})
+
+(defn sha256-hex [text]
+  (-> (.createHash crypto "sha256") (.update text "utf8") (.digest "hex")))
+
+(defn repo-dir
+  "AWAI_MURAKUMO_API_DIR, else the canonical clone under ~/github."
+  []
+  (or (not-empty (aget (.-env js/process) "AWAI_MURAKUMO_API_DIR"))
+      (path/join (os/homedir) "github" "network-awai" "cloud-murakumo-api")))
+
+(defn- show [dir sha file]
+  (str (cp/execFileSync "git" (clj->js ["-C" dir "show" (str sha ":" file)])
+                        #js {:encoding "utf8" :maxBuffer (* 4 1024 1024)
+                             :stdio #js ["ignore" "pipe" "pipe"]})))
+
+(defn load!
+  "Evaluate the pinned contract. Returns the pin with the clone it read, or
+  throws with the file that failed."
+  []
+  (let [dir (repo-dir)]
+    (doseq [{:keys [path sha256] :as f} (:files pin)]
+      (let [text (try (show dir (:sha pin) path)
+                      (catch :default e
+                        (throw (ex-info (str "contract source unavailable: " path " at " (:sha pin)
+                                             " in " dir)
+                                        {:file f} e))))
+            actual (sha256-hex text)]
+        (when-not (= sha256 actual)
+          (throw (ex-info (str "contract digest mismatch: " path " expected " sha256 " got " actual)
+                          {:file f :actual actual})))
+        (load-string text)))
+    (assoc pin :loaded-from :git-object)))

@@ -1,0 +1,6 @@
+{:main itonami.app.main
+ :output-to "dist/app.js"
+ :output-dir ".cljs-out/app"
+ :optimizations :simple
+ :pretty-print false
+ :browser-repl false}

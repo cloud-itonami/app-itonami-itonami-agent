@@ -1,0 +1,5 @@
+;; Otehon path (ADR 0026 D18): the itonami agent core in .cljc, compiled to
+;; ClojureScript for the Tauri WebView. Not a Native gate, build or runtime.
+{:paths ["src" "../otehon/src"]
+ :deps {org.clojure/clojurescript {:mvn/version "1.12.42"}}
+ :aliases {:test {:extra-paths ["test"]}}}
