@@ -20,6 +20,17 @@ Babashka, nbb): read a profile, check itonami.edn and yakuwari.edn, dry-run
 one cron job. It is outside the Native route and its gates. See
 [otehon/README.md](otehon/README.md) and [JUN-1008](https://linear.app/kotobalabs/issue/JUN-1008).
 
+## App (Tauri v3, Android / Awai OS)
+
+`app/` packages the Otehon core as a Tauri v3 app installable on Android
+(minSdk 35): the `.cljc` core compiled to ClojureScript checks the bundled
+profiles and dry-runs their cron jobs on the device, with no external
+operation. Otehon path only. See [app/README.md](app/README.md) and
+[AWAI-3327](https://linear.app/kotobalabs/issue/AWAI-3327).
+
+This repository is `cloud-itonami/itonami-agent` (moved from
+`kotoba-lang/itonami-agent` on 2026-11-18; the old URL redirects).
+
 ## Legacy CLI examples (unqualified)
 
 ```

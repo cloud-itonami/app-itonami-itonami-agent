@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.cljs-out/
+.cpcache/
+src-tauri/target/

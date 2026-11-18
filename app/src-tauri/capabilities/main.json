@@ -1,0 +1,1 @@
+{"identifier":"itonami-agent-local","description":"Read-only host identity only. No SQL, network, shell, filesystem or model credentials.","windows":["main"],"permissions":["allow-awai-host-info"]}
