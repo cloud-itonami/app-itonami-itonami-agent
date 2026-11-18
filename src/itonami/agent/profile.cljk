@@ -605,8 +605,8 @@
 
 (defn write-manifest! [home m]
   (h/spit-atomic (h/join home "itonami.edn")
-                 (str ";; itonami profile (" (:itonami/schema m manifest-schema) "). Additive to the Hermes layout:\n"
-                      ";; Hermes ignores this file; removing it returns the profile to plain Hermes.\n"
+                 (str ";; itonami profile (" (:itonami/schema m manifest-schema) "). An itonami agent only (ADR-2610222100):\n"
+                      ";; it lives in itonami/profiles/ and ~/.itonami/profiles/, never in a Hermes store.\n"
                       (pr-str m) "\n")))
 
 (defn with-bundle

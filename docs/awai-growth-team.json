@@ -6,7 +6,7 @@
       "profile": "awai-growth-steward",
       "role": "steward",
       "issue": "AWAI-130",
-      "sourceDirectory": "hermes/profiles/awai-growth-steward",
+      "sourceDirectory": "itonami/profiles/awai-growth-steward",
       "targets": [
         "murakumo",
         "yataverse"
@@ -21,7 +21,7 @@
       "profile": "awai-growth-marketing",
       "role": "marketing",
       "issue": "AWAI-128",
-      "sourceDirectory": "hermes/profiles/awai-growth-marketing",
+      "sourceDirectory": "itonami/profiles/awai-growth-marketing",
       "targets": [
         "murakumo",
         "yataverse"
@@ -36,7 +36,7 @@
       "profile": "awai-growth-sales",
       "role": "sales",
       "issue": "AWAI-129",
-      "sourceDirectory": "hermes/profiles/awai-growth-sales",
+      "sourceDirectory": "itonami/profiles/awai-growth-sales",
       "targets": [
         "murakumo",
         "yataverse"
@@ -51,7 +51,7 @@
       "profile": "awai-growth-murakumo-adoption",
       "role": "murakumo-adoption",
       "issue": "AWAI-130",
-      "sourceDirectory": "hermes/profiles/awai-growth-murakumo-adoption",
+      "sourceDirectory": "itonami/profiles/awai-growth-murakumo-adoption",
       "targets": [
         "murakumo",
         "yataverse"
@@ -66,7 +66,7 @@
       "profile": "awai-growth-yataverse-adoption",
       "role": "yataverse-adoption",
       "issue": "AWAI-130",
-      "sourceDirectory": "hermes/profiles/awai-growth-yataverse-adoption",
+      "sourceDirectory": "itonami/profiles/awai-growth-yataverse-adoption",
       "targets": [
         "murakumo",
         "yataverse"
@@ -81,7 +81,7 @@
       "profile": "awai-growth-node-operations",
       "role": "node-operations",
       "issue": "AWAI-124",
-      "sourceDirectory": "hermes/profiles/awai-growth-node-operations",
+      "sourceDirectory": "itonami/profiles/awai-growth-node-operations",
       "targets": [
         "murakumo",
         "yataverse"
@@ -96,7 +96,7 @@
       "profile": "awai-growth-economy",
       "role": "economy",
       "issue": "AWAI-130",
-      "sourceDirectory": "hermes/profiles/awai-growth-economy",
+      "sourceDirectory": "itonami/profiles/awai-growth-economy",
       "targets": [
         "murakumo",
         "yataverse"
@@ -111,7 +111,7 @@
       "profile": "awai-growth-isekai-adoption",
       "role": "isekai-adoption",
       "issue": "AWAI-3215",
-      "sourceDirectory": "hermes/profiles/awai-growth-isekai-adoption",
+      "sourceDirectory": "itonami/profiles/awai-growth-isekai-adoption",
       "targets": [
         "isekai"
       ],
@@ -125,7 +125,7 @@
       "profile": "awai-growth-x402-adoption",
       "role": "x402-adoption",
       "issue": "AWAI-3251",
-      "sourceDirectory": "hermes/profiles/awai-growth-x402-adoption",
+      "sourceDirectory": "itonami/profiles/awai-growth-x402-adoption",
       "targets": [
         "x402"
       ],

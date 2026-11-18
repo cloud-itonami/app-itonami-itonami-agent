@@ -1,5 +1,5 @@
-;; itonami profile (cloud.itonami.profile.v2). Additive to the Hermes layout:
-;; Hermes ignores this file; removing it returns the profile to plain Hermes.
+;; itonami profile (cloud.itonami.profile.v2). An itonami agent only (ADR-2610222100):
+;; it lives in itonami/profiles/ and ~/.itonami/profiles/, never in a Hermes store.
 {:itonami/schema "cloud.itonami.profile.v2"
  :profile/id "itonami-compat"
  :profile/description "Hermes-compatibility implementer for itonami-agent (1 tick = 1 gap item = at most 1 PR)"
