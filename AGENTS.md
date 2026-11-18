@@ -21,6 +21,14 @@
   other. Its CI job is oracle-only and not a required check. Use `#?(:lpy …)`
   for Basilisp and never `#?@`. See `otehon/README.md`.
 
+- **App (`app/`)**: the Tauri v3 Android app over the Otehon core (CLJS in
+  the WebView, thin Rust host, no external operations). It is on the Otehon
+  path, like `otehon/`; no Native gate, build or runtime reads it. Adding an
+  external operation requires the shared `kotoba-client-runtime.js` broker
+  and per-operation consent first. See `app/README.md` (AWAI-3327).
+- **Repository home**: `cloud-itonami/itonami-agent` (moved from
+  `kotoba-lang/itonami-agent` 2026-11-18, AWAI-3327).
+
 ## Two CLIs — 分離の正本（hermes agent CLI / itonami agent CLI）
 
 `hermes` と `itonami-agent` は **同じ profile フォーマットを共有する別物**。

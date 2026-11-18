@@ -1,0 +1,5 @@
+{:main itonami.app.test-runner
+ :output-to ".cljs-out/test/test.cjs"
+ :output-dir ".cljs-out/test/out"
+ :optimizations :simple
+ :target :nodejs}
