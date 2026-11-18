@@ -180,8 +180,4 @@
    :warnings (count (filter #(= :warn (:level %)) problems))
    :messages (vec (sort (map #(str (:file %) " " (pr-str (:path %)) " " (:message %)) (errors problems))))})
 
-(defn hermes-view
-  "What Hermes would read from the same directory: the profile without the
-  two itonami files. Used to show itonami.edn is additive."
-  [read-text]
-  (fn [f] (when-not (some #{f} itonami-files) (read-text f))))
+

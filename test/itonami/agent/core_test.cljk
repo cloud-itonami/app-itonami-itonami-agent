@@ -132,7 +132,7 @@ plain: true
     (is (provider/p2p-rail? v1))))
 
 (def v1-manifest
-  {:itonami/schema "cloud.itonami.profile.v1" :profile/id "p" :profile/hermes-compatible true
+  {:itonami/schema "cloud.itonami.profile.v1" :profile/id "p"
    :runtime {:engine :itonami-agent :scheduler :hermes}
    :placement {:mode :p2p :order [:peer :local] :peers :trusted :inference-rail :murakumo}
    :inference {:rails [:murakumo] :authorities ["api.murakumo.cloud"] :deny-hosts ["openrouter.ai"]}
@@ -149,7 +149,10 @@ plain: true
     (is (= #{[:placement :inference-rail]} (paths (manifest/errors (assoc-in ok [:placement :inference-rail] :kotoba))))
         "the declared rail must be among :inference :rails")
     (is (= #{[:bundle :cid] [:bundle :files]} (paths (manifest/errors (dissoc ok :bundle)))))
-    (is (= #{[:profile/hermes-compatible]} (paths (manifest/errors (assoc ok :profile/hermes-compatible false)))))
+    (testing "ADR-2610222100: :profile/hermes-compatible is retired; present, it warns and never errors"
+      (let [m (assoc ok :profile/hermes-compatible true)]
+        (is (= [] (manifest/errors m)))
+        (is (= #{[:profile/hermes-compatible]} (paths (manifest/validate m))))))
     (testing "decisions follow yakuwari: legacy and unknown words warn, never error"
       (let [m (assoc ok :capabilities [{:capability :a :decision :propose} {:capability :b :decision :ok}])]
         (is (= [] (manifest/errors m)))

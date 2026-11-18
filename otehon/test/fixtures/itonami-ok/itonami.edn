@@ -3,7 +3,7 @@
 {:itonami/schema "cloud.itonami.profile.v2"
  :profile/id "itonami-ok"
  :profile/description "Otehon fixture: digest worker"
- :profile/hermes-compatible true
+
  :agent/kind :worker
  :runtime {:engine :itonami-agent :scheduler :itonami}
  :placement {:mode :local :order [:local] :inference-rail :murakumo}

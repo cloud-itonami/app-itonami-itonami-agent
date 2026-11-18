@@ -9,7 +9,7 @@
   this agent never writes to; `profile import` / `profile export` copy a
   profile's DEFINITION between the two, and state and DBs never cross.
 
-  itonami layer (additive; a plain Hermes profile has none of it):
+  itonami layer (an itonami agent only, ADR-2610222100; a Hermes profile has none of it):
     <home>/itonami.edn          what the profile is on the itonami plane:
                                 identity, placement (local | p2p), inference
                                 rail, state policy, bundle CID
@@ -557,7 +557,6 @@
     {:itonami/schema manifest-schema
      :profile/id (:name p)
      :profile/description (description p)
-     :profile/hermes-compatible true
      :runtime {:engine :itonami-agent
                ;; who ticks cron for this profile. :hermes until `adopt` hands it
                ;; over, so the two schedulers never both fire one job
