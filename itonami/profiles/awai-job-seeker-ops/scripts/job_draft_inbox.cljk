@@ -1,0 +1,44 @@
+;; Draft the requests the job seeker placed in <profile>/workspace/inbox/
+;; (AWAI-3172).
+;;
+;; For each <name>.edn request it writes, under <profile>/workspace/drafts/:
+;;   <request-id>.draft.edn    the awai.hiring-draft/1 bundle
+;;   <request-id>.letter.txt   the cover letter
+;; or <request-id>.blocked.edn naming the failed governor gates, or
+;; <request-id>.refusal.edn for an unsupported kind. The workspace is
+;; host-local and never part of the profile bundle. Nothing is sent: the
+;; seeker reviews the letter and applies themselves.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/).
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[cljs.reader :as reader]
+         '[awai-job-seeker.draft :as d])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def inbox (path/join home "workspace" "inbox"))
+(def drafts (path/join home "workspace" "drafts"))
+
+(defn safe-id? [s] (boolean (and (string? s) (re-matches #"[A-Za-z0-9][A-Za-z0-9._-]{0,63}" s))))
+(defn spit-edn [id ext v] (fs/writeFileSync (path/join drafts (str id ext)) (str (pr-str v) "\n")))
+
+(fs/mkdirSync drafts #js {:recursive true})
+(let [files (if (fs/existsSync inbox)
+              (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync inbox))))
+              [])]
+  (doseq [file files]
+    (let [request (reader/read-string (str (fs/readFileSync (path/join inbox file) "utf8")))
+          id (:request/id request)]
+      (if-not (safe-id? id)
+        (println (str "skip  " file "  :request/id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+        (let [{:keys [draft letter blocked refusal]} (d/draft request)]
+          (cond
+            refusal (do (spit-edn id ".refusal.edn" refusal)
+                        (println (str "refused  " id "  " (name (:reason refusal)))))
+            blocked (do (spit-edn id ".blocked.edn" blocked)
+                        (println (str "blocked  " id "  failed-gates=" (pr-str (:failed-gates blocked)))))
+            :else (do (spit-edn id ".draft.edn" draft)
+                      (fs/writeFileSync (path/join drafts (str id ".letter.txt")) letter)
+                      (println (str "drafted  " id "  sha256=" (get-in draft [:artifact :body-sha256])))))))))
+  (println (str (count files) " request(s) read from workspace/inbox")))

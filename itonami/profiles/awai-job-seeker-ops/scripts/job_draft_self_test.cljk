@@ -1,0 +1,56 @@
+;; Fixture test for the awai-job-seeker-ops drafts (AWAI-3172).
+;;
+;; Runs every request in <profile>/fixtures/requests/ through
+;; intake -> match -> draft -> status and compares the result with
+;; <profile>/fixtures/expected/: <id>.draft.edn and <id>.letter.txt for a
+;; draft, <id>.blocked.edn for a request a governor gate blocked, and
+;; <id>.refusal.edn for an unsupported kind. Prints one line per fixture
+;; (a blocked one names its failed gates) and exits 1 on any difference.
+;; Reads only; it writes nothing.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/, so kbb reads
+;; scripts/deps.edn), or directly: cd scripts && kbb job_draft_self_test.cljk
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[cljs.reader :as reader]
+         '[awai-job-seeker.draft :as d])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def requests-dir (path/join home "fixtures" "requests"))
+(def expected-dir (path/join home "fixtures" "expected"))
+
+(defn slurp [p] (when (fs/existsSync p) (str (fs/readFileSync p "utf8"))))
+(defn read-edn [p] (some-> (slurp p) reader/read-string))
+
+(defn- same [outcome id expected actual]
+  {:id id :outcome outcome :ok? (= expected actual)
+   :problem (when (not= expected actual) {:expected expected :actual actual})})
+
+(defn compare-one [file]
+  (let [request (read-edn (path/join requests-dir file))
+        id (:request/id request)
+        {:keys [draft letter blocked refusal]} (d/draft request)]
+    (cond
+      refusal (same :refused id (read-edn (path/join expected-dir (str id ".refusal.edn"))) refusal)
+      blocked (assoc (same :blocked id (read-edn (path/join expected-dir (str id ".blocked.edn"))) blocked)
+                     :gates (:failed-gates blocked))
+      :else
+      (let [expected-draft (read-edn (path/join expected-dir (str id ".draft.edn")))
+            expected-letter (slurp (path/join expected-dir (str id ".letter.txt")))
+            draft-ok? (= expected-draft draft)
+            letter-ok? (= expected-letter letter)]
+        {:id id :outcome :drafted :ok? (and draft-ok? letter-ok?)
+         :problem (cond-> nil
+                    (not draft-ok?) (assoc :draft {:expected expected-draft :actual draft})
+                    (not letter-ok?) (assoc :letter {:expected expected-letter :actual letter}))}))))
+
+(let [files (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync requests-dir))))
+      results (mapv compare-one files)
+      failed (remove :ok? results)]
+  (doseq [{:keys [id outcome ok? problem gates]} results]
+    (println (str (if ok? "ok    " "FAIL  ") (name outcome) "  " id
+                  (when (seq gates) (str "  failed-gates=" (pr-str gates)))))
+    (when problem (prn problem)))
+  (println (str (count results) " fixtures, " (count failed) " failed"))
+  (when (seq failed) (js/process.exit 1)))

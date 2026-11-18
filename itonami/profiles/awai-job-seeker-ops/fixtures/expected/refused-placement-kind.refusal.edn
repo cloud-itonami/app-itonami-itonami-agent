@@ -1,0 +1,1 @@
+{:request/id "refused-placement-kind", :kind :placement, :reason :unsupported-kind, :detail "supported kinds: :application"}

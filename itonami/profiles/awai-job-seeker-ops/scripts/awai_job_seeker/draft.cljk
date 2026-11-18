@@ -1,0 +1,177 @@
+(ns awai-job-seeker.draft
+  "Application drafts for the awai-job-seeker-ops profile (AWAI-3172).
+
+  Scope: network-awai-apex ADR 0043 S1 -- the user's own job search only. A
+  request carries the seeker's own record, one job posting the seeker copied
+  in themselves, the criteria the seeker wants compared, and the record items
+  the cover letter may cite. `draft` runs the request through the steps
+
+    intake -> match -> draft -> status
+
+  and every step is held to the governor gates below. When all gates pass it
+  returns an `awai.hiring-draft/1` bundle (ADR 0043 D4) and the letter text.
+  When any gate fails it returns `{:blocked ...}` naming each failed gate, and
+  no letter text at all.
+
+  Pure: no I/O, no clock, no network. Nothing here applies, sends, posts or
+  messages anyone; the seeker reviews the draft and applies themselves
+  (ADR 0043 D2, D3).
+
+  The gates are HARD: there is no override. They are the S1 boundary, not a
+  check of the employer or of the law of any jurisdiction."
+  (:require [clojure.string :as str]
+            [kotoba.bytes.sha256 :as sha256]))
+
+(def library
+  "The library revision the drafts use; scripts/deps.edn pins the same sha."
+  {:repo "kotoba-lang/kotoba" :paths ["lib/kotoba.bytes"]
+   :sha "2e3b9ef25f06ef98924daa450c36da1b7c712189"})
+
+(def allowed-criteria
+  "What a seeker may ask to compare a posting on. Anything else is refused,
+  so a criterion nobody reviewed cannot slip in."
+  #{:skills :experience-years :languages :certifications :location :work-hours :salary-range})
+
+(def protected-criteria
+  "Characteristics a match must never use (equal-treatment law; the same
+  ground as the isic-7810 governor's matching-basis check). Named so the
+  refusal can say which one was asked for."
+  #{:age :birth-date :gender :sex :sexual-orientation :marital-status :family
+    :pregnancy :nationality :race :ethnicity :birthplace :religion :belief
+    :disability :health :photo :union-membership})
+
+(def allowed-origins #{:fixture :user-supplied})
+(def allowed-posting-intake #{:user-copied :user-entered})
+
+(def open-points
+  "Stated on every draft: what this draft does not establish."
+  ["Not sent. The seeker reviews the letter and applies through the employer's own channel themselves (ADR 0043 D2, D3)."
+   "The posting was not verified: whether the employer and the job are real is the seeker's own check."
+   "Only the seeker's own job search (ADR 0043 S1). Matching other people's candidates is placement (S2) and waits on owner decision O1."])
+
+;; ---------------------------------------------------------------- gates
+
+(defn- gate [id step ok? detail]
+  (cond-> {:gate id :step step :result (if ok? :pass :fail)}
+    (not ok?) (assoc :detail detail)))
+
+(defn- skill-cite [s] (str "skill:" s))
+
+(defn- record-ids
+  "The ids a letter may cite: each experience entry, each listed skill."
+  [seeker]
+  (into (set (keep :id (:experience seeker)))
+        (map skill-cite (:skills seeker))))
+
+(defn gates
+  "Every governor gate, in step order. All are evaluated, so a blocked
+  result names every gate that failed, not only the first."
+  [{:keys [on-behalf-of action seeker posting match-criteria letter] :as request}]
+  (let [origin (:data/origin request)
+        criteria (set match-criteria)
+        protected (sort (filter protected-criteria criteria))
+        unknown (sort (remove (into allowed-criteria protected-criteria) criteria))
+        ids (record-ids seeker)
+        unresolved (vec (remove ids (:cites letter)))]
+    [(gate :intake/self-only :intake (= :self on-behalf-of)
+           "Only the user's own job search (ADR 0043 S1). Acting for another job seeker is placement (S2, owner decision O1).")
+     (gate :intake/fixture-or-own-data :intake (contains? allowed-origins origin)
+           (str "data origin must be one of " (sort allowed-origins) "; got " (pr-str origin)))
+     (gate :intake/posting-not-scraped :intake (contains? allowed-posting-intake (:obtained-by posting))
+           (str "the posting must be copied or typed in by the seeker (" (sort allowed-posting-intake)
+                "); scraping and automated collection are out of scope (ADR 0043 D2); got "
+                (pr-str (:obtained-by posting))))
+     (gate :match/no-protected-criteria :match (and (empty? protected) (empty? unknown) (seq criteria))
+           (cond
+             (seq protected) (str "protected characteristics may not be match criteria: " (pr-str (vec protected)))
+             (seq unknown) (str "criteria outside the reviewed set " (sort allowed-criteria) ": " (pr-str (vec unknown)))
+             :else "no match criteria given"))
+     (gate :draft/claims-from-own-record :draft (and (seq (:cites letter)) (empty? unresolved))
+           (if (seq unresolved)
+             (str "the letter cites items that are not in the seeker's own record: " (pr-str unresolved))
+             "the letter cites nothing from the seeker's record"))
+     (gate :status/draft-only :status (= :draft action)
+           (str "only :draft is allowed; applying, sending or posting is the seeker's own act (ADR 0043 D2, D3); got "
+                (pr-str action)))]))
+
+;; ---------------------------------------------------------------- steps
+
+(defn- match-summary
+  "Compare the posting's skill requirements with the seeker's own skills.
+  Only the criteria the seeker asked for are compared."
+  [{:keys [seeker posting match-criteria]}]
+  (let [have (set (:skills seeker))
+        reqs (:requirements posting)
+        years (reduce + 0 (keep :years (:experience seeker)))]
+    (cond-> {}
+      (some #{:skills} match-criteria)
+      (assoc :skills {:required-met (vec (for [r reqs :when (and (:required? r) (have (:skill r)))] (:skill r)))
+                      :required-missing (vec (for [r reqs :when (and (:required? r) (not (have (:skill r))))] (:skill r)))
+                      :optional-met (vec (for [r reqs :when (and (not (:required? r)) (have (:skill r)))] (:skill r)))})
+      (some #{:experience-years} match-criteria)
+      (assoc :experience-years {:seeker years :posting-minimum (:minimum-years posting)
+                                :meets? (or (nil? (:minimum-years posting)) (>= years (:minimum-years posting)))}))))
+
+(defn- cite-line [seeker cite]
+  (if (str/starts-with? cite "skill:")
+    (str "- " (subs cite 6))
+    (let [e (first (filter #(= cite (:id %)) (:experience seeker)))]
+      (str "- " (:role e) ", " (:years e) " years"
+           (when (seq (:skills e)) (str " (" (str/join ", " (:skills e)) ")"))))))
+
+(defn- letter-text
+  "The cover letter, built only from the record items the letter cites."
+  [{:keys [seeker posting letter]}]
+  (str "To the hiring team at " (:employer posting) ",\n\n"
+       "I am applying for the " (:title posting) " position.\n\n"
+       "Relevant experience and skills:\n"
+       (str/join "\n" (map #(cite-line seeker %) (:cites letter)))
+       "\n\n"
+       (when-let [note (:closing letter)] (str note "\n\n"))
+       "Sincerely,\n" (:name seeker) "\n"))
+
+(defn request-digest
+  "SHA-256 of the request as data, so a draft names exactly what it was built from."
+  [request]
+  (sha256/sha256-hex (pr-str request)))
+
+(defn draft
+  "Run one request through intake -> match -> draft -> status.
+
+  Request: {:request/id string :kind :application :on-behalf-of :self
+            :data/origin :fixture|:user-supplied :action :draft
+            :seeker {...} :posting {...} :match-criteria [...]
+            :letter {:cites [...] :closing string?}}
+
+  Returns {:draft hiring-draft :letter string} when every gate passes,
+  {:blocked {...}} naming every failed gate, or {:refusal {...}} for a kind
+  this profile does not handle."
+  [request]
+  (let [id (:request/id request)]
+    (if (not= :application (:kind request))
+      {:refusal {:request/id id :kind (:kind request) :reason :unsupported-kind
+                 :detail "supported kinds: :application"}}
+      (let [checks (gates request)
+            failed (filterv #(= :fail (:result %)) checks)]
+        (if (seq failed)
+          {:blocked {:request/id id
+                     :failed-gates (mapv :gate failed)
+                     :checks checks}}
+          (let [text (letter-text request)]
+            {:letter text
+             :draft {:kind "awai.hiring-draft/1"
+                     :domain :job-seeker
+                     :request/id id
+                     :artifact {:type :application-letter
+                                :body-sha256 (sha256/sha256-hex text)}
+                     :posting {:id (get-in request [:posting :id])
+                               :title (get-in request [:posting :title])
+                               :employer (get-in request [:posting :employer])}
+                     :match (match-summary request)
+                     :checks checks
+                     :status {:stage :drafted
+                              :next "The seeker reviews the letter, then applies through the employer's own channel and records the result."}
+                     :sources [{:request-sha256 (request-digest request)}]
+                     :open-points open-points
+                     :produced-by {:profile "awai-job-seeker-ops" :library library}
+                     :sent? false}}))))))

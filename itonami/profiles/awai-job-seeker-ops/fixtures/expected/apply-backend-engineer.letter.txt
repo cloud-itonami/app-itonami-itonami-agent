@@ -1,0 +1,12 @@
+To the hiring team at Example Logistics KK,
+
+I am applying for the Backend Engineer position.
+
+Relevant experience and skills:
+- Backend engineer, 4 years (Clojure, PostgreSQL)
+- Kubernetes
+
+I would welcome the chance to talk about the role.
+
+Sincerely,
+Example Seeker

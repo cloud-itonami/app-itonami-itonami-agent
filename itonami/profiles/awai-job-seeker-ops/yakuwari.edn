@@ -1,0 +1,22 @@
+;; What awai-job-seeker-ops may do (AWAI-3172, network-awai-apex ADR 0043 D4).
+;; Comparing and drafting for the user's own job search only. Applying,
+;; sending, posting and messaging are blocked; the seeker applies themselves.
+{:yakuwari/capabilities
+ [{:capability :read_source :decision :autonomous :note "Only the seeker's request files in workspace/inbox and the profile's fixtures; no credentials or network access"}
+  {:capability :review_source :decision :autonomous :note "Governor gate checks of the seeker's own drafts only; no approval minting"}
+  {:capability :draft_artifact :decision :autonomous :note "Cover-letter drafts in its own host-local workspace; a draft is not an application"}
+  {:capability :record_local_receipt :decision :autonomous :note "Own job evidence only; no hiring outcome or paid-work claim"}
+  {:capability :delegate_task :decision :blocked}
+  {:capability :external_messaging :decision :blocked :note "No application, message or contact to an employer, LinkedIn, Indeed or any other party"}
+  {:capability :publish :decision :blocked :note "No post on LinkedIn or anywhere else"}
+  {:capability :spend :decision :blocked}
+  {:capability :transfer_funds :decision :blocked}
+  {:capability :storage_upload :decision :blocked}
+  {:capability :delete_data :decision :blocked}
+  {:capability :manage_services :decision :blocked}
+  {:capability :git_push :decision :blocked}
+  {:capability :git_merge :decision :blocked}
+  {:capability :use_signing_identity :decision :blocked}
+  {:capability :export_private_keys :decision :blocked}
+  {:capability :enable_cron :decision :blocked}]
+ :yakuwari/runners [{:runner :itonami-agent :weight 1}]}
