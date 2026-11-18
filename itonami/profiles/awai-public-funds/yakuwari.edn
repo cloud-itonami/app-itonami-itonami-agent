@@ -1,0 +1,23 @@
+;; What awai-public-funds may do (AWAI-3294, network-awai-apex ADR 0046 D6).
+;; Reading, aggregating and reconciling public data the user placed in the
+;; workspace only. Fetching from publishers, publishing, sending and every other
+;; effect are blocked until the owner decides ADR 0046 O1 and O2.
+{:yakuwari/capabilities
+ [{:capability :read_source :decision :autonomous :note "Only request and source files the user placed in workspace/inbox, and the profile's fixtures and data; no credentials or network access; there is no fetch capability in the vocabulary, the user downloads sources (ADR 0046 O1)"}
+  {:capability :review_source :decision :autonomous :note "Digest, header and arithmetic checks of public budget and outturn data; no approval minting"}
+  {:capability :draft_artifact :decision :autonomous :note "awai.public-funds/1 records in its own host-local workspace; a record is not a publication or a finding of wrongdoing"}
+  {:capability :record_local_receipt :decision :autonomous :note "Own job evidence only; no paid-work claim"}
+  {:capability :delegate_task :decision :blocked}
+  {:capability :external_messaging :decision :blocked :note "No message to any agency, journalist, platform or person"}
+  {:capability :publish :decision :blocked :note "No publication of data or results until ADR 0046 O2"}
+  {:capability :spend :decision :blocked}
+  {:capability :transfer_funds :decision :blocked}
+  {:capability :storage_upload :decision :blocked}
+  {:capability :delete_data :decision :blocked}
+  {:capability :manage_services :decision :blocked}
+  {:capability :git_push :decision :blocked}
+  {:capability :git_merge :decision :blocked}
+  {:capability :use_signing_identity :decision :blocked}
+  {:capability :export_private_keys :decision :blocked}
+  {:capability :enable_cron :decision :blocked}]
+ :yakuwari/runners [{:runner :itonami-agent :weight 1}]}

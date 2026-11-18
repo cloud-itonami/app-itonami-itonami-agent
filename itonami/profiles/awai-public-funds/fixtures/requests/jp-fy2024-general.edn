@@ -1,0 +1,24 @@
+;; Japan, central government, general account, fiscal year 2024 (令和6年度):
+;; initial budget against outturn, by 所管 and COFOG division. Both files are
+;; the unmodified 歳出 members of the Ministry of Finance CSV archives.
+{:request/id "jp-fy2024-general"
+ :kind :budget-vs-outturn
+ :scope {:country "JP" :level :central :account :general :fiscal-year "2024"}
+ :sources [{:role :initial-budget
+   :file "sources/DL202411001b.csv"
+   :title "令和6年度 一般会計 歳入予算明細書及び歳出予定経費要求書(科目別内訳)【CSV版】 (歳出, member DL202411001b.csv)"
+   :publisher "財務省 予算書・決算書データベース"
+   :url "https://www.bb.mof.go.jp/server/2024/csv/DL202411001.zip"
+   :archive-sha256 "234bd440ac8647a07e458e3609457d00a133ffbbef2fc766b1421e1c5510e06f"
+   :fetched-at "2026-11-18T00:08:18Z"
+   :license "公共データ利用規約（第1.0版） PDL1.0 (https://www.bb.mof.go.jp/terms/)"
+   :sha256 "abc3426580f2e8c5b93e15ed9b7a26698671d5bbc37040b889b98d484774e931"}
+  {:role :outturn
+   :file "sources/DL202477001b.csv"
+   :title "令和6年度 一般会計 歳入決算明細書及び歳出決算報告書(科目別内訳)【CSV版】 (歳出, member DL202477001b.csv)"
+   :publisher "財務省 予算書・決算書データベース"
+   :url "https://www.bb.mof.go.jp/server/2024/csv/DL202477001.zip"
+   :archive-sha256 "5536fd4f9477cf4ce312d74f9000c8822d979fc1098adefa645d49a6d1e187e4"
+   :fetched-at "2026-11-18T00:08:19Z"
+   :license "公共データ利用規約（第1.0版） PDL1.0 (https://www.bb.mof.go.jp/terms/)"
+   :sha256 "3e1932534a94be40cf4af47d6cd8c6312497f1d552d210ec42e6e3a8a444e959"}]}

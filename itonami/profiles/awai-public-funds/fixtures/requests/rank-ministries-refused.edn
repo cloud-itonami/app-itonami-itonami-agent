@@ -1,0 +1,5 @@
+;; A ranking request: not a supported kind (ADR 0046 D3), refused by name.
+{:request/id "rank-ministries-refused"
+ :kind :rank-ministries
+ :scope {:country "JP" :level :central :account :general :fiscal-year "2024"}
+ :sources []}

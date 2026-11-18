@@ -1,0 +1,68 @@
+;; Japan's purpose classification (目的別分類) of general-account expenditure
+;; mapped to UN COFOG divisions, for awai-public-funds (AWAI-3294,
+;; network-awai-apex ADR 0046 D3/D5).
+;;
+;; Every mapping here is :assumed: it is this profile's judgement, not a
+;; statement by the Ministry of Finance or the UN. The code names come from
+;; the 目的別分類 table in 「令和6年度 一般会計 当初予算」 (予算書・決算書データベース,
+;; https://www.bb.mof.go.jp/server/2024/dlpdf/DL202411001.pdf, pp. 1136-1137,
+;; sha256 d5031c98e8a1296985b5a12b3896ce7abc181e438ba57cca1b0639b9725a1883).
+;; That table says the classification exists to help compute government
+;; spending in the national accounts (国民経済計算), which is why it is used
+;; as the bridge to COFOG.
+;;
+;; :confidence :high  the code's whole scope falls in one COFOG division.
+;; :confidence :low   most of it does, but part belongs elsewhere (see :note).
+;; :division nil      the code spans several divisions or is a reserve; its
+;;                    amounts are reported as unmapped rather than guessed.
+;; A code missing from this map is reported as unknown.
+{:map/version "2026-11-18"
+ :map/basis :assumed
+ :cofog/divisions {"01" "General public services" "02" "Defence" "03" "Public order and safety"
+                   "04" "Economic affairs" "05" "Environmental protection"
+                   "06" "Housing and community amenities" "07" "Health"
+                   "08" "Recreation, culture and religion" "09" "Education" "10" "Social protection"}
+ :codes
+ {"011" {:name "皇室費" :division "01" :confidence :high :note "Head of state (COFOG 01.1)"}
+  "012" {:name "国会費" :division "01" :confidence :high :note "Legislative organs (01.1)"}
+  "013" {:name "選挙費" :division "01" :confidence :high :note "Elections; general services (01.3/01.6)"}
+  "014" {:name "司法、警察及び消防費" :division "03" :confidence :high :note "Courts, police, fire (03.1-03.3)"}
+  "015" {:name "外交費" :division "01" :confidence :low :note "External affairs (01.1); economic aid parts would be 01.2"}
+  "016" {:name "一般行政費" :division "01" :confidence :high :note "General administration (01.3)"}
+  "017" {:name "徴税費" :division "01" :confidence :high :note "Fiscal affairs (01.1)"}
+  "018" {:name "貨幣製造費" :division "01" :confidence :low :note "Treated as fiscal affairs (01.1)"}
+  "021" {:name "地方財政調整費" :division "01" :confidence :high :note "General transfers between levels of government (01.8)"}
+  "029" {:name "その他（地方財政費）" :division "01" :confidence :low :note "Other local-finance transfers, treated as 01.8"}
+  "030" {:name "防衛関係費" :division "02" :confidence :high :note "Defence (02)"}
+  "051" {:name "国土保全費" :division nil :note "Flood control and conservation span 04 and 05"}
+  "052" {:name "国土開発費" :division "04" :confidence :low :note "Mostly transport infrastructure (04.5); urban and housing development would be 06"}
+  "053" {:name "災害対策費" :division nil :note "COFOG has no disaster function; spending belongs to the function it serves"}
+  "054" {:name "試験研究費（国土保全及び開発費）" :division "04" :confidence :low :note "R&D on economic affairs (04.8)"}
+  "059" {:name "その他（国土保全及び開発費）" :division nil :note "Unspecified"}
+  "061" {:name "農林水産業費" :division "04" :confidence :high :note "Agriculture, forestry, fishing (04.2)"}
+  "062" {:name "商工鉱業費" :division "04" :confidence :high :note "Commerce, mining, manufacturing (04.1, 04.4)"}
+  "063" {:name "運輸通信費" :division "04" :confidence :high :note "Transport and communication (04.5, 04.6)"}
+  "065" {:name "物資及び物価調整費" :division "04" :confidence :low :note "Commodity and price stabilisation (04.1, 04.2)"}
+  "071" {:name "学校教育費" :division "09" :confidence :high :note "Education (09.1-09.4)"}
+  "072" {:name "社会教育及び文化費" :division "08" :confidence :low :note "Culture (08.2); adult education would be 09"}
+  "073" {:name "科学振興費" :division "01" :confidence :low :note "Basic research (01.4); applied research would sit with its function"}
+  "074" {:name "災害対策費（教育文化費）" :division nil :note "Disaster spending; see 053"}
+  "081" {:name "社会保険費" :division "10" :confidence :low :note "Pensions and care (10); the health-insurance part would be 07"}
+  "082" {:name "生活保護費" :division "10" :confidence :low :note "Social assistance (10.7); the medical-assistance part would be 07"}
+  "083" {:name "社会福祉費" :division "10" :confidence :high :note "Social welfare (10)"}
+  "084" {:name "住宅対策費" :division "06" :confidence :low :note "Housing development (06.1); housing benefits would be 10.6"}
+  "085" {:name "失業対策費" :division "10" :confidence :high :note "Unemployment (10.5)"}
+  "086" {:name "保健衛生費" :division "07" :confidence :high :note "Health (07)"}
+  "087" {:name "試験研究費（社会保障関係費）" :division "07" :confidence :low :note "Health R&D (07.5)"}
+  "088" {:name "災害対策費（社会保障関係費）" :division nil :note "Disaster spending; see 053"}
+  "089" {:name "その他（社会保障関係費）" :division nil :note "Unspecified"}
+  "091" {:name "文官恩給費" :division "10" :confidence :high :note "Government-employee pensions (10.2)"}
+  "092" {:name "旧軍人遺族等恩給費" :division "10" :confidence :high :note "Pensions to former military personnel and survivors (10.2, 10.4)"}
+  "099" {:name "その他（恩給費）" :division "10" :confidence :low :note "Other pensions (10.2)"}
+  "100" {:name "国債費" :division "01" :confidence :low :note "Public debt transactions (01.7) cover interest; principal repayment is financing, not expense, in GFS"}
+  "106" {:name "ウクライナ情勢経済緊急対応予備費" :division nil :note "Reserve; used amounts are spent through other items"}
+  "107" {:name "原油価格・物価高騰対策及び賃上げ促進環境整備対応予備費" :division nil :note "Reserve; see 106"}
+  "109" {:name "復興加速化・福島再生予備費" :division nil :note "Reserve; see 106"}
+  "110" {:name "予備費" :division nil :note "Reserve; see 106"}
+  "191" {:name "その他行政費" :division nil :note "Unspecified"}
+  "199" {:name "その他" :division nil :note "Unspecified"}}}

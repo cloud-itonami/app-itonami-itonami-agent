@@ -1,0 +1,36 @@
+;; Fixture test for the awai-public-funds analysis (AWAI-3294).
+;;
+;; For every request in <profile>/fixtures/requests/ it runs
+;; awai-public-funds.analyze (source files are read from <profile>/fixtures/)
+;; and compares the result with <profile>/fixtures/expected/<id>.result.edn or
+;; <id>.refusal.edn. Prints one line per fixture and exits 1 on any
+;; difference. Reads only; it writes nothing.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/), or directly:
+;; cd scripts && kbb public_funds_self_test.cljk
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[public-funds-io :as io]
+         '[awai-public-funds.analyze :as a])
+
+(def fixtures (path/join io/home "fixtures"))
+(def expected-dir (path/join fixtures "expected"))
+(def data (io/data))
+
+(defn compare-one [file]
+  (let [request (io/read-edn (path/join fixtures "requests" file))
+        id (:request/id request)
+        {:keys [result refusal]} (a/analyze request (io/inputs fixtures request) (:cofog-map data) (:ministries data))
+        [outcome actual ext] (if refusal [:refused refusal ".refusal.edn"] [:analyzed result ".result.edn"])
+        expected (io/read-edn (path/join expected-dir (str id ext)))]
+    {:id id :outcome outcome :ok? (= expected actual)
+     :problem (when (not= expected actual) {:expected-file (str id ext) :expected? (some? expected)})}))
+
+(let [files (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync (path/join fixtures "requests")))))
+      results (mapv compare-one files)
+      failed (remove :ok? results)]
+  (doseq [{:keys [id outcome ok? problem]} results]
+    (println (str (if ok? "ok    " "FAIL  ") (name outcome) "  " id))
+    (when problem (prn problem)))
+  (println (str (count results) " fixtures, " (count failed) " failed"))
+  (when (seq failed) (js/process.exit 1)))
