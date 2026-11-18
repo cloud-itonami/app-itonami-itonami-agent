@@ -59,7 +59,7 @@ are fictional test values standing in for server-resolved records.
 ## Runs
 
 Environment: macOS (load average 70–310 during the runs), Node v26.0.0, kbb
-engine `kotoba-lang/org-babashka-nbb` `1675e6a`, itonami-agent base `dbe0223`,
+engine `kotoba-lang/org-babashka-nbb` `1675e6a`, itonami-agent base `dbe0223` (rebased onto `f791f68`, AWAI-3319, before the PR; the profile check below was rerun on the rebased tree),
 `ITONAMI_DIR=<repo>/itonami`, `AWAI_MURAKUMO_API_DIR` = a clone of
 cloud-murakumo-api at `6271516`. Commands use `bin/itonami-agent-kbb`; the
 native `bin/itonami-agent` blocks the `cron` routes (pending the Kotoba/Amu
