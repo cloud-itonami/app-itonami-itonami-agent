@@ -57,7 +57,7 @@ jobs are `no_agent`, `enabled false`, and run only on demand.
 ## Runs
 
 Environment: macOS, Node v26.0.0, kbb engine `kotoba-lang/org-babashka-nbb`
-`1675e6a`, itonami-agent base `f791f68`, `ITONAMI_DIR=<repo>/itonami`.
+`1675e6a`, itonami-agent base `f791f68` (manifest re-checked after merging main `2fa92b6`: `0 with errors, 0 with warnings`), `ITONAMI_DIR=<repo>/itonami`.
 Commands use `bin/itonami-agent-kbb`; the native `bin/itonami-agent` blocks
 the `cron` routes (`blocked pending Kotoba/Amu selfhost port`, AWAI-131).
 
