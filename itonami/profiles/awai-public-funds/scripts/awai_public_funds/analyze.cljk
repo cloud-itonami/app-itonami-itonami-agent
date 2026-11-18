@@ -1,0 +1,190 @@
+(ns awai-public-funds.analyze
+  "Public-funds analysis for the awai-public-funds profile (AWAI-3294,
+  network-awai-apex ADR 0046).
+
+  One request kind:
+
+    :budget-vs-outturn
+        read a Japanese general-account expenditure budget CSV (予定経費要求書
+        科目別内訳, amounts in thousand yen) and the outturn CSV for the same
+        fiscal year (歳出決算報告書 科目別内訳, amounts in yen), both from the
+        Ministry of Finance 予算書・決算書データベース; aggregate them by 所管
+        (ministry) and COFOG division; check the outturn's own arithmetic
+        identities; compare the initial budget with the outturn per ministry.
+
+  Every value carries a basis (ADR 0046 D3): :derived for sums of source rows,
+  :assumed for the COFOG mapping (data/cofog-map.edn), :unknown where nothing
+  can be said. A difference is reported as a difference; its cause is not
+  asserted. Nothing here ranks ministries, judges spending or names people.
+
+  Pure: no I/O, no clock, no network. The caller reads the files, hashes
+  them and passes the text and digests in.")
+
+(def kind "awai.public-funds/1")
+
+(def supported-kinds #{:budget-vs-outturn})
+
+(def initial-head
+  ["所管" "組織" "項コード" "主要経費別分類コード" "目的別分類コード" "財政法公債金対象非対象別分類コード"
+   "経済性質別分類コード" "使途別分類コード" "目別分類コード" "項名" "目名"])
+
+(def initial-tail ["前年度予算額(千円)" "比較増△減額(千円)"])
+
+(def outturn-head
+  ["所管" "組織" "項コード" "主要経費別分類コード" "目的別分類コード" "財政法公債金対象非対象別分類コード"
+   "経済性質別分類コード" "使途別分類コード" "目番号" "項名" "目名" "歳出予算額(円)" "前年度繰越額(円)"
+   "予備費使用額(円)" "流用等増△減額(円)" "予算決定後移替増△減額(円)" "歳出予算現額(円)"
+   "支出済歳出額(円)" "翌年度繰越額(円)" "不用額(円)"])
+
+(def open-points
+  ["The COFOG division of each purpose code is this profile's assumption (data/cofog-map.edn); :low confidence codes are partly in other divisions."
+   "Unmapped codes (reserves, disaster spending, unspecified items) are reported separately, not spread over divisions."
+   "Initial budget and outturn differ by supplementary budgets, reserve use, transfers and carry-overs; the difference is shown without a cause."
+   "国債費 includes principal repayment, which is financing rather than expense in GFS/COFOG."
+   "The outturn CSV does not state its fiscal year; it is taken from the request and its source title."
+   "Only the general account of the central government; special accounts and local government are out of scope (ADR 0046 D1, O3)."])
+
+(defn- refusal [request reason detail]
+  {:request/id (:request/id request) :kind (:kind request) :reason reason :detail detail})
+
+(defn- parse-lines [text]
+  (->> (.split (str text) #"\r?\n") (remove #(= "" %)) (mapv #(vec (.split % ",")))))
+
+(defn- ->int [s]
+  (when (and (string? s) (re-matches #"-?\d+" s)) (js/parseInt s 10)))
+
+(defn- reiwa-year [col]
+  (when-let [[_ n] (re-matches #"令和(\d+)年度要求額" (str col))]
+    (str (+ 2018 (js/parseInt n 10)))))
+
+(defn- check-header [role header fiscal-year]
+  (case role
+    :initial-budget
+    (cond
+      (not (and (= 14 (count header)) (= initial-head (subvec header 0 11)) (= initial-tail (subvec header 12 14))))
+      {:reason :unknown-format :detail "initial-budget header is not the 予定経費要求書 科目別内訳 layout"}
+      (not= fiscal-year (reiwa-year (nth header 11)))
+      {:reason :fiscal-year-mismatch :detail (str "header says " (nth header 11) "; request says " fiscal-year)})
+    :outturn
+    (when (not= outturn-head header)
+      {:reason :unknown-format :detail "outturn header is not the 歳出決算報告書 科目別内訳 layout"})))
+
+(defn- initial-rows [lines]
+  (for [r (rest lines)]
+    {:ministry (nth r 0) :purpose (nth r 4) :item (str (nth r 2) "/" (nth r 8))
+     :initial (some-> (->int (nth r 11)) (* 1000))}))
+
+(defn- outturn-rows [lines]
+  (for [r (rest lines)]
+    (let [[budget carried reserve diverted moved current spent forward unused] (map ->int (subvec r 11 20))]
+      {:ministry (nth r 0) :purpose (nth r 4) :item (str (nth r 2) "/" (nth r 8))
+       :budget budget :carried-in carried :reserve-use reserve :diverted diverted :moved moved
+       :current current :spent spent :carried-out forward :unused unused})))
+
+(defn- derived [v method] {:value v :unit "JPY" :basis :derived :method method})
+
+(defn- division-of [cofog-map code]
+  (if-let [m (get (:codes cofog-map) code)]
+    (if (:division m)
+      {:division (:division m) :basis :assumed :confidence (:confidence m)}
+      {:division nil :basis :unmapped})
+    {:division nil :basis :unknown}))
+
+(defn- sum-of [k rows] (reduce + 0 (keep k rows)))
+
+(defn- capped [xs] {:count (count xs) :first (vec (take 20 xs))})
+
+(defn- identity-check [kind rows f]
+  (let [bad (keep (fn [r] (let [[lhs rhs] (f r)] (when (not= lhs rhs) {:item (:item r) :ministry (:ministry r) :lhs lhs :rhs rhs}))) rows)]
+    {:kind kind :rows-checked (count rows) :result (if (seq bad) :differs :match) :differing (capped bad)}))
+
+(defn analyze
+  "request: the request map. inputs: {role {:text csv :sha256 actual-digest}}.
+  cofog-map, ministries: the profile's data files. Returns {:result ...} or
+  {:refusal ...}."
+  [request inputs cofog-map ministries]
+  (let [fy (get-in request [:scope :fiscal-year])
+        sources (:sources request)
+        by-role (into {} (map (juxt :role identity)) sources)]
+    (cond
+      (not (supported-kinds (:kind request)))
+      {:refusal (refusal request :unsupported-kind "supported kinds: :budget-vs-outturn")}
+
+      (not (and (by-role :initial-budget) (by-role :outturn) (get inputs :initial-budget) (get inputs :outturn)))
+      {:refusal (refusal request :missing-source "need an :initial-budget and an :outturn source")}
+
+      :else
+      (let [mismatch (first (for [s sources
+                                  :let [actual (get-in inputs [(:role s) :sha256])]
+                                  :when (not= (:sha256 s) actual)]
+                              {:role (:role s) :declared (:sha256 s) :actual actual}))
+            lines (into {} (for [role [:initial-budget :outturn]] [role (parse-lines (get-in inputs [role :text]))]))
+            header-problem (some (fn [role] (check-header role (first (lines role)) fy)) [:initial-budget :outturn])]
+        (cond
+          mismatch {:refusal (assoc (refusal request :digest-mismatch "a source file differs from its declared sha256") :source mismatch)}
+          header-problem {:refusal (merge (refusal request (:reason header-problem) (:detail header-problem)))}
+          :else
+          (let [ini (initial-rows (lines :initial-budget))
+                out (outturn-rows (lines :outturn))
+                key-of (fn [r] [(:ministry r) (:division (division-of cofog-map (:purpose r)))])
+                ini-g (group-by key-of ini)
+                out-g (group-by key-of out)
+                rows (vec (for [[m d :as k] (sort-by (fn [[m d]] [m (or d "~")]) (distinct (concat (keys ini-g) (keys out-g))))
+                                :let [i (get ini-g k) o (get out-g k)
+                                      cls {:basis (if (some #(= :unknown (:basis (division-of cofog-map (:purpose %)))) (concat i o))
+                                                    :unknown :unmapped)}]]
+                            {:ministry m
+                             :did (get (:ministries ministries) m)
+                             :cofog (if d
+                                      {:division d :name (get-in cofog-map [:cofog/divisions d]) :basis :assumed
+                                       :purpose-codes (vec (sort (distinct (map :purpose (concat i o)))))}
+                                      {:division nil :basis (:basis cls)
+                                       :purpose-codes (vec (sort (distinct (map :purpose (concat i o)))))})
+                             :initial-budget (if i (derived (sum-of :initial i) "sum of 目 rows of the initial budget x 1000") {:basis :unknown})
+                             :outturn-budget (if o (derived (sum-of :budget o) "sum of 歳出予算額") {:basis :unknown})
+                             :current-budget (if o (derived (sum-of :current o) "sum of 歳出予算現額") {:basis :unknown})
+                             :spent (if o (derived (sum-of :spent o) "sum of 支出済歳出額") {:basis :unknown})
+                             :carried-out (if o (derived (sum-of :carried-out o) "sum of 翌年度繰越額") {:basis :unknown})
+                             :unused (if o (derived (sum-of :unused o) "sum of 不用額") {:basis :unknown})}))
+                ministries-i (set (map :ministry ini))
+                ministries-o (set (map :ministry out))
+                per-ministry (vec (for [m (sort (into ministries-i ministries-o))
+                                        :let [i (sum-of :initial (filter #(= m (:ministry %)) ini))
+                                              o (filter #(= m (:ministry %)) out)
+                                              ob (sum-of :budget o) sp (sum-of :spent o)]]
+                                    {:ministry m :initial-budget i :outturn-budget ob :spent sp
+                                     :outturn-budget-minus-initial (- ob i) :spent-minus-initial (- sp i)
+                                     :result (if (= i ob) :match :differs)}))
+                codes (set (map :purpose (concat ini out)))
+                unknown-codes (vec (sort (remove #(contains? (:codes cofog-map) %) codes)))
+                unmapped-codes (vec (sort (filter #(and (contains? (:codes cofog-map) %) (nil? (get-in cofog-map [:codes % :division]))) codes)))
+                totals {:initial-budget (derived (sum-of :initial ini) "sum of all 目 rows x 1000")
+                        :outturn-budget (derived (sum-of :budget out) "sum of all 歳出予算額")
+                        :current-budget (derived (sum-of :current out) "sum of all 歳出予算現額")
+                        :spent (derived (sum-of :spent out) "sum of all 支出済歳出額")
+                        :carried-out (derived (sum-of :carried-out out) "sum of all 翌年度繰越額")
+                        :unused (derived (sum-of :unused out) "sum of all 不用額")
+                        :unmapped-spent (derived (sum-of :spent (filter #(nil? (:division (division-of cofog-map (:purpose %)))) out))
+                                                 "sum of 支出済歳出額 with an unmapped or unknown purpose code")}]
+            {:result
+             {:kind kind
+              :request/id (:request/id request)
+              :scope (:scope request)
+              :unit "JPY"
+              :source-rows {:initial-budget (count ini) :outturn (count out)}
+              :rows rows
+              :totals totals
+              :checks [(identity-check :outturn-current-budget-identity out
+                                       (fn [r] [(:current r) (+ (:budget r) (:carried-in r) (:reserve-use r) (:diverted r) (:moved r))]))
+                       (identity-check :outturn-disposition-identity out
+                                       (fn [r] [(:current r) (+ (:spent r) (:carried-out r) (:unused r))]))
+                       {:kind :initial-vs-outturn-budget-by-ministry :by-ministry per-ministry}
+                       {:kind :ministry-coverage
+                        :only-in-initial (vec (sort (remove ministries-o ministries-i)))
+                        :only-in-outturn (vec (sort (remove ministries-i ministries-o)))
+                        :without-did (vec (sort (remove #(get (:ministries ministries) %) (into ministries-i ministries-o))))}
+                       {:kind :purpose-code-coverage :unmapped unmapped-codes :unknown unknown-codes}]
+              :cofog-map {:ref "data/cofog-map.edn" :version (:map/version cofog-map) :basis :assumed}
+              :sources (mapv #(assoc % :verified-sha256 true) sources)
+              :open-points open-points
+              :produced-by {:profile "awai-public-funds"}}}))))))

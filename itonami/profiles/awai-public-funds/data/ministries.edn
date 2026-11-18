@@ -1,0 +1,24 @@
+;; 所管 (the ministry column of the budget and outturn CSVs) to the
+;; open-jpn-gov roster (cloud-itonami/open-jpn-gov worker/src/roster.ts, 38
+;; entries; DID pattern did:web:open-jpn-gov.etzhayyim.com:{category}:{code}).
+;;
+;; Only exact name matches are listed. 皇室費, 国会, 裁判所 and 内閣 have no single
+;; roster entry (the roster covers the executive; 内閣 in the budget spans
+;; 内閣官房, 内閣法制局 and others), so they carry no :did. That is recorded as
+;; unknown, not filled in.
+{:roster/source "cloud-itonami/open-jpn-gov worker/src/roster.ts"
+ :ministries
+ {"内閣府" "did:web:open-jpn-gov.etzhayyim.com:cabinet:cao"
+  "デジタル庁" "did:web:open-jpn-gov.etzhayyim.com:agency:digital"
+  "総務省" "did:web:open-jpn-gov.etzhayyim.com:ministry:soumu"
+  "法務省" "did:web:open-jpn-gov.etzhayyim.com:ministry:moj"
+  "外務省" "did:web:open-jpn-gov.etzhayyim.com:ministry:mofa"
+  "財務省" "did:web:open-jpn-gov.etzhayyim.com:ministry:mof"
+  "文部科学省" "did:web:open-jpn-gov.etzhayyim.com:ministry:mext"
+  "厚生労働省" "did:web:open-jpn-gov.etzhayyim.com:ministry:mhlw"
+  "農林水産省" "did:web:open-jpn-gov.etzhayyim.com:ministry:maff"
+  "経済産業省" "did:web:open-jpn-gov.etzhayyim.com:ministry:meti"
+  "国土交通省" "did:web:open-jpn-gov.etzhayyim.com:ministry:mlit"
+  "環境省" "did:web:open-jpn-gov.etzhayyim.com:ministry:env"
+  "防衛省" "did:web:open-jpn-gov.etzhayyim.com:ministry:mod"
+  "会計検査院" "did:web:open-jpn-gov.etzhayyim.com:independent:jbaudit"}}

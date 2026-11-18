@@ -1,0 +1,85 @@
+{
+  "jobs": [
+    {
+      "last_status": "ok",
+      "failure_streak": 0,
+      "paused_at": "2026-11-18T09:30:00+09:00",
+      "paused_reason": "Run on demand only (itonami-agent-kbb cron run <id>); no schedule until the owner decides ADR 0046 O1-O2.",
+      "skills": [],
+      "origin": null,
+      "model": null,
+      "no_agent": true,
+      "enabled_toolsets": null,
+      "workdir": null,
+      "next_run_at": null,
+      "repeat": {
+        "times": null,
+        "completed": 1
+      },
+      "last_run_at": "2026-11-18T09:21:38.833000+09:00",
+      "enabled": false,
+      "id": "a7c1e0f3b294",
+      "provider": null,
+      "name": "public-funds-self-test",
+      "schedule": {
+        "kind": "interval",
+        "minutes": 1440,
+        "display": "every 1440m"
+      },
+      "base_url": null,
+      "script": "public_funds_self_test.cljk",
+      "prompt": "",
+      "monitor_url": null,
+      "monitor_script": null,
+      "state": "error",
+      "context_from": null,
+      "created_at": "2026-11-18T09:30:00+09:00",
+      "skill": null,
+      "last_delivery_error": null,
+      "last_error": "Failed to compute next run for recurring schedule.",
+      "deliver": "local",
+      "schedule_display": "every 1440m"
+    },
+    {
+      "last_status": "ok",
+      "failure_streak": 0,
+      "paused_at": "2026-11-18T09:30:00+09:00",
+      "paused_reason": "Run on demand only (itonami-agent-kbb cron run <id>); no schedule until the owner decides ADR 0046 O1-O2.",
+      "skills": [],
+      "origin": null,
+      "model": null,
+      "no_agent": true,
+      "enabled_toolsets": null,
+      "workdir": null,
+      "next_run_at": null,
+      "repeat": {
+        "times": null,
+        "completed": 1
+      },
+      "last_run_at": "2026-11-18T09:24:07.278000+09:00",
+      "enabled": false,
+      "id": "d4e8b2c61f05",
+      "provider": null,
+      "name": "public-funds-inbox",
+      "schedule": {
+        "kind": "interval",
+        "minutes": 1440,
+        "display": "every 1440m"
+      },
+      "base_url": null,
+      "script": "public_funds_inbox.cljk",
+      "prompt": "",
+      "monitor_url": null,
+      "monitor_script": null,
+      "state": "error",
+      "context_from": null,
+      "created_at": "2026-11-18T09:30:00+09:00",
+      "skill": null,
+      "last_delivery_error": null,
+      "last_error": "Failed to compute next run for recurring schedule.",
+      "deliver": "local",
+      "schedule_display": "every 1440m"
+    }
+  ],
+  "updated_at": "2026-11-18T09:26:36.119000+09:00"
+}

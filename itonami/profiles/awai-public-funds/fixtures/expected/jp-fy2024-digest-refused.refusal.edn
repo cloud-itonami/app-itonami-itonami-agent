@@ -1,0 +1,1 @@
+{:request/id "jp-fy2024-digest-refused", :kind :budget-vs-outturn, :reason :digest-mismatch, :detail "a source file differs from its declared sha256", :source {:role :outturn, :declared "0000000000000000000000000000000000000000000000000000000000000000", :actual "3e1932534a94be40cf4af47d6cd8c6312497f1d552d210ec42e6e3a8a444e959"}}

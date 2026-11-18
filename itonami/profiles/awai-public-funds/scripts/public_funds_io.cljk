@@ -1,0 +1,32 @@
+(ns public-funds-io
+  "File reading shared by the awai-public-funds jobs (AWAI-3294): the
+  profile's data files, and a request's source files with their sha256.
+  Reads only; it writes nothing and makes no network request."
+  (:require ["node:fs" :as fs]
+            ["node:path" :as path]
+            ["node:crypto" :as crypto]
+            [cljs.reader :as reader]))
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+
+(defn slurp [p] (when (fs/existsSync p) (str (fs/readFileSync p "utf8"))))
+(defn read-edn [p] (some-> (slurp p) reader/read-string))
+(defn safe-id? [s] (boolean (and (string? s) (re-matches #"[A-Za-z0-9][A-Za-z0-9._-]{0,63}" s))))
+(defn safe-rel? [s] (boolean (and (string? s) (re-matches #"sources/[A-Za-z0-9][A-Za-z0-9._-]{0,63}" s))))
+
+(defn data [] {:cofog-map (read-edn (path/join home "data" "cofog-map.edn"))
+               :ministries (read-edn (path/join home "data" "ministries.edn"))})
+
+(defn inputs
+  "{role {:text .. :sha256 ..}} for the request's sources under base-dir.
+  A source whose :file is not a plain sources/<name> path, or is missing,
+  is left out (the analysis then refuses with :missing-source)."
+  [base-dir request]
+  (into {} (for [{:keys [role file]} (:sources request)
+                 :when (safe-rel? file)
+                 :let [p (path/join base-dir file)]
+                 :when (fs/existsSync p)
+                 :let [buf (fs/readFileSync p)]]
+             [role {:text (.toString buf "utf8")
+                    :sha256 (-> (crypto/createHash "sha256") (.update buf) (.digest "hex"))}])))
