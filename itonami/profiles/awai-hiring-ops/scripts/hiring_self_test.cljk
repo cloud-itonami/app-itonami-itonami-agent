@@ -1,0 +1,64 @@
+;; Fixture test for the awai-hiring-ops postings (AWAI-3173).
+;;
+;; Handles every request in <profile>/fixtures/requests/: first every
+;; :publish request (sorted by file name), adding each ready plan's record to
+;; an in-memory posting index, then every other request against that index.
+;; Compares each result with <profile>/fixtures/expected/: <id>.plan.edn and
+;; <id>.announcement.txt for a ready publication, <id>.blocked.edn for a
+;; blocked one, <id>.search.edn for a search, <id>.refusal.edn for an
+;; unsupported kind. Prints one line per fixture and exits 1 on any
+;; difference. Reads only; it writes nothing.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/, so kbb reads
+;; scripts/deps.edn), or directly: cd scripts && kbb hiring_self_test.cljk
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[cljs.reader :as reader]
+         '[awai-hiring.posting :as p])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def requests-dir (path/join home "fixtures" "requests"))
+(def expected-dir (path/join home "fixtures" "expected"))
+
+(defn slurp [f] (when (fs/existsSync f) (str (fs/readFileSync f "utf8"))))
+(defn read-edn [f] (some-> (slurp f) reader/read-string))
+(defn expected [id ext] (read-edn (path/join expected-dir (str id ext))))
+
+(defn- same [outcome id want got extra]
+  (merge {:id id :outcome outcome :ok? (= want got)
+          :problem (when (not= want got) {:expected want :actual got})}
+         extra))
+
+(defn compare-one [index request]
+  (let [id (:request/id request)
+        {:keys [plan announcement blocked search refusal]} (p/handle index request)]
+    (cond
+      refusal (same :refused id (expected id ".refusal.edn") refusal nil)
+      blocked (same :blocked id (expected id ".blocked.edn") blocked
+                    {:why (str "failed-checks=" (pr-str (:failed-checks blocked))
+                               " missing-gates=" (pr-str (get-in blocked [:recruit :missing-gates])))})
+      search (same :searched id (expected id ".search.edn") search
+                   {:why (str "hits=" (pr-str (mapv :postingId (:hits search))))})
+      :else
+      (let [want-plan (expected id ".plan.edn")
+            want-text (slurp (path/join expected-dir (str id ".announcement.txt")))
+            ok? (and (= want-plan plan) (= want-text announcement))]
+        {:id id :outcome :published :ok? ok? :record (p/published-record plan)
+         :why (str "recruit=" (name (get-in plan [:recruit :status])))
+         :problem (when-not ok? {:plan {:expected want-plan :actual plan}
+                                 :announcement {:expected want-text :actual announcement}})}))))
+
+(let [files (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync requests-dir))))
+      requests (map #(read-edn (path/join requests-dir %)) files)
+      publishes (filter #(= :publish (:kind %)) requests)
+      others (remove #(= :publish (:kind %)) requests)
+      published (mapv #(compare-one [] %) publishes)
+      index (vec (keep :record published))
+      results (into published (map #(compare-one index %) others))
+      failed (remove :ok? results)]
+  (doseq [{:keys [id outcome ok? problem why]} results]
+    (println (str (if ok? "ok    " "FAIL  ") (name outcome) "  " id (when why (str "  " why))))
+    (when problem (prn problem)))
+  (println (str (count results) " fixtures, " (count failed) " failed"))
+  (when (seq failed) (js/process.exit 1)))

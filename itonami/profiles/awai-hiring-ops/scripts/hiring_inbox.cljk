@@ -1,0 +1,62 @@
+;; Handle the requests the user placed in <profile>/workspace/inbox/
+;; (AWAI-3173).
+;;
+;; :publish requests first: a ready plan's record is written to the
+;; host-local posting index <profile>/workspace/index/<rkey>.edn, with
+;; <request-id>.plan.edn and <request-id>.announcement.txt in
+;; workspace/drafts; a blocked one writes <request-id>.blocked.edn and
+;; nothing to the index. Then :search requests read the index and write
+;; <request-id>.search.edn. The workspace is host-local and never part of the
+;; profile bundle. Nothing is posted anywhere: the user posts the
+;; announcement themselves.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/).
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '[cljs.reader :as reader]
+         '[awai-hiring.posting :as p])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME")
+              (path/resolve (js/process.cwd) "..")))
+(def inbox (path/join home "workspace" "inbox"))
+(def drafts (path/join home "workspace" "drafts"))
+(def index-dir (path/join home "workspace" "index"))
+
+(defn safe-id? [s] (boolean (and (string? s) (re-matches #"[A-Za-z0-9][A-Za-z0-9._-]{0,63}" s))))
+(defn spit-to [dir name s] (fs/writeFileSync (path/join dir name) s))
+(defn edn-str [v] (str (pr-str v) "\n"))
+(defn read-index []
+  (->> (js->clj (fs/readdirSync index-dir))
+       (filter #(.endsWith % ".edn"))
+       sort
+       (mapv #(reader/read-string (str (fs/readFileSync (path/join index-dir %) "utf8"))))))
+
+(doseq [d [drafts index-dir]] (fs/mkdirSync d #js {:recursive true}))
+(let [files (if (fs/existsSync inbox)
+              (sort (filter #(.endsWith % ".edn") (js->clj (fs/readdirSync inbox))))
+              [])
+      requests (keep (fn [file]
+                       (let [r (reader/read-string (str (fs/readFileSync (path/join inbox file) "utf8")))]
+                         (if (safe-id? (:request/id r))
+                           r
+                           (do (println (str "skip  " file "  :request/id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")) nil))))
+                     files)]
+  (doseq [r (concat (filter #(= :publish (:kind %)) requests)
+                    (remove #(= :publish (:kind %)) requests))]
+    (let [id (:request/id r)
+          {:keys [plan announcement blocked search refusal]} (p/handle (read-index) r)]
+      (cond
+        refusal (do (spit-to drafts (str id ".refusal.edn") (edn-str refusal))
+                    (println (str "refused    " id "  " (name (:reason refusal)))))
+        blocked (do (spit-to drafts (str id ".blocked.edn") (edn-str blocked))
+                    (println (str "blocked    " id "  failed-checks=" (pr-str (:failed-checks blocked))
+                                  " missing-gates=" (pr-str (get-in blocked [:recruit :missing-gates])))))
+        search (do (spit-to drafts (str id ".search.edn") (edn-str search))
+                   (println (str "searched   " id "  hits=" (pr-str (mapv :postingId (:hits search))))))
+        :else (let [record (p/published-record plan)
+                    rkey (get-in plan [:recruit :effects 0 :rkey])]
+                (spit-to index-dir (str rkey ".edn") (edn-str record))
+                (spit-to drafts (str id ".plan.edn") (edn-str plan))
+                (spit-to drafts (str id ".announcement.txt") announcement)
+                (println (str "published  " id "  index/" rkey ".edn  recruit=ready"))))))
+  (println (str (count files) " request(s) read from workspace/inbox")))

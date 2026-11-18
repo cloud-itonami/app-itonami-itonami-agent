@@ -1,0 +1,4 @@
+;; Fictional test values only. Matches nothing: no published posting is in Fukuoka.
+{:kind :search,
+ :query {:location "Fukuoka"},
+ :request/id "search-no-hit"}

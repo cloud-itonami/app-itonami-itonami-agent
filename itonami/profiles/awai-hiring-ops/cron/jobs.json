@@ -1,0 +1,85 @@
+{
+  "jobs": [
+    {
+      "last_status": "ok",
+      "failure_streak": 0,
+      "paused_at": "2026-11-18T10:00:00+09:00",
+      "paused_reason": "Run on demand only (itonami-agent-kbb cron run <id>); no schedule until the owner decides ADR 0043 O1-O5.",
+      "skills": [],
+      "origin": null,
+      "model": null,
+      "no_agent": true,
+      "enabled_toolsets": null,
+      "workdir": null,
+      "next_run_at": null,
+      "repeat": {
+        "times": null,
+        "completed": 1
+      },
+      "last_run_at": "2026-11-18T11:06:41.152000+09:00",
+      "enabled": false,
+      "id": "f5fb753f08ff",
+      "provider": null,
+      "name": "hiring-self-test",
+      "schedule": {
+        "kind": "interval",
+        "minutes": 1440,
+        "display": "every 1440m"
+      },
+      "base_url": null,
+      "script": "hiring_self_test.cljk",
+      "prompt": "",
+      "monitor_url": null,
+      "monitor_script": null,
+      "state": "error",
+      "context_from": null,
+      "created_at": "2026-11-18T10:00:00+09:00",
+      "skill": null,
+      "last_delivery_error": null,
+      "last_error": "Failed to compute next run for recurring schedule.",
+      "deliver": "local",
+      "schedule_display": "every 1440m"
+    },
+    {
+      "last_status": "ok",
+      "failure_streak": 0,
+      "paused_at": "2026-11-18T10:00:00+09:00",
+      "paused_reason": "Run on demand only (itonami-agent-kbb cron run <id>); no schedule until the owner decides ADR 0043 O1-O5.",
+      "skills": [],
+      "origin": null,
+      "model": null,
+      "no_agent": true,
+      "enabled_toolsets": null,
+      "workdir": null,
+      "next_run_at": null,
+      "repeat": {
+        "times": null,
+        "completed": 1
+      },
+      "last_run_at": "2026-11-18T11:07:51.525000+09:00",
+      "enabled": false,
+      "id": "c1a3ee8ea001",
+      "provider": null,
+      "name": "hiring-inbox",
+      "schedule": {
+        "kind": "interval",
+        "minutes": 1440,
+        "display": "every 1440m"
+      },
+      "base_url": null,
+      "script": "hiring_inbox.cljk",
+      "prompt": "",
+      "monitor_url": null,
+      "monitor_script": null,
+      "state": "error",
+      "context_from": null,
+      "created_at": "2026-11-18T10:00:00+09:00",
+      "skill": null,
+      "last_delivery_error": null,
+      "last_error": "Failed to compute next run for recurring schedule.",
+      "deliver": "local",
+      "schedule_display": "every 1440m"
+    }
+  ],
+  "updated_at": "2026-11-18T11:09:01.815000+09:00"
+}

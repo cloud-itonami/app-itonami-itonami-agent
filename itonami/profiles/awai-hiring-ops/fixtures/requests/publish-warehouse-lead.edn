@@ -1,0 +1,33 @@
+;; Fictional test values only. A second posting of the same company, so a
+;; search can tell the two apart; every check and recruit gate passes.
+{:request/id "publish-warehouse-lead",
+ :announcement {:call-to-action "Apply through our careers page."},
+ :attestations
+ {:council-charter-attestation true,
+  :no-platform-held-key-baseline true,
+  :no-probing-baseline true,
+  :murakumo-only-inference-baseline true,
+  :did-primary-baseline true,
+  :append-only-gate-baseline true,
+  :kotoba-only-substrate-baseline true},
+ :data/origin :fixture,
+ :on-behalf-of :own-company,
+ :computed-at "2026-11-18T10:00:00+09:00",
+ :requester-org-did "did:web:example-logistics.example",
+ :kind :publish,
+ :target :local-index,
+ :posting
+ {:requirements {:experience-years 2, :work-hours "shift"},
+  :employer "Example Logistics KK",
+  :occupation-isco "4321",
+  :vacancy-closed? false,
+  :requires-source-consent? false,
+  :title "Warehouse Shift Lead",
+  :id "posting-002",
+  :pay
+  {:hourly-wage-minor 1500,
+   :monthly-hours 170,
+   :displayed-monthly-minor 255000,
+   :currency "JPY"},
+  :employer-did "did:web:example-logistics.example",
+  :location "Osaka"}}
