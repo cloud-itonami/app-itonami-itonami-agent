@@ -1,0 +1,9 @@
+{
+  "source": "kotoba-lang/kotoba lib/kotoba.wasmWebcomponent/src",
+  "revision": "18b8698c475c60d51aab39a99068df353ec8ef26",
+  "review": "KOTOBA-159 independent review in progress at vendoring time (2026-11-18)",
+  "files": {
+    "kotoba-client-runtime.js": "de5e684e2c10430e8317dcbb60784fa65db30c8da8832b79665c15f7d3fefac6",
+    "kotoba-client-consent.css": "eb1caab0619c5ca4428df637ae140bc3774582fa3f0b95a44bbd39b27b6b9086"
+  }
+}
