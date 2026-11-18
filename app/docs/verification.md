@@ -26,3 +26,20 @@ Source, browser, Android VM and physical acceptance are separate claims.
 - **Live send (owner approved, 2026-11-18 02:22Z).** One message to `hiraku-soudan`, default session, from the same emulator and APK, after "Allow once" in the send-message dialog. The reply arrived in 14 s and passed every reply check (same request, bot and session; provider `meta`; model `muse-spark-1.3`; `store.owner` `itonami-agent` with readback). A fresh read-history after reopening the session returned the same two messages from the Agent. Screenshot: `preview-android-chat.png`.
 - **Not verified.** Session creation (a write). Also not verified: a physical Awai OS device on the tailnet, signing, OTA and TalkBack.
 - **Interference.** During this run another session's ADB forward reused local port 9334 for its own emulator. CDP moved to port 47391 and every reading above is from this app's WebView.
+
+# Verification — 2026-11-18, Autonomy view (AWAI-3447)
+
+- **Tests.** ClojureScript: 15 tests, 85 assertions. Babashka: 16 tests, 94 assertions. Both 0 failures.
+  - Negative controls: a stale receipt is not Active; a schedule is not a run; without the receipt the same bot has no board work; a completed issue is not takeable; unknown files and shapes are refused.
+  - The Dandori `take-reason` cases follow the rules documented in `work.kotoba`.
+- **Real data, local and not committed.**
+  - Organization: the AWAI-2795 distributed catalog (899 bots, 762 circles).
+  - Activity: a snapshot of 1,177 receipts (586 bots, 48 hours, newest observation 2026-11-13T12:15Z).
+  - Board: the 583 Linear issues those receipts name, in Dandori's GraphQL export format (`orca linear list-issues`, all 583 in state started).
+- **Browser, 1280 px.**
+  - Fleet view: 899 registered, 842 with a verified schedule, 584 ran at least once, 0 active (24 h), board 583 started.
+  - The stale banner shows. Each card shows its Linear issue and "Next … (take/resume)". No horizontal overflow.
+- **Android (API 35 arm64 emulator).** The three files were pushed to Download and imported with the system picker (multi-select). Circle `cloud-itonami/ao-bot-fleet` shows 9 / 9 / 2 / 0 scoped to the circle, and its cards. Screenshot: `preview-android-autonomy.png`. APK `3910d9ed…1f1b`.
+- **Found while verifying.**
+  - Three APK builds re-packaged old web assets: Cargo and Gradle did not notice the changed `dist/`, and one web build had actually failed. The README now gives the clean-rebuild steps, and the reported APK is the one built after them.
+- **Finding about the bots.** No receipt or observation newer than 2026-11-13 12:15Z was found on AwaiVol. As far as these records show, the bots have not been running on their own since then.

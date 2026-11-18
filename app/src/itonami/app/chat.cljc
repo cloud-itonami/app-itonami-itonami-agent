@@ -6,6 +6,7 @@
   counts only when the Agent says it stored and read it back.
 
   The Agent owns conversation history. Nothing here persists it."
+  (:refer-clojure :exclude [uuid?])
   (:require [clojure.string :as str]))
 
 (def model "muse-spark-1.3")
