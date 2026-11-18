@@ -1,0 +1,111 @@
+{
+  "approved": [
+    "index",
+    "data"
+  ],
+  "collection": "CC-MAIN-2026-43",
+  "requests": [
+    {
+      "started": "2026-11-18T01:01:12.705Z",
+      "method": "GET",
+      "origin": "https://index.commoncrawl.org",
+      "path": "/CC-MAIN-2026-43-index",
+      "query": "?url=http%3A%2F%2Finfo.cern.ch%2F&output=json&limit=1&filter=status%3A200",
+      "range": null,
+      "status": 200,
+      "attempt": 1
+    },
+    {
+      "started": "2026-11-18T01:01:19.780Z",
+      "method": "GET",
+      "origin": "https://data.commoncrawl.org",
+      "path": "/crawl-data/CC-MAIN-2026-43/segments/1791170054656.11/warc/CC-MAIN-20261011230657-20261012020657-00857.warc.gz",
+      "query": "",
+      "range": "bytes=13671574-13672362",
+      "status": 206,
+      "attempt": 1
+    },
+    {
+      "started": "2026-11-18T01:01:20.338Z",
+      "method": "GET",
+      "origin": "https://index.commoncrawl.org",
+      "path": "/CC-MAIN-2026-43-index",
+      "query": "?url=http%3A%2F%2Finfo.cern.ch%2Fhypertext%2FWWW%2FTheProject.html&output=json&limit=1&filter=status%3A200",
+      "range": null,
+      "status": 200,
+      "attempt": 1
+    },
+    {
+      "started": "2026-11-18T01:01:28.523Z",
+      "method": "GET",
+      "origin": "https://data.commoncrawl.org",
+      "path": "/crawl-data/CC-MAIN-2026-43/segments/1791170054242.5/warc/CC-MAIN-20261007210144-20261008000144-00882.warc.gz",
+      "query": "",
+      "range": "bytes=6692441-6693957",
+      "status": 503,
+      "attempt": 1
+    },
+    {
+      "started": "2026-11-18T01:01:33.850Z",
+      "method": "GET",
+      "origin": "https://data.commoncrawl.org",
+      "path": "/crawl-data/CC-MAIN-2026-43/segments/1791170054242.5/warc/CC-MAIN-20261007210144-20261008000144-00882.warc.gz",
+      "query": "",
+      "range": "bytes=6692441-6693957",
+      "status": 503,
+      "attempt": 2
+    },
+    {
+      "started": "2026-11-18T01:01:43.964Z",
+      "method": "GET",
+      "origin": "https://data.commoncrawl.org",
+      "path": "/crawl-data/CC-MAIN-2026-43/segments/1791170054242.5/warc/CC-MAIN-20261007210144-20261008000144-00882.warc.gz",
+      "query": "",
+      "range": "bytes=6692441-6693957",
+      "status": 206,
+      "attempt": 3
+    }
+  ],
+  "crawl": {
+    "seed": "http://info.cern.ch/",
+    "limits": {
+      "maxDepth": 1,
+      "maxPages": 3,
+      "maxBytes": 2097152
+    },
+    "status": "complete",
+    "pages": [
+      {
+        "url": "http://info.cern.ch/",
+        "finalUrl": "http://info.cern.ch/",
+        "id": "sha256:bc11566aa5572b5a79aba58917d78dad416d64041a82d7b5d0ff7e52c37a4540",
+        "depth": 0,
+        "bytes": 646,
+        "title": "http://info.cern.ch",
+        "robots": {
+          "checked": false,
+          "allowed": true
+        }
+      },
+      {
+        "url": "http://info.cern.ch/hypertext/WWW/TheProject.html",
+        "finalUrl": "http://info.cern.ch/hypertext/WWW/TheProject.html",
+        "id": "sha256:d78ac003f36a0ed898bcda19b10daaf5a928a250014fbb4a1daa823ef4e6b71b",
+        "depth": 1,
+        "bytes": 2217,
+        "title": "The World Wide Web project",
+        "robots": {
+          "checked": false,
+          "allowed": true
+        }
+      }
+    ],
+    "skipped": [],
+    "failed": [],
+    "bytesUsed": 2863
+  },
+  "saved": [
+    "sha256:bc11566aa5572b5a79aba58917d78dad416d64041a82d7b5d0ff7e52c37a4540",
+    "sha256:d78ac003f36a0ed898bcda19b10daaf5a928a250014fbb4a1daa823ef4e6b71b"
+  ]
+}

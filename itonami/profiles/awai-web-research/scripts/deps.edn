@@ -1,0 +1,8 @@
+;; Dependencies of this profile's scripts, read by kbb when the itonami-agent
+;; cron runner starts a script here (cwd = scripts/). awai.fs.document (the Awai
+;; File Format, awai.table/1) comes from network-awai/awai-format, pinned by sha.
+;; That repository is private: kbb clones it over ssh with the host's own git key.
+{:paths ["."]
+ :deps {io.github.network-awai/awai-format
+        {:git/url "git@github.com:network-awai/awai-format.git"
+         :git/sha "ba225f2567479db1146974dcdf20da79be9b05f1"}}}

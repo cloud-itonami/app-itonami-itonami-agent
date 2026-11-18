@@ -1,0 +1,53 @@
+;; Fixture test for awai-web-research (AWAI-3164). Reads only; exit 1 on any difference.
+;;
+;; fixtures/snapshots/*.json are Kumade exports made with Kumade's own createSnapshot
+;; (fixtures/README.md). The test builds the index draft and its Awai file and compares
+;; them with fixtures/expected/, then checks the rules of ADR 0043 D8 directly:
+;; no page text in the persisted table, noindex excluded, private hosts rejected,
+;; bounded summaries, and the same input giving the same root CID.
+;;
+;; Run by itonami-agent as a no-agent cron job (cwd = scripts/).
+(require '["node:fs" :as fs]
+         '["node:path" :as path]
+         '["node:crypto" :as crypto]
+         '[cljs.reader :as reader]
+         '[awai.fs.document :as doc]
+         '[awai-web-research.index :as ix])
+
+(def home (or (aget (.-env js/process) "ITONAMI_PROFILE_HOME") (path/resolve (js/process.cwd) "..")))
+(def fx (path/join home "fixtures"))
+(defn hash-bytes [v] (vec (js/Array.from (.digest (.update (.createHash crypto "sha256") (js/Buffer.from (clj->js (vec v))))))))
+(defn slurp [p] (str (fs/readFileSync p "utf8")))
+
+(def snapshots
+  (let [dir (path/join fx "snapshots")]
+    (mapv #(js->clj (js/JSON.parse (slurp (path/join dir %))))
+          (sort (filter #(.endsWith % ".json") (js->clj (fs/readdirSync dir)))))))
+
+(def failures (atom []))
+(defn check! [label ok] (when-not ok (swap! failures conj label)) (println (str (if ok "ok    " "FAIL  ") label)))
+
+(let [{:keys [table bundle file-id]} (ix/build snapshots hash-bytes)
+      encoded (doc/encode file-id table hash-bytes)
+      bundle (assoc-in bundle [:produced-by :awai-root] (:basis encoded))
+      again (doc/encode file-id (:table (ix/build (vec (reverse snapshots)) hash-bytes)) hash-bytes)
+      decoded (doc/decode (:bytes encoded) hash-bytes)
+      rows (get table "rows")
+      excluded (into {} (map (juxt :id :reason) (:excluded bundle)))
+      expected-bundle (reader/read-string (slurp (path/join fx "expected" "bundle.edn")))
+      expected-root (.trim (slurp (path/join fx "expected" "root.txt")))]
+  (check! "bundle equals fixtures/expected/bundle.edn" (= expected-bundle bundle))
+  (check! (str "Awai root equals fixtures/expected/root.txt (" (:basis encoded) ")") (= expected-root (:basis encoded)))
+  (check! "same snapshots in another order give the same root" (= (:basis encoded) (:basis again)))
+  (check! "the Awai file decodes to the same rows" (= rows (get-in decoded [:table "rows"])))
+  (check! "persisted columns hold no page text, links or HTML"
+          (= #{"id" "snapshot" "requested_url" "final_url" "captured_at" "title" "summary" "tags" "lang" "duplicate_of"}
+             (set (map #(get % "name") (get table "columns")))))
+  (check! "noindex page is excluded" (= :noindex (some (fn [[id r]] (when (= r :noindex) r)) excluded)))
+  (check! "private-host export is rejected" (= :private-host (get excluded (str "sha256:" (apply str (repeat 64 "0"))))))
+  (check! "summaries are at most 280 code points" (every? #(<= (count (js/Array.from (get % "summary"))) 280) rows))
+  (check! "the mirror is marked as a duplicate" (= 1 (count (filter #(seq (get % "duplicate_of")) rows))))
+  (check! "Japanese page is tagged ja" (some #(= "ja" (get % "lang")) rows)))
+
+(println (str (count snapshots) " snapshot fixtures, " (count @failures) " failed"))
+(when (seq @failures) (set! (.-exitCode js/process) 1))

@@ -1,0 +1,2 @@
+name: awai-web-research
+description: Index the public-web snapshots the user captured with Kumade into an Awai file and persist it to Yataverse only when the user approves each write

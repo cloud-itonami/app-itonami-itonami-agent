@@ -1,0 +1,19 @@
+{
+  "id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "requestedUrl": "http://127.0.0.1/admin",
+  "finalUrl": "http://127.0.0.1/admin",
+  "capturedAt": "2026-11-18T00:00:00.000Z",
+  "byteCount": 399,
+  "extracted": {
+    "version": "kumade.extract.v1",
+    "title": "庭の手入れ ガイド",
+    "description": "季節ごとの庭の手入れを、道具と手順に分けてまとめた例示用のページです。",
+    "author": "",
+    "robots": "",
+    "markdown": "# 庭の手入れ\n\n春は土を耕し、夏は水やりを増やします。",
+    "text": "庭の手入れ ガイド 庭の手入れ 春は土を耕し、夏は水やりを増やします。 道具",
+    "links": [
+      "https://example.org/tools"
+    ]
+  }
+}

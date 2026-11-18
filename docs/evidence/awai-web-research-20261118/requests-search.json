@@ -1,0 +1,87 @@
+{
+  "approved": [
+    "index",
+    "data"
+  ],
+  "collection": "CC-MAIN-2026-43",
+  "requests": [
+    {
+      "started": "2026-11-18T01:00:35.719Z",
+      "method": "GET",
+      "origin": "https://index.commoncrawl.org",
+      "path": "/CC-MAIN-2026-43-index",
+      "query": "?url=https%3A%2F%2Fexample.com%2F&output=json&limit=3&filter=status%3A200",
+      "range": null,
+      "status": 200,
+      "attempt": 1
+    },
+    {
+      "started": "2026-11-18T01:00:44.029Z",
+      "method": "GET",
+      "origin": "https://data.commoncrawl.org",
+      "path": "/crawl-data/CC-MAIN-2026-43/segments/1791170053823.21/warc/CC-MAIN-20261005105623-20261005135623-00162.warc.gz",
+      "query": "",
+      "range": "bytes=204233603-204234598",
+      "status": 206,
+      "attempt": 1
+    },
+    {
+      "started": "2026-11-18T01:00:44.478Z",
+      "method": "GET",
+      "origin": "https://index.commoncrawl.org",
+      "path": "/CC-MAIN-2026-43-index",
+      "query": "?url=https%3A%2F%2Finfo.cern.ch%2F&output=json&limit=1&filter=status%3A200",
+      "range": null,
+      "status": 200,
+      "attempt": 1
+    },
+    {
+      "started": "2026-11-18T01:00:53.904Z",
+      "method": "GET",
+      "origin": "https://data.commoncrawl.org",
+      "path": "/crawl-data/CC-MAIN-2026-43/segments/1791170054656.11/warc/CC-MAIN-20261011230657-20261012020657-00857.warc.gz",
+      "query": "",
+      "range": "bytes=13671574-13672362",
+      "status": 206,
+      "attempt": 1
+    }
+  ],
+  "search": {
+    "target": "https://example.com/",
+    "captures": 3,
+    "snapshot": "sha256:25ddf2c883e0d1958ea971d279a7e4f0fd446724ee3db7db19dadabd4a62e484",
+    "provenance": {
+      "kind": "common-crawl",
+      "collection": "CC-MAIN-2026-43",
+      "filename": "crawl-data/CC-MAIN-2026-43/segments/1791170053823.21/warc/CC-MAIN-20261005105623-20261005135623-00162.warc.gz",
+      "offset": 204233603,
+      "length": 996,
+      "indexDigest": "7R2CIN6GF6Q6ESDIBYADLOX3YVMSGQR3",
+      "payloadDigest": "sha1:7R2CIN6GF6Q6ESDIBYADLOX3YVMSGQR3",
+      "blockDigestVerified": true,
+      "payloadDigestVerified": false,
+      "crawlerContentEncoding": "br"
+    }
+  },
+  "crawl": {
+    "seed": "https://info.cern.ch/",
+    "limits": {
+      "maxDepth": 1,
+      "maxPages": 3,
+      "maxBytes": 2097152
+    },
+    "status": "complete",
+    "pages": [],
+    "skipped": [
+      {
+        "url": "https://info.cern.ch/",
+        "reason": "cross-origin-redirect"
+      }
+    ],
+    "failed": [],
+    "bytesUsed": 0
+  },
+  "saved": [
+    "sha256:25ddf2c883e0d1958ea971d279a7e4f0fd446724ee3db7db19dadabd4a62e484"
+  ]
+}

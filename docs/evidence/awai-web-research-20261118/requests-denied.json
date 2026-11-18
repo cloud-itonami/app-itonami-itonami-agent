@@ -1,0 +1,22 @@
+{
+  "approved": [],
+  "collection": "CC-MAIN-2026-43",
+  "requests": [],
+  "search": {
+    "error": "commoncrawl-index/lookup-captures not approved"
+  },
+  "crawl": {
+    "seed": "https://info.cern.ch/",
+    "limits": {
+      "maxDepth": 1,
+      "maxPages": 3,
+      "maxBytes": 2097152
+    },
+    "status": "denied",
+    "pages": [],
+    "skipped": [],
+    "failed": [],
+    "bytesUsed": 0
+  },
+  "saved": []
+}
