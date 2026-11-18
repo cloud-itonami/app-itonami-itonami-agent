@@ -1,0 +1,37 @@
+;; Fictional test values only. Negative control: exactly one change from
+;; apply-backend-engineer.edn. intake/posting-not-scraped: the posting was collected by a scraper.
+{:request/id "blocked-scraped-posting",
+ :letter
+ {:cites ["exp-1" "skill:Kubernetes"],
+  :closing "I would welcome the chance to talk about the role."},
+ :match-criteria [:skills :experience-years],
+ :data/origin :fixture,
+ :on-behalf-of :self,
+ :seeker
+ {:name "Example Seeker",
+  :experience
+  [{:id "exp-1",
+    :role "Backend engineer",
+    :years 4,
+    :skills ["Clojure" "PostgreSQL"]}
+   {:id "exp-2",
+    :role "Support engineer",
+    :years 2,
+    :skills ["Linux"]}],
+  :skills ["Clojure" "PostgreSQL" "Linux" "Kubernetes"],
+  :languages ["ja" "en"]},
+ :kind :application,
+ :action :draft,
+ :posting
+ {:id "posting-001",
+  :title "Backend Engineer",
+  :employer "Example Logistics KK",
+  :obtained-by :scraped,
+  :source-note
+  "Copied by the seeker from the employer's own careers page",
+  :minimum-years 3,
+  :requirements
+  [{:skill "Clojure", :required? true}
+   {:skill "PostgreSQL", :required? true}
+   {:skill "Go", :required? false}
+   {:skill "Kubernetes", :required? false}]}}

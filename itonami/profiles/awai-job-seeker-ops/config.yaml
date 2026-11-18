@@ -1,0 +1,33 @@
+# Itonami agent (adr-2610222100): the inference rail is Murakumo. No credentials,
+# fallback providers, MCP servers or schedule. The drafts and gates are built by
+# scripts/ without any model call.
+model:
+  provider: murakumo
+  base_url: https://api.murakumo.cloud/v1
+  default: mishima
+  max_tokens: 2048
+providers:
+  murakumo:
+    base_url: https://api.murakumo.cloud/v1
+    api_mode: chat_completions
+    request_timeout_seconds: 60
+agent:
+  max_turns: 2
+  run_budget_seconds: 90
+  disabled_toolsets:
+    - hermes-cli
+    - hermes-api
+    - terminal
+    - file
+    - web
+    - browser
+    - computer_use
+    - code_execution
+    - delegation
+    - cronjob
+    - messaging
+cron:
+  allow_agent_scheduling: false
+  # 900: on a loaded host kbb resolving the pinned deps took about 7 minutes
+  # (2026-11-18); 300 timed out before the script started.
+  script_timeout_seconds: 900

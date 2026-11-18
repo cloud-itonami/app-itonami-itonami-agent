@@ -1,0 +1,9 @@
+;; Dependencies of this profile's scripts, read by kbb when the itonami-agent
+;; cron runner starts a script here (cwd = scripts/). SHA-256 comes from
+;; kotoba-lang/kotoba lib/kotoba.bytes, pinned by sha (the same pin as
+;; awai-banking-ops).
+{:paths ["."]
+ :deps {io.github.kotoba-lang/bytes
+        {:git/url "https://github.com/kotoba-lang/kotoba.git"
+         :git/sha "2e3b9ef25f06ef98924daa450c36da1b7c712189"
+         :deps/root "lib/kotoba.bytes"}}}
