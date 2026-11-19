@@ -78,6 +78,26 @@ sent.
 bb -cp src scripts/autonomy-snapshot.clj OUT.json RECEIPT-DIR... -- OBSERVATION.json...
 ```
 
+Developer-bot task directories (isolated clones holding `.agent-output/`)
+become the same two files, so the unchanged view imports them:
+
+```
+bb -cp src scripts/dev-bot-snapshot.clj CATALOG.json SNAPSHOT.json ROOT... [-- ISSUE-MAP.json]
+```
+
+`ROOT...` are scanned recursively for directories holding `.agent-output/`;
+nothing outside them is read. `ISSUE-MAP.json` is optional and maps Linear
+issue keys to their project (a name string or `{"id" "name"}`); without it
+there is one circle per task repository. Each circle gets one implementer
+bot (run 1) plus the single `shinsa` review bot (runs 2+). Runs bind to
+their task's issue only — never from log text; missing or malformed files
+count as unknown, never as success; only `rc 0` counts as measured.
+Finished runs file under their end time, in-progress runs under their start,
+so the existing 24 h rule shows one as running only while its start is
+recent. The snapshot also carries per-bot token usage (summed `run.usage`
+events) and per-issue gate deliveries (action, PR URL, merge commit), which
+older snapshots simply lack — they still import.
+
 The snapshot holds bot ids, job ids, Linear issue ids, counts and times only,
 but it is private operational data: keep it out of the repository.
 
@@ -92,6 +112,10 @@ States come from observations only:
 `kotoba/dandori/work.kotoba`). An export carries no claims or blockers, so
 none are assumed. When the newest observation is older than 24 h, a banner
 says so and no bot is shown as active.
+
+Not verified: the dev-bot running/usage/delivery facts on a real browser or
+Android display — they are covered only by the reader-level tests (`npm
+test`, `npm run test:bb`), not by opening the app on either surface.
 
 ## Reaching the Agent
 

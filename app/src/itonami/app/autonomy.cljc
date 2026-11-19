@@ -168,7 +168,10 @@
      :bots (into {} (for [[k b] (get v "bots") :when (bot-key k)]
                       [(bot-key k) {:runs (get b "runs" 0) :measured (get b "measured" 0)
                                     :last-at (get b "lastAt") :issues (vec (get b "issues"))
-                                    :jobs (vec (get b "jobs"))}]))}
+                                    :jobs (vec (get b "jobs"))
+                                    :in-progress-at (get b "inProgressAt")
+                                    :usage (get b "usage")
+                                    :deliveries (vec (get b "deliveries"))}]))}
     {:error "not an itonami.autonomy-snapshot.v1"}))
 
 (defn kind-of
@@ -187,7 +190,10 @@
     :scheduled  a verified schedule with jobs, no receipt
     :held       no source schedule, failed verification, or no jobs
     :unknown    not in the organization file
-  plus :in-progress when one of its bound board issues is started."
+  plus :in-progress when one of its bound board issues is started, :running
+  when an in-progress run started within the stale window, and the optional
+  :usage and :deliveries the developer-bot snapshot carries (nil/[] when
+  the file predates them)."
   [bot activity issues now]
   (let [a (get-in activity [:bots (:id bot)])
         last-at (:last-at a)
@@ -204,6 +210,10 @@
      :issues (:issues a [])
      :board (frequencies (map :state-type mine))
      :in-progress (boolean (some #(= "started" (:state-type %)) mine))
+     :running (boolean (and (:in-progress-at a)
+                            (<= (- now (:in-progress-at a)) stale-after)))
+     :usage (:usage a)
+     :deliveries (:deliveries a [])
      :next (next-take mine)}))
 
 (def state-order [:active :stale :scheduled :held :unknown])

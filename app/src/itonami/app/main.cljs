@@ -372,6 +372,16 @@
         (el :figcaption {:class "row-sub"}
             (str "Fleet receipts per hour, " (iso-min (first (first w))) " → " (iso-min (first (last w))) " UTC")))))
 
+(defn- usage-text [u]
+  (when (map? u)
+    (str (get u "calls" 0) " calls · " (get u "inputTokens" 0) " in")))
+
+(defn- delivery-text [d]
+  (when (map? d)
+    (str (get d "issue") " " (get d "action" "unknown")
+         (when-let [c (get d "mergedCommit")] (str " · merged " (subs (str c) 0 (min 7 (count (str c))))))
+         (when (and (nil? (get d "mergedCommit")) (get d "pr")) (str " · " (get d "pr"))))))
+
 (defn- bot-card [b st]
   (el :li {:class "bot-card"}
       (el :div {:class "bot-card-head"}
@@ -384,10 +394,14 @@
           (str/join " · " (remove nil?
                                   [(if (:last-at st) (str (:runs st) " runs · last " (ago (:last-at st)))
                                        (str (:jobs b) " jobs · " (or (:schedule-state b) "no schedule")))
+                                   (when (:running st) "running")
+                                   (usage-text (:usage st))
                                    (when (seq (:issues st)) (str "Linear " (str/join ", " (take 3 (:issues st)))
                                                                  (when (> (count (:issues st)) 3) "…")))
                                    (when (seq (:board st))
-                                     (str "board " (str/join " " (for [[k n] (sort-by (comp autonomy/state-index key) (:board st))] (str k " " n)))))])))
+                                     (str "board " (str/join " " (for [[k n] (sort-by (comp autonomy/state-index key) (:board st))] (str k " " n)))))
+                                   (when (seq (:deliveries st))
+                                     (str/join " · " (keep delivery-text (take 2 (:deliveries st)))))])))
       (when-let [n (:next st)]
         (el :div {:class "next"} (el :span {:class "row-sub"} "Next: ")
             (el :strong {} (:id n)) " " (or (:title n) "") (el :span {:class "row-sub"} (str " (" (:reason n) ")"))))
